@@ -17,6 +17,9 @@ target\release\dme.exe dev try-all              builds every pick in memory; 0 F
 `cargo build --release` builds both programs: `target\release\Dota2ModEnjoyer.exe` and
 `target\release\dme.exe`. Each is one file that needs nothing else beside it.
 
+The release profile leaves the names of the functions in the programs (`strip = false`). With
+them taken out the app is 9 MB smaller, and Microsoft's virus scanner took it for malware.
+
 Both files say their name, maker and version to Windows, and the app's file wears the logo
 (`assets/icon.ico`). That is compiled in by `windres`, which comes with the MinGW tools. If
 `windres` is not in the `PATH`, the build warns and makes the programs without those details.

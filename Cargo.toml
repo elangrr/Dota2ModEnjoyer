@@ -3,10 +3,12 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
 
 [profile.release]
-strip = true
+# The names of the functions stay in the programs. A program with them taken out is smaller,
+# and is more often taken for malware by virus scanners that go by pattern.
+strip = false

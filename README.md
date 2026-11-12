@@ -56,6 +56,7 @@ The app has a night look and a day look.
 | Build it or work on the code | [Building](#building) |
 | Help the project | [Supporting the project](#supporting-the-project) |
 | Get a quick answer | [Questions and answers](#questions-and-answers) |
+| See what virus scanners say | [Virus scans](#virus-scans) |
 
 ## Using the app
 
@@ -337,9 +338,29 @@ causes.
 The file is not signed with a paid certificate, so Windows has not seen it before. The code is
 open for anyone to read, and the app is built from it.
 
+Every release is scanned on VirusTotal before it goes out, and [Virus scans](#virus-scans) has
+the result of each. A new, unsigned program often gets a few heuristic detections there, which
+are guesses by pattern and name no known malware. If your antivirus removes the file, that is
+such a guess.
+
 ### Is it free?
 
 Yes, and its code is open under the GPL. Donations are welcome and never asked for.
+
+## Virus scans
+
+Every release is scanned on [VirusTotal](https://www.virustotal.com) before it goes out, with
+about 70 virus scanners. Each link opens the full result for that exact file. A release that
+Microsoft's scanner flags is not put out.
+
+| Version | The app | The command-line tool |
+|---|---|---|
+| 0.2.1 | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/49f0b1372cf47ea129d2c8eb793f7e4cdc34a390af9954e91d82f4cd00232cde) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/09fda3379fdef4d66bdf03399b351a86160124a48a672bf62cd4a5176dadfea6) |
+| 0.2.0 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/ee7fac6d829cc825357d50f0246eed970065cca191ba637a2d976f251b45e6ed) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/d769c42b799c6b232b7bd9bc2cc566a3c3ac53bb100817071e4714755390cae8) |
+
+In 0.2.0, Microsoft's scanner was one of the three. It was a wrong guess, caused by how the
+file was built, and the build was changed for the next version. Versions before 0.2.0 were not
+scanned.
 
 ## Supporting the project
 

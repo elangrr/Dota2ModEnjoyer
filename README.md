@@ -355,6 +355,7 @@ Microsoft's scanner flags is not put out.
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.2.2 | [0 of 66 scanners flag it](https://www.virustotal.com/gui/file/4bcc6789a106aad87dae596f72e6c4e83ebb725feaa6477076e9bd48c0513ed4) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/c0a1879c6fb6d66e477678ab6fc1a535a2e9e046263088e59266be36290108c7) |
 | 0.2.1 | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/49f0b1372cf47ea129d2c8eb793f7e4cdc34a390af9954e91d82f4cd00232cde) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/09fda3379fdef4d66bdf03399b351a86160124a48a672bf62cd4a5176dadfea6) |
 | 0.2.0 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/ee7fac6d829cc825357d50f0246eed970065cca191ba637a2d976f251b45e6ed) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/d769c42b799c6b232b7bd9bc2cc566a3c3ac53bb100817071e4714755390cae8) |
 

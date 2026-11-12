@@ -349,7 +349,7 @@ fn gaps_note(gaps: &[Gap]) -> Option<String> {
         .map(|gap| match gap {
             Gap::Files => "Dota no longer has some of the files this is made of, so a part of it is missing for everybody.",
             Gap::ArcanaLevel => "Some of its effects go by the arcana's level, which Dota's servers give only to the player who owns it, so they may not show.",
-            Gap::Checkered => "Buggy: its fog of war may look like a checkerboard. Changing a video setting during the match clears it, but can turn modded heroes into ERROR.",
+            Gap::Checkered => "Buggy: its fog of war may look like a checkerboard.",
         })
         .collect();
     (!said.is_empty()).then(|| said.join(" "))
@@ -393,10 +393,10 @@ fn note_of(slot: &Slot) -> Option<&'static str> {
     }
 }
 
-const EVENT_NOTE: &str = "Use the effect an event had for this, for every hero or for the heroes you choose in Settings. \
+const EVENT_NOTE: &str = "Use the effect an event had for this. It goes on the heroes you picked something for; Settings can make that every hero, or heroes you choose. \
      A hero shows it as long as one of its slots in Dota is on its default item.";
 
-const EMBLEM_NOTE: &str = "Put the glow of an event's emblem around every hero, or around the heroes you choose in Settings. \
+const EMBLEM_NOTE: &str = "Put the glow of an event's emblem around the heroes you picked something for; Settings can make that every hero, or heroes you choose. \
      It rides on one default item of each hero, so a hero may not show it if you wear items of your own on it in Dota.";
 
 const PERSONA_NOTE: &str = "An experiment: a persona is put on the hero's own items, so it shows without your owning it. \

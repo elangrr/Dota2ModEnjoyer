@@ -15,7 +15,7 @@ use crate::{effects, fsutil, gameinfo, map_effect, process, trees};
 
 pub const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
-const REWRITE_RULES: u32 = 5;
+const REWRITE_RULES: u32 = 6;
 
 const BRANCH_FILE: &str = "gameinfo_branchspecific.gi";
 const VERIFY_HINT: &str =
@@ -71,7 +71,7 @@ pub enum Ready {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Saved {
     picks: Vec<Pick>,
-    #[serde(default, skip_serializing_if = "EffectsFor::is_every")]
+    #[serde(default, skip_serializing_if = "EffectsFor::is_usual")]
     effects_for: EffectsFor,
     game_build: String,
     applied_unix: u64,

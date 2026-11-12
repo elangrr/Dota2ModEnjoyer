@@ -12,7 +12,7 @@ pub struct Loadout {
     picks: Vec<Pick>,
     #[serde(default, rename = "off", skip_serializing_if = "std::ops::Not::not")]
     away: bool,
-    #[serde(default, skip_serializing_if = "EffectsFor::is_every")]
+    #[serde(default, skip_serializing_if = "EffectsFor::is_usual")]
     effects_for: EffectsFor,
 }
 
@@ -216,21 +216,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("picks.json");
         let mut loadout = Loadout::from_picks([Pick::world("courier", "1")]);
-        assert_eq!(*loadout.effects_for(), EffectsFor::Every);
+        assert_eq!(*loadout.effects_for(), EffectsFor::Picked);
         loadout.save(&path).unwrap();
         assert!(!std::fs::read_to_string(&path).unwrap().contains("effects_for"), "the usual choice is not written");
 
         loadout.set_effects_for(EffectsFor::These(vec!["npc_dota_hero_axe".to_string()]));
         loadout.save(&path).unwrap();
         assert_eq!(Loadout::load(&path), loadout);
-        loadout.set_effects_for(EffectsFor::Picked);
+        loadout.set_effects_for(EffectsFor::Every);
         loadout.save(&path).unwrap();
-        assert!(std::fs::read_to_string(&path).unwrap().contains("\"effects_for\": \"picked\""));
-        assert_eq!(*Loadout::load(&path).effects_for(), EffectsFor::Picked);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"effects_for\": \"every\""));
+        assert_eq!(*Loadout::load(&path).effects_for(), EffectsFor::Every);
 
         loadout.forget();
         assert!(loadout.is_empty());
-        assert_eq!(*loadout.effects_for(), EffectsFor::Picked);
+        assert_eq!(*loadout.effects_for(), EffectsFor::Every);
     }
 
     #[test]

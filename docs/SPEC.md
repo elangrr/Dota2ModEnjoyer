@@ -1078,8 +1078,8 @@ saying where things stand, "Back to normal Dota", and Play.
   shows above the tiles.
 - The page of a slot whose default item several heroes share says so and names them. A pick
   there takes the place of what another of those heroes had picked.
-- Low-end PC mode is a checkbox beside the buttons in the footer (3.18). It is kept with the
-  app's own settings and is no pick.
+- Low-end PC mode is a checkbox in the settings (3.18). It is kept with the app's own settings
+  and is no pick.
 - In a hero's list, under what the hero wears, a few words say where the slots for ability
   effects begin (3.11). Such a slot's page says what a pick there does and, once an item is
   picked, which slot to look at in Dota if the effects do not show: the one the item is worn in
@@ -1432,13 +1432,13 @@ stand in for the other is still **(to confirm in game)**.
 
 ### 3.21 Which heroes get what is for every hero
 
-The effects of events (3.16) and an emblem (3.19) go on default items of every hero. A player
-can narrow that down:
+The effects of events (3.16) and an emblem (3.19) can go on default items of every hero. A
+player chooses which heroes get them. Left alone, it is the heroes picked for:
 
 | Choice | Heroes | In `picks.json` |
 |---|---|---|
-| Every hero | all of them, as before | nothing |
-| The heroes picked for | each hero that has a pick of its own: an item, a set, ability effects | `"effects_for": "picked"` |
+| The heroes picked for | each hero that has a pick of its own: an item, a set, ability effects | nothing |
+| Every hero | all of them | `"effects_for": "every"` |
 | These heroes | the ones named | `"effects_for": { "these": [ ... ] }` |
 
 The others get none of those blocks, neither the events' effects nor an emblem. The choice is

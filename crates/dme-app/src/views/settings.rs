@@ -10,11 +10,11 @@ pub const EFFECTS_FOR_NOTE: &str = "The effects of events (Teleport, Blink Dagge
 pub fn effects_for(ui: &mut Ui, catalog: Option<&Catalog>, current: &EffectsFor) -> Option<EffectsFor> {
     let mut chosen = None;
     let these = matches!(current, EffectsFor::These(_));
-    if ui.radio(current.is_every(), "Every hero").clicked() && !current.is_every() {
-        chosen = Some(EffectsFor::Every);
-    }
     if ui.radio(*current == EffectsFor::Picked, "Only the heroes I picked something for").clicked() && *current != EffectsFor::Picked {
         chosen = Some(EffectsFor::Picked);
+    }
+    if ui.radio(current.is_every(), "Every hero").clicked() && !current.is_every() {
+        chosen = Some(EffectsFor::Every);
     }
     if ui.radio(these, "Only the heroes I choose").clicked() && !these {
         chosen = Some(EffectsFor::These(Vec::new()));

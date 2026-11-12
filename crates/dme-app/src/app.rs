@@ -36,8 +36,6 @@ const NOTICE: [&str; 3] = [
     "Nothing is changed while Dota 2 is running, and \"Back to normal Dota\" undoes everything.",
 ];
 
-const NARROW: f32 = 940.0;
-
 const LOW_END_HINT: &str = "Play starts Dota with its lightest video settings: no shadows, simple water and lighting, no fog, grass or other extras. \
      An experiment. Dota may keep these settings afterwards; you can change them back in Dota's video options.";
 
@@ -72,11 +70,11 @@ const HELP: [(&str, &str); 12] = [
     ),
     (
         "Video settings",
-        "Change Dota's video settings before a match, not during one. Changed in the middle of a match, Dota has shown picked heroes as \"ERROR\" until the next game.",
+        "Do not change Dota's video settings during a match. That makes Dota show the heroes you picked for as \"ERROR\" until the next game. Change them before a match.",
     ),
     (
         "Experiments",
-        "\"Trees\" and \"Map Effect\", at the bottom of the World page, and \"Low-end PC mode\", beside Play, are still being tried out. Low-end PC mode starts Dota with its lightest video settings. Dota may keep them afterwards; you can change them back in its video options.",
+        "\"Trees\" and \"Map Effect\", at the bottom of the World page, and \"Low-end PC mode\", in Settings, are still being tried out. Low-end PC mode starts Dota with its lightest video settings. Dota may keep them afterwards; you can change them back in its video options.",
     ),
     ("After a Dota update", "Just press Play. Your picks are put back in the game before it starts."),
     (
@@ -601,13 +599,6 @@ impl App {
                         true => self.bring_back(),
                         false => self.back_to_normal(),
                     }
-                }
-                ui.add_space(8.0);
-                let label = if ui.ctx().content_rect().width() < NARROW { "Low-end PC mode" } else { "Low-end PC mode (experimental)" };
-                let mut low_end = self.settings.low_end;
-                if ui.checkbox(&mut low_end, label).on_hover_text(LOW_END_HINT).changed() {
-                    self.settings.low_end = low_end;
-                    self.save_settings();
                 }
                 ui.add_space(8.0);
                 said(ui, &facts);

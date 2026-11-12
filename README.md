@@ -78,16 +78,17 @@ marked "(courier)" are made for couriers and are an experiment there.
 Effects from past events. These are on the World page, under "Effects". They are what events gave
 the players who took part.
 
-- Emblem puts the glow of an event's emblem around every hero. It rides on one slot of each
+- Emblem puts the glow of an event's emblem around your heroes. It rides on one slot of each
   hero. For about half of the heroes that is a slot nothing else can go in, so they always
   show it; the others show it while that slot is on its default item in your Dota loadout.
 - For Teleport, Blink Dagger, Attack, Force Staff, Eul's Scepter, Bottle, level up, the fountain
   and more, pick an event and, where it had several, a level. A hero shows the effect as long as
   one of its slots in your Dota loadout is on its default item.
 
-These go on every hero, which means on everyone in a match who plays one. In **Settings** you
-can have them only on the heroes you picked something for, or on heroes you choose. Dota's files
-cannot tell your own hero from the others, so that is as close as it gets.
+These go on the heroes you picked something for in the app. A hero with no pick stays plain. In
+**Settings** you can have them on every hero, or on heroes you choose. Dota's files cannot tell
+your own hero from the others, so anyone in a match who plays one of those heroes shows them
+too, on your screen only.
 
 Colours (the Prismatic gems) are gone. In a match, Dota's servers decide what colour a gem has
 from what you really own, so a colour never showed there.
@@ -103,7 +104,7 @@ everything is as before.
 - Map Effect (World page, at the bottom) draws the whole map the way one of Valve's events had
   it, such as Diretide's. Aghanim's Labyrinth's is marked "!" because its fog of war can look
   like a checkerboard.
-- Low-end PC mode (the checkbox beside Play) makes Play start Dota with its lightest video
+- Low-end PC mode (in **Settings**) makes Play start Dota with its lightest video
   settings: no shadows, simple water and lighting, no fog, grass or other extras. No file is
   written for this. Dota may keep the settings afterwards; you can change them back in Dota's
   video options.
@@ -131,8 +132,8 @@ again as it was. If you pick something new instead, you start over from there.
 - Your video settings are on their lightest. Those leave parts of effects out.
 - Dota 2 was running. Nothing is written while it runs. Close the game, then press Play. The app
   can stay open while you play.
-- You changed Dota's video settings in the middle of a match. Dota has then shown picked heroes
-  as "ERROR" until the next game. Change video settings before a match.
+- You changed Dota's video settings in the middle of a match. That makes Dota show picked
+  heroes as "ERROR" until the next game. Change video settings before a match.
 
 Some things cannot be changed at all, because the game has no default item for them: taunts,
 kill banners, effigies, the Tormentor and the Ancient.
@@ -209,8 +210,8 @@ dme play                    put the remembered picks in the game if they are not
 dme play --low-end          the same, starting Dota with its lightest video settings (an experiment)
 dme restore                 back to normal Dota; the picks are put away until dme play
 dme restore --forget        the same, and forget the picks
-dme effects-for picked      the effects of events and an emblem only on heroes you picked for
-dme effects-for axe,lina    ... only on these heroes; `every` for all of them again
+dme effects-for every       the effects of events and an emblem on every hero
+dme effects-for axe,lina    ... only on these heroes; `picked` for the heroes you picked for, as at first
 ```
 
 The listings of sets and items say how rare each one is.

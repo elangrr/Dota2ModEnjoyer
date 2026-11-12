@@ -88,8 +88,8 @@ fn is_zero(number: &u32) -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectsFor {
-    #[default]
     Every,
+    #[default]
     Picked,
     These(Vec<String>),
 }
@@ -97,6 +97,10 @@ pub enum EffectsFor {
 impl EffectsFor {
     pub fn is_every(&self) -> bool {
         *self == EffectsFor::Every
+    }
+
+    pub fn is_usual(&self) -> bool {
+        *self == EffectsFor::default()
     }
 
     pub fn reaches(&self, hero: &str, picks: &[Pick]) -> bool {

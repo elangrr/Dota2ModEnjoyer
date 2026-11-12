@@ -111,8 +111,8 @@ enum Command {
     /// Choose which heroes get the effects of events (fx_ picks) and an emblem. They go on
     /// the default items of those heroes, so they show on whoever plays one of them.
     ///
-    ///   every            every hero (what there is unless you choose)
-    ///   picked           the heroes you picked something for
+    ///   picked           the heroes you picked something for (what there is unless you choose)
+    ///   every            every hero
     ///   axe,lina,...     these heroes
     ///
     /// Without a choice, says which one is in use. Takes effect at the next apply or play.
@@ -323,7 +323,7 @@ fn status(engine: &Engine) -> Result<()> {
         println!("Pick:     {}", written(pick));
     }
     let saved = engine.loadout();
-    if !saved.effects_for().is_every() {
+    if !saved.effects_for().is_usual() {
         println!("Effects:  the effects of events and an emblem go on {}", effects_for_words(saved.effects_for()));
     }
     if saved.is_put_away() {

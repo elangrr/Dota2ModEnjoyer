@@ -4,7 +4,7 @@ use eframe::egui::{self, Ui};
 
 use super::dim;
 
-pub const EFFECTS_FOR_NOTE: &str = "The effects of events (Teleport, Blink Dagger, Attack and the rest) and an emblem ride on the default items of these heroes. \
+pub const EFFECTS_FOR_NOTE: &str = "The effects of events (Teleport, Blink Dagger, Attack Projectile and the rest) and an emblem ride on the default items of these heroes. \
      So they show on whoever plays one of them in a match, on your screen only: Dota cannot tell your hero from the others by its files.";
 
 pub fn effects_for(ui: &mut Ui, catalog: Option<&Catalog>, current: &EffectsFor) -> Option<EffectsFor> {

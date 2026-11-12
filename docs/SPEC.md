@@ -663,6 +663,16 @@ such as a loading screen's, is named from inside `panorama/images/`: a material 
 `panorama/images/loadingscreens/x/loadingscreen.vtex_c`. Shaders (`.vfx`) are not files of the
 archives and are not looked for.
 
+A few files are not where they are named, and are one folder name away. Tyrian Latticean
+Hierarchy (34620) names `particles/econ/items/nyx_assassin/nyx_ti9_immortal/nyx_ti9_tyrian_carapace_hit.vpcf`,
+and the archive has that file under `particles/_2econ/...`. Eminence of Ristul (12930) names
+two models in the folder `tpl_shoulder_lvl1` that are in `tpl_shoulder_lvl2` and
+`tpl_shoulder_lvl3`. Where the game's own archive has exactly one file of the same name whose
+path differs from the named one in one folder name, and in nothing else, that file stands in
+for the named one: it counts as there, what it names is looked for in turn, and Play puts a
+copy of it in the package under the name it is asked for by (3.2). With two such files, or
+with one further away, nothing stands in. On build 6973 three files stand in.
+
 ## 3. What the tool does
 
 ### 3.1 Find Dota
@@ -695,9 +705,12 @@ emblem (3.19), for other trees (3.17), for another look of the map (3.20) and fo
    item's model, and holds as many gems as it was given (3.3).
 6. Look for every model, effect and map the rewritten items name. If the game lacks an item's
    `model_player`, stop, because the item could not be shown. Other missing files are reported
-   and do not stop anything; Valve's own data names a few files the game never shipped.
+   and do not stop anything; Valve's own data names a few files the game never shipped. A
+   file that another stands in for (2.13) is not missing.
 7. Write the result to `game\mod_enjoyer\pak01_dir.vpk`. It is the only file in the package,
-   unless other trees or another look for the map are picked (3.17, 3.20).
+   unless other trees or another look for the map are picked (3.17, 3.20), or a file that the
+   picks name is one folder away from where it is named (2.13): a copy of that file goes in
+   under the name it is asked for by.
 
 Two heroes cannot both have a pick for a slot whose default item they share (2.6), because the one
 item can show one thing. Such picks are refused with a sentence that names both heroes.
@@ -934,7 +947,7 @@ the names and the list of files in the archive. Only what the tool can really sh
 - An item, an ability's effects from an item, or an event's effect says what of it may not show
   in Dota: a file it names, or one such a file is made of, that the game has in neither archive
   (2.13); or blocks of its `visuals` for an arcana's level above 0 (2.12); or, for one map
-  effect, fog that shows checkered (3.20). On build 6973 that is 27 choices for missing files,
+  effect, fog that shows checkered (3.20). On build 6973 that is 25 choices for missing files,
   none of them effects of events, 7 for an arcana's level and 1 for checkered fog.
   `dme dev catalog` lists the files that are gone.
 - After the game's own world slots comes the slot for an emblem (3.19), with the emblems that
@@ -1061,8 +1074,9 @@ at the bottom, which open in front of the page. A bar along the bottom has a bad
 sentence saying where things stand, "Back to normal Dota", and Play. The side and the bar are
 panels of glass: sheets that let through what is behind them, which is the look's own plain
 colour with a faint glow of the app's colour in one corner. Nothing is blurred, and nothing
-scrolls under a panel. The app has two looks, Night and Day, and Settings chooses one or has
-the app follow Windows (`theme` in `settings.json`). Pictures of the game's stay on dark in
+scrolls under a panel. The app has two looks, Night and Day, and a switch with a sun and a moon at the
+bottom of the side bar chooses one (`theme` in `settings.json`). A settings file that says `system`, which 0.2.0 and
+0.2.1 offered, has the app follow Windows until the switch is clicked. Pictures of the game's stay on dark in
 both. Text is set in Inter (`assets/fonts`), titles in its heavier cut. The badge
 says in two or three words whether the game has the picks: "Mods on", "Not in the game yet",
 "Normal Dota", "Old picks in the game" or "Needs attention".
@@ -1099,7 +1113,8 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
   effect.
 - A tile of an item that has a part that may not show (3.11) has a small "!" in the corner of
   its picture, and says why when the pointer rests on it. Once it is picked, the same sentence
-  shows above the tiles.
+  shows above the tiles. A set has the mark where one of its pieces does, and names the piece.
+  The mark is also on what typing finds, on the rows of a hero's page and on My picks.
 - The page of a slot whose default item several heroes share says so and names them. A pick
   there takes the place of what another of those heroes had picked.
 - Low-end PC mode is a checkbox in the settings (3.18). It is kept with the app's own settings
@@ -1134,7 +1149,6 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
   click. The app opens `https` addresses only, and asks for nothing by itself.
 - "Settings" on the left side opens the settings page, with: which heroes get the effects of events
   and an emblem (3.21), as every hero, the heroes picked for, or heroes chosen from a list;
-  the look, Night, Day or the one Windows has;
   Low-end PC mode (3.18); "Update automatically" (4.2), off by default; where Dota is and where
   the app keeps the picks, its settings and the backups; and the version and license.
   `--open settings` shows it in a picture.

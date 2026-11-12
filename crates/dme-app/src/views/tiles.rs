@@ -105,10 +105,11 @@ pub fn tile(ui: &mut Ui, pictures: &mut Pictures, look: Look, tile: &Tile<'_>) -
             painter.circle_filled(at, 4.5, color);
         }
         if let Some(badge) = tile.badge {
-            let text = painter.layout_no_wrap(badge.to_string(), FontId::proportional(theme::SMALL), theme::text());
+            let light = Color32::from_gray(0xee);
+            let text = painter.layout_no_wrap(badge.to_string(), FontId::proportional(theme::SMALL), light);
             let plate = Rect::from_min_size(pos2(well.right() - text.size().x - 14.0, well.top() + 4.0), text.size() + vec2(10.0, 4.0));
             painter.rect_filled(plate, CornerRadius::same(4), Color32::from_black_alpha(200));
-            painter.galley(plate.min + vec2(5.0, 2.0), text, theme::text());
+            painter.galley(plate.min + vec2(5.0, 2.0), text, light);
         }
 
         let color = if tile.faint { theme::text_dim() } else { theme::text() };

@@ -66,14 +66,14 @@ whether a request is one of the above, ask the person before writing code.
 | `items.rs`, `heroes.rs` | The item database (`items_game.txt`) and each hero's own file |
 | `catalog.rs` | What a player can pick, with names and pictures, for the app and `dme` to show |
 | `loadout.rs` | The picks a player made, as saved between runs |
-| `apply.rs` | Picks to an edited item database: the rewrite of default items (SPEC 3.2 to 3.4, 3.14, 3.15, 3.21, 3.22) |
+| `apply.rs`, `apply/tests.rs` | Picks to an edited item database: the rewrite of default items (SPEC 3.2 to 3.4, 3.14, 3.15, 3.21, 3.22), and its checks |
 | `effects.rs`, `trees.rs`, `map_effect.rs` | Event effects and emblems, other trees, another look for the map |
 | `engine.rs` | Play, back to normal, backups, and which state the game is in |
 | `gameinfo.rs`, `signatures.rs` | The two game files that are edited |
 | `dota.rs`, `process.rs`, `launch.rs` | Finding Dota, whether it runs, starting it through Steam |
 | `update.rs` | The app updating itself: manifest, checks, putting the new file in place (SPEC 4) |
 | `crates/dme-app/src/` | The window, made with `egui`/`eframe` |
-| `app.rs`, `views/` | The app's state, the side bar, the bar at the bottom, the messages, and the pages: hero grid and search, slots and tiles, all picks and presets, rarity chips, settings, the drawings beside the pages' names |
+| `app.rs`, `app/sheets.rs`, `views/` | The app's state, the side bar, the bar at the bottom, the messages; what opens in front of the window (notice, tour, help, settings, support) with its texts; and the pages: hero grid and search, slots and tiles, all picks and presets, rarity chips, settings, the drawings beside the pages' names |
 | `worker.rs` | The one thread that reads and writes game files |
 | `update.rs` | Asking for updates on threads of its own, fetching with WinHTTP, starting again |
 | `script.rs`, `main.rs` | Working the window from the command line for testing; the options |

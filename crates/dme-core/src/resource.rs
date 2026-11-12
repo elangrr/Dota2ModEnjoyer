@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::error::{Error, Result};
 use crate::vpk::{Archive, OpenFiles};
@@ -44,6 +44,7 @@ pub struct Wholeness<'a> {
     core: Option<Archive>,
     known: RefCell<HashMap<String, bool>>,
     gone: RefCell<BTreeSet<String>>,
+    stand_ins: RefCell<BTreeMap<String, String>>,
     open: OpenFiles,
 }
 
@@ -51,7 +52,24 @@ impl<'a> Wholeness<'a> {
     pub fn new(archive: &'a Archive) -> Wholeness<'a> {
         let core = archive.dir_path().parent().map(|folder| CORE_ARCHIVE.iter().fold(folder.to_path_buf(), |path, part| path.join(part)));
         let core = core.filter(|path| path.is_file()).and_then(|path| Archive::open(&path).ok());
-        Wholeness { archive, core, known: RefCell::new(HashMap::new()), gone: RefCell::new(BTreeSet::new()), open: OpenFiles::default() }
+        Wholeness { archive, core, known: RefCell::new(HashMap::new()), gone: RefCell::new(BTreeSet::new()), stand_ins: RefCell::new(BTreeMap::new()), open: OpenFiles::default() }
+    }
+
+    fn stand_in(&self, compiled: &str) -> Option<String> {
+        let (folders, file) = compiled.rsplit_once('/')?;
+        let (name, ext) = file.rsplit_once('.')?;
+        let wanted: Vec<&str> = folders.split('/').collect();
+        let one_folder_apart = |path: &String| {
+            let there: Vec<&str> = path.rsplit_once('/').map_or(Vec::new(), |(folders, _)| folders.split('/').collect());
+            there.len() == wanted.len() && there.iter().zip(&wanted).filter(|(there, wanted)| !there.eq_ignore_ascii_case(wanted)).count() == 1
+        };
+        let mut near = self.archive.named(name, ext).into_iter().filter(one_folder_apart);
+        let found = near.next()?;
+        near.next().is_none().then_some(found)
+    }
+
+    pub fn stand_ins(&self) -> Vec<(String, String)> {
+        self.stand_ins.borrow().iter().map(|(named, there)| (named.clone(), there.clone())).collect()
     }
 
     fn find(&self, compiled: &str) -> Option<(&Archive, String)> {
@@ -65,10 +83,7 @@ impl<'a> Wholeness<'a> {
     }
 
     pub fn is_whole(&self, path: &str) -> bool {
-        let mut path = path.trim().replace('\\', "/").to_ascii_lowercase();
-        while path.contains("//") {
-            path = path.replace("//", "/");
-        }
+        let path = normal(path);
         if !CHECKED.iter().any(|ending| path.ends_with(ending)) {
             return true;
         }
@@ -77,7 +92,11 @@ impl<'a> Wholeness<'a> {
         }
         self.known.borrow_mut().insert(path.clone(), true);
         let compiled = format!("{path}_c");
-        let found = self.find(&compiled);
+        let found = self.find(&compiled).or_else(|| {
+            let there = self.stand_in(&compiled)?;
+            self.stand_ins.borrow_mut().insert(compiled.clone(), there.clone());
+            Some((self.archive, there))
+        });
         let whole = match found {
             None => {
                 self.gone.borrow_mut().insert(path.clone());
@@ -92,6 +111,14 @@ impl<'a> Wholeness<'a> {
         self.known.borrow_mut().insert(path, whole);
         whole
     }
+}
+
+pub fn normal(path: &str) -> String {
+    let mut path = path.trim().replace('\\', "/").to_ascii_lowercase();
+    while path.contains("//") {
+        path = path.replace("//", "/");
+    }
+    path
 }
 
 #[cfg(test)]
@@ -160,5 +187,36 @@ pub(crate) mod tests {
         assert!(whole.is_whole("sounds/a.vsnd"), "not a kind that is checked");
         assert!(whole.is_whole("particles/a/screen.vpcf"), "a picture of the interface, named from where those are");
         assert_eq!(whole.gone(), ["materials/a/gone.vtex", "particles/a/nowhere.vpcf"]);
+        assert!(whole.stand_ins().is_empty());
+    }
+
+    #[test]
+    fn a_file_one_folder_away_from_where_it_is_named_stands_in() {
+        let files: Vec<(String, Vec<u8>)> = vec![
+            ("particles/_2econ/items/nyx/hit.vpcf_c".into(), compiled_file(&["particles/_2econ/items/nyx/hit_blood.vpcf"])),
+            ("particles/_2econ/items/nyx/hit_blood.vpcf_c".into(), compiled_file(&[])),
+            ("particles/econ/items/nyx/carapace.vpcf_c".into(), compiled_file(&["particles/econ/items/nyx/hit.vpcf"])),
+            ("particles/_2econ/others/nyx/far.vpcf_c".into(), compiled_file(&[])),
+            ("particles/econ/items/axe/twice.vpcf_c".into(), compiled_file(&[])),
+            ("particles/econ/items/lina/twice.vpcf_c".into(), compiled_file(&[])),
+            ("models/items/qop/lvl2/refit.vmdl_c".into(), compiled_file(&["materials/qop/gone.vmat"])),
+        ];
+        let packed: Vec<PackFile<'_>> = files.iter().map(|(path, data)| PackFile { path, data }).collect();
+        let archive = Archive::from_bytes(PathBuf::from("pak01_dir.vpk"), vpk::build(&packed).unwrap()).unwrap();
+        let whole = Wholeness::new(&archive);
+
+        assert!(whole.is_whole("particles/econ/items/nyx/hit.vpcf"), "the one file of that name, one folder away");
+        assert!(whole.is_whole("Particles/Econ/Items/Nyx/Carapace.vpcf"), "a file that names it");
+        assert!(!whole.is_whole("particles/econ/items/nyx/far.vpcf"), "two folders away");
+        assert!(!whole.is_whole("particles/econ/items/nyx/twice.vpcf"), "which of the two is not to be known");
+        assert!(!whole.is_whole("models/items/qop/lvl1/refit.vmdl"), "what stands in has lost a part");
+        assert_eq!(
+            whole.stand_ins(),
+            [
+                ("models/items/qop/lvl1/refit.vmdl_c".to_string(), "models/items/qop/lvl2/refit.vmdl_c".to_string()),
+                ("particles/econ/items/nyx/hit.vpcf_c".to_string(), "particles/_2econ/items/nyx/hit.vpcf_c".to_string()),
+            ]
+        );
+        assert_eq!(whole.gone(), ["materials/qop/gone.vmat", "particles/econ/items/nyx/far.vpcf", "particles/econ/items/nyx/twice.vpcf"]);
     }
 }

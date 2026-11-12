@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "dme-app"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "dme-core",
  "eframe",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "dme-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "dme-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "crc32fast",
  "ed25519-compact",

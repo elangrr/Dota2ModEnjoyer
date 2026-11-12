@@ -13,16 +13,6 @@ pub enum Theme {
 }
 
 impl Theme {
-    pub const ALL: [Theme; 3] = [Theme::Night, Theme::Day, Theme::System];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Theme::Night => "Night",
-            Theme::Day => "Day",
-            Theme::System => "Follow Windows",
-        }
-    }
-
     pub fn is_night(&self) -> bool {
         *self == Theme::Night
     }

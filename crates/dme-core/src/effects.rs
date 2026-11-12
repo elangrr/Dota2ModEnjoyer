@@ -25,7 +25,7 @@ pub const KINDS: &[Kind] = &[
         item: Some("item_blink"),
         assets: &["particles/items_fx/blink_dagger_start.vpcf", "particles/items_fx/blink_dagger_end.vpcf"],
     },
-    Kind { id: "attack", name: "Attack", item: None, assets: &["particles/econ/attack/attack_modifier_empty.vpcf"] },
+    Kind { id: "attack", name: "Attack Projectile", item: None, assets: &["particles/econ/attack/attack_modifier_empty.vpcf"] },
     Kind { id: "force_staff", name: "Force Staff", item: Some("item_force_staff"), assets: &["particles/items_fx/force_staff.vpcf"] },
     Kind {
         id: "euls",

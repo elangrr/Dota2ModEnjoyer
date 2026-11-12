@@ -9,13 +9,14 @@ use crate::error::{Error, Result};
 use crate::heroes::HeroFiles;
 use crate::items::ItemsGame;
 use crate::loadout::{Loadout, same_picks};
+use crate::resource::{self, Wholeness};
 use crate::signatures::{self, Signatures};
 use crate::vpk::{self, Archive, NewFile, PackFile};
 use crate::{effects, fsutil, gameinfo, map_effect, process, trees};
 
 pub const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
-const REWRITE_RULES: u32 = 6;
+const REWRITE_RULES: u32 = 7;
 
 const BRANCH_FILE: &str = "gameinfo_branchspecific.gi";
 const VERIFY_HINT: &str =
@@ -136,14 +137,18 @@ impl Engine {
         let live = |hero: &str, slot: &str| hero_files.as_ref().is_none_or(|files| files.has_slot(hero, slot));
         let apply::Patched { bytes, mut changes } = apply::patch_for(&game, &vanilla, &for_items, &live, effects_for)?;
 
-        let missing = missing_files(&self.dota, &archive, &changes);
+        let mut missing = missing_files(&self.dota, &archive, &changes);
+        let moved = moved_files(&archive, &changes)?;
+        let is_there = |file: &String| moved.iter().any(|(path, _)| *path == format!("{}_c", resource::normal(file)));
+        missing.models.retain(|file| !is_there(file));
+        missing.others.retain(|file| !is_there(file));
         if !missing.models.is_empty() {
             return Err(Error::Refused(format!(
                 "this copy of Dota does not have the models these picks need: {}",
                 missing.models.join(", ")
             )));
         }
-        let mut own_files: Vec<NewFile> = Vec::new();
+        let mut own_files: Vec<NewFile> = moved;
         let mut slots_taken: Vec<&str> = Vec::new();
         for (place, pick) in picks.iter().enumerate().filter(|(_, pick)| is_a_file(pick)) {
             if slots_taken.iter().any(|taken| taken.eq_ignore_ascii_case(&pick.slot)) {
@@ -362,6 +367,18 @@ pub fn missing_files(dota: &DotaInstall, archive: &Archive, changes: &[Change]) 
         list.dedup();
     }
     missing
+}
+
+fn moved_files(archive: &Archive, changes: &[Change]) -> Result<Vec<NewFile>> {
+    let wholeness = Wholeness::new(archive);
+    for file in changes.iter().flat_map(|change| &change.files) {
+        wholeness.is_whole(file);
+    }
+    let copy = |(named, there): (String, String)| {
+        let data = archive.read(&there)?.ok_or_else(|| Error::format("the game's archive", format!("{there} is missing")))?;
+        Ok((named, data))
+    };
+    wholeness.stand_ins().into_iter().map(copy).collect()
 }
 
 pub fn game_has_file(dota: &DotaInstall, archive: &Archive, file: &str) -> bool {
@@ -714,6 +731,19 @@ mod tests {
         let applied = fake.engine.apply(&picks()).unwrap();
         assert_eq!(applied.missing_files, ["particles/econ/items/axe/vanguard/weapon.vpcf"]);
         assert_eq!(state(&fake), ModState::On);
+    }
+
+    #[test]
+    fn an_effect_the_game_has_one_folder_away_goes_in_the_package_under_its_name() {
+        let mut files: Vec<(&str, &[u8])> = FILES[..3].iter().map(|&path| (path, b"compiled".as_slice())).collect();
+        files.push(("particles/_2econ/items/axe/vanguard/weapon.vpcf_c", b"the effect"));
+        let fake = fake_install_of(SAMPLE, &files);
+        let applied = fake.engine.apply(&picks()).unwrap();
+        assert!(applied.missing_files.is_empty(), "{:?}", applied.missing_files);
+
+        let package = Archive::open(&fake.engine.dota.mod_package()).unwrap();
+        assert_eq!(package.len(), 2, "the item database and the effect");
+        assert_eq!(package.read("particles/econ/items/axe/vanguard/weapon.vpcf_c").unwrap().unwrap(), b"the effect");
     }
 
     #[test]

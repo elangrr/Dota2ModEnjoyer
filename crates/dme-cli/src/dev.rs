@@ -314,14 +314,29 @@ fn catalog(dota: &DotaInstall) -> Result<()> {
         with_gap(Gap::ArcanaLevel),
         with_gap(Gap::Checkered)
     );
+    let owners = std::iter::once((None, catalog.world.as_slice())).chain(catalog.heroes.iter().map(|hero| (Some(hero), hero.slots.as_slice())));
+    for (hero, slots) in owners {
+        let owner = hero.map_or("World", |hero| hero.name.as_str());
+        for slot in slots {
+            for entry in slot.items.iter().filter(|entry| !entry.gaps.is_empty()) {
+                let sets = hero.map_or(Vec::new(), |hero| hero.sets.iter().filter(|set| set.pieces.iter().any(|piece| piece.slot == slot.id && piece.item == entry.id)).map(|set| set.name.as_str()).collect());
+                let in_sets = if sets.is_empty() { String::new() } else { format!(", in the set {}", sets.join(", ")) };
+                println!("  {owner} · {}: {} {:?}{in_sets}", slot.name, entry.name, entry.gaps);
+            }
+        }
+    }
     let mut lost_kinds = Counter::default();
     for file in &catalog.lost_files {
         lost_kinds.add(file.rsplit('.').next().unwrap_or_default().as_bytes());
     }
     println!("{} files they name are gone from the game:", catalog.lost_files.len());
     lost_kinds.print("of the kinds");
-    for file in catalog.lost_files.iter().take(12) {
+    for file in &catalog.lost_files {
         println!("  {file}");
+    }
+    println!("{} files they name are in another folder than the one named, and go in the package under the name they are asked for by:", catalog.moved_files.len());
+    for (named, there) in &catalog.moved_files {
+        println!("  {named}  <-  {there}");
     }
     for hero in &catalog.heroes {
         for slot in hero.slots.iter().filter(|slot| !slot.shared_with.is_empty()) {

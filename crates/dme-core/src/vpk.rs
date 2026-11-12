@@ -180,6 +180,12 @@ impl Archive {
         out
     }
 
+    pub fn named(&self, name: &str, ext: &str) -> Vec<String> {
+        let (name, ext) = (name.to_ascii_lowercase(), ext.to_ascii_lowercase());
+        let fits = |entry: &&Entry| same_part(text(&self.data, entry.name), name.as_bytes()) && same_part(text(&self.data, entry.ext), ext.as_bytes());
+        self.entries.iter().filter(fits).map(|entry| self.path_of(entry)).collect()
+    }
+
     pub fn find(&self, path: &str) -> Option<&Entry> {
         let (dir, name, ext) = split_path(path);
         let (dir, name, ext) = (dir.as_bytes(), name.as_bytes(), ext.as_bytes());

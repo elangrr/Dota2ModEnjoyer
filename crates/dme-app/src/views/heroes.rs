@@ -3,7 +3,7 @@ use dme_core::heroes::Attribute;
 use dme_core::loadout::Loadout;
 use eframe::egui::{self, Color32, Ui, vec2};
 
-use super::loadout::Row;
+use super::loadout::{Row, gaps_note, set_gaps_note};
 use super::tiles::{self, Detail, Look, Tile};
 use super::{Open, dim, fits, rarity, title_bar};
 use crate::pictures::Pictures;
@@ -62,6 +62,7 @@ pub struct Hit {
     pub picture: Option<String>,
     pub rarity: Option<usize>,
     pub place: String,
+    pub warning: Option<String>,
 }
 
 #[derive(Default)]
@@ -147,7 +148,7 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &Loadout, pictures: &mut Pi
                 band: rarity::color(&catalog.rarities, hit.rarity),
                 picked: false,
                 faint: false,
-                warning: None,
+                warning: hit.warning.as_deref(),
                 detail: Some(&detail),
                 mark: None,
             };
@@ -188,6 +189,7 @@ fn hits(catalog: &Catalog, wanted: &str, most: usize) -> (Vec<Hit>, bool) {
                     picture: entry.picture.clone(),
                     rarity: entry.rarity,
                     place: format!("{owner} · {}", slot.name),
+                    warning: gaps_note(&entry.gaps),
                 });
             }
         }
@@ -198,7 +200,15 @@ fn hits(catalog: &Catalog, wanted: &str, most: usize) -> (Vec<Hit>, bool) {
             break;
         }
         for set in hero.sets.iter().filter(|set| fits(&set.name, wanted)) {
-            hits.push(Hit { hero: Some(hero.id.clone()), row: Row::Sets, name: set.name.clone(), picture: set.picture.clone(), rarity: set.rarity, place: format!("{} · Set", hero.name) });
+            hits.push(Hit {
+                hero: Some(hero.id.clone()),
+                row: Row::Sets,
+                name: set.name.clone(),
+                picture: set.picture.clone(),
+                rarity: set.rarity,
+                place: format!("{} · Set", hero.name),
+                warning: set_gaps_note(set, &hero.slots),
+            });
         }
         in_slots(Some(hero), &hero.slots, &mut hits);
     }
@@ -218,7 +228,7 @@ fn picks_note(picks: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use dme_core::apply::Pick;
-    use dme_core::catalog::{Entry, Set};
+    use dme_core::catalog::{Entry, Gap, Set};
 
     use super::*;
 
@@ -270,6 +280,20 @@ mod tests {
         assert!(found.hits.is_empty(), "two letters fit too much");
         found.look_for(&catalog, "mist");
         assert_eq!(found.hits.len(), 4);
+    }
+
+    #[test]
+    fn what_is_found_says_what_may_not_show_of_it() {
+        let mut axe = hero("Axe", &[]);
+        axe.slots = vec![slot("Weapon", &["Old Axe", "New Axe"])];
+        axe.slots[0].items[0].gaps = vec![Gap::Files];
+        axe.sets = vec![Set { key: "old".to_string(), name: "Old Axe Set".to_string(), picture: None, pieces: vec![Pick::hero("axe", "weapon", "old axe")], rarity: None }];
+        let catalog = Catalog { heroes: vec![axe], ..Catalog::default() };
+
+        let (hits, _) = hits(&catalog, "axe", 10);
+        let warned: Vec<(&str, bool)> = hits.iter().map(|hit| (hit.name.as_str(), hit.warning.is_some())).collect();
+        assert_eq!(warned, [("Old Axe Set", true), ("Old Axe", true), ("New Axe", false)]);
+        assert!(hits[0].warning.as_deref().unwrap().starts_with("Old Axe: Dota no longer has"), "a set names the piece");
     }
 
     #[test]

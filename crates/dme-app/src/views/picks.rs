@@ -3,7 +3,7 @@ use dme_core::catalog::Catalog;
 use dme_core::loadout::Loadout;
 use eframe::egui::{self, Align, Color32, CornerRadius, CursorIcon, FontId, Layout, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
-use super::loadout::{ROW_HEIGHT, Row, RowLook, in_words, row};
+use super::loadout::{ROW_HEIGHT, Row, RowLook, gaps_note, in_words, row};
 use super::{Open, dim, rarity, title_bar};
 use crate::pictures::Pictures;
 use crate::presets::{LONGEST_NAME, Preset};
@@ -88,6 +88,7 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &mut Loadout, pictures: &mu
                             (Some(slot), Some(entry)) => in_words(slot, pick, entry),
                             _ => (pick.item.clone(), None),
                         };
+                        let warning = entry.and_then(|entry| gaps_note(&entry.gaps));
                         let look = RowLook {
                             label: slot.map_or(pick.slot.as_str(), |slot| slot.name.as_str()),
                             value: &value,
@@ -96,6 +97,7 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &mut Loadout, pictures: &mu
                             band: entry.and_then(|entry| rarity::color(&catalog.rarities, entry.rarity)),
                             open: false,
                             clear_hint: "Take this pick off",
+                            warning: warning.as_deref(),
                         };
                         let said = ui.allocate_ui(vec2(width, ROW_HEIGHT), |ui| row(ui, pictures, &look)).inner;
                         if said.cleared {

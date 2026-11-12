@@ -38,7 +38,8 @@ paid certificate.
 | ![The hero grid](assets/screens/heroes.jpg) | ![A hero's page with a set picked](assets/screens/hero.jpg) |
 | Every hero, with search and filters | A whole set in one click, or piece by piece |
 
-The app has a night look and a day look.
+The app has a night look and a day look. The sun and the moon at the bottom left switch
+between them.
 
 ![A hero's page by day](assets/screens/day.jpg)
 
@@ -123,7 +124,7 @@ the players who took part.
 - Emblem puts the glow of an event's emblem around your heroes. It rides on one slot of each
   hero. For about half of the heroes that is a slot nothing else can go in, so they always
   show it; the others show it while that slot is on its default item in your Dota loadout.
-- For Teleport, Blink Dagger, Attack, Force Staff, Eul's Scepter, Bottle, level up, the fountain
+- For Teleport, Blink Dagger, Attack Projectile, Force Staff, Eul's Scepter, Bottle, level up, the fountain
   and more, pick an event and, where it had several, a level. A hero shows the effect as long as
   one of its slots in your Dota loadout is on its default item.
 
@@ -153,8 +154,7 @@ everything is as before.
 
 ### Settings
 
-**Settings** (bottom left) has which heroes get the effects of events, the look of the app
-(Night, Day, or whichever Windows is set to), Low-end PC mode, updates,
+**Settings** (bottom left) has which heroes get the effects of events, Low-end PC mode, updates,
 and where Dota and your picks are.
 
 ### Going back to normal Dota
@@ -169,7 +169,7 @@ again as it was. If you pick something new instead, you start over from there.
   Dota shows your own item instead. Unequip it in your Dota loadout for the pick to show.
 - Ability effects come along with the default item of the slot their item belongs to. An immortal
   sword's show while your Dota loadout has the default weapon. The app names the slot.
-- The item has a small "!". A part of it may not show. Either Dota no longer has some of its
+- The item or the set has a small "!". A part of it may not show. Either Dota no longer has some of its
   files, or some of its effects go by the level of an arcana, which Dota's servers give only to
   its owner.
 - Your video settings are on their lightest. Those leave parts of effects out.

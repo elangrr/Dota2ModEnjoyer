@@ -20,6 +20,7 @@ pub struct Catalog {
     pub world: Vec<Slot>,
     pub rarities: Vec<Rarity>,
     pub lost_files: Vec<String>,
+    pub moved_files: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,9 +181,9 @@ impl Catalog {
         world.extend(effects::KINDS.iter().filter_map(|kind| reader.event_slot(kind, &events, &pictures)));
         world.extend(reader.trees_slot());
         world.extend(reader.map_slot());
-        let lost_files = reader.wholeness.gone();
+        let (lost_files, moved_files) = (reader.wholeness.gone(), reader.wholeness.stand_ins());
         drop(reader);
-        Catalog { heroes, world, rarities, lost_files }
+        Catalog { heroes, world, rarities, lost_files, moved_files }
     }
 
     pub fn hero(&self, id: &str) -> Option<&Hero> {

@@ -72,6 +72,7 @@ impl<'a> Page<'a> {
             if let Some(hero) = self.hero.filter(|hero| !hero.sets.is_empty()) {
                 let worn = worn_set(hero, self.loadout);
                 let any = self.loadout.of(hero_id).next().is_some();
+                let warning = worn.and_then(|set| set_gaps_note(set, self.slots));
                 let look = RowLook {
                     label: "Whole set",
                     value: match worn {
@@ -84,6 +85,7 @@ impl<'a> Page<'a> {
                     band: worn.and_then(|set| rarity::color(self.rarities, set.rarity)),
                     open: *self.row == Row::Sets,
                     clear_hint: "Back to the default look",
+                    warning: warning.as_deref(),
                 };
                 let answer = row(ui, self.pictures, &look);
                 if answer.cleared {
@@ -108,6 +110,7 @@ impl<'a> Page<'a> {
                     Some((pick, entry)) => in_words(slot, pick, entry),
                     None => ("Default".to_string(), slot.default.picture.as_deref()),
                 };
+                let warning = picked.and_then(|(_, entry)| gaps_note(&entry.gaps));
                 let look = RowLook {
                     label: &slot.name,
                     value: &value,
@@ -116,6 +119,7 @@ impl<'a> Page<'a> {
                     band: picked.and_then(|(_, entry)| rarity::color(self.rarities, entry.rarity)),
                     open: matches!(&*self.row, Row::Slot(id) if *id == slot.id),
                     clear_hint: "Back to the default",
+                    warning: warning.as_deref(),
                 };
                 let answer = row(ui, self.pictures, &look);
                 if answer.cleared {
@@ -168,6 +172,7 @@ impl<'a> Page<'a> {
             let set = shown[index - usize::from(default_first)];
             let worn = self.loadout.wears(&set.pieces);
             let note = pieces_note(set.pieces.len());
+            let warning = set_gaps_note(set, self.slots);
             let detail = Detail { rarity: rarity::named(self.rarities, set.rarity), looks: Vec::new(), facts: pieces_of(set, self.slots) };
             let tile = Tile {
                 picture: set.picture.as_deref(),
@@ -177,7 +182,7 @@ impl<'a> Page<'a> {
                 band: rarity::color(self.rarities, set.rarity),
                 picked: worn,
                 faint: false,
-                warning: None,
+                warning: warning.as_deref(),
                 detail: Some(&detail),
                 mark: None,
             };
@@ -363,7 +368,7 @@ fn effect_row(ui: &mut Ui, slot: &Slot, pick: &Pick, on_a_hero: bool) -> Option<
 
 const COURIER_EFFECT_NOTE: &str = "An experiment: this effect is made for couriers. On a hero it may sit lower or look smaller than it does on a courier.";
 
-fn gaps_note(gaps: &[Gap]) -> Option<String> {
+pub(super) fn gaps_note(gaps: &[Gap]) -> Option<String> {
     let said: Vec<&str> = gaps
         .iter()
         .map(|gap| match gap {
@@ -373,6 +378,22 @@ fn gaps_note(gaps: &[Gap]) -> Option<String> {
         })
         .collect();
     (!said.is_empty()).then(|| said.join(" "))
+}
+
+pub(super) fn set_gaps_note(set: &Set, slots: &[Slot]) -> Option<String> {
+    let piece = |pick: &Pick| {
+        let entry = slots.iter().find(|slot| slot.id == pick.slot)?.entry(&pick.item)?;
+        Some((entry.name.as_str(), gaps_note(&entry.gaps)?))
+    };
+    let mut said: Vec<(Vec<&str>, String)> = Vec::new();
+    for (name, note) in set.pieces.iter().filter_map(piece) {
+        match said.iter_mut().find(|(_, known)| *known == note) {
+            Some((names, _)) => names.push(name),
+            None => said.push((vec![name], note)),
+        }
+    }
+    let lines: Vec<String> = said.iter().map(|(names, note)| format!("{}: {note}", names.join(", "))).collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 fn worn_set<'a>(hero: &'a Hero, loadout: &Loadout) -> Option<&'a Set> {
@@ -456,6 +477,7 @@ pub(super) struct RowLook<'a> {
     pub band: Option<Color32>,
     pub open: bool,
     pub clear_hint: &'a str,
+    pub warning: Option<&'a str>,
 }
 
 pub(super) struct RowAnswer {
@@ -489,6 +511,9 @@ pub(super) fn row(ui: &mut Ui, pictures: &mut Pictures, look: &RowLook<'_>) -> R
         if let Some(color) = look.band {
             tiles::rarity_band(&painter, thumb, color, 4);
         }
+        if look.warning.is_some() {
+            tiles::warning_mark(&painter, pos2(thumb.left() + 10.0, thumb.top() + 10.0));
+        }
 
         let left = thumb.right() + 10.0;
         let width = rect.right() - left - if look.picked { 38.0 } else { 10.0 };
@@ -517,7 +542,10 @@ pub(super) fn row(ui: &mut Ui, pictures: &mut Pictures, look: &RowLook<'_>) -> R
         cross.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(look.clear_hint);
     }
     let clicked = response.clicked() && !cleared;
-    response.on_hover_cursor(CursorIcon::PointingHand);
+    let response = response.on_hover_cursor(CursorIcon::PointingHand);
+    if let Some(warning) = look.warning {
+        response.on_hover_text(warning);
+    }
     RowAnswer { clicked, cleared }
 }
 
@@ -569,6 +597,20 @@ mod tests {
         let both = gaps_note(&[Gap::Files, Gap::ArcanaLevel]).unwrap();
         assert!(both.contains("missing for everybody. Some of its effects go by the arcana's level"));
         assert!(gaps_note(&[Gap::Checkered]).unwrap().starts_with("Buggy: its fog of war"));
+    }
+
+    #[test]
+    fn a_set_says_which_of_its_pieces_may_not_show() {
+        let slot = |id: &str, items: Vec<Entry>| Slot { id: id.to_string(), name: id.to_string(), default: entry("0"), items, effects: Vec::new(), shared_with: Vec::new() };
+        let old = |id: &str, name: &str, gap: Gap| Entry { name: name.to_string(), gaps: vec![gap], ..entry(id) };
+        let slots = [slot("weapon", vec![old("1", "Old Axe", Gap::Files)]), slot("head", vec![entry("2")]), slot("belt", vec![old("3", "Old Belt", Gap::Files)]), slot("arms", vec![old("4", "Arms", Gap::ArcanaLevel)])];
+
+        assert_eq!(set_gaps_note(&set("whole", &[("head", "2")]), &slots), None);
+        let note = set_gaps_note(&set("old", &[("weapon", "1"), ("head", "2"), ("belt", "3"), ("arms", "4")]), &slots).unwrap();
+        let lines: Vec<&str> = note.lines().collect();
+        assert_eq!(lines.len(), 2, "said once for the pieces it is the same for, and not of the piece that is whole: {note}");
+        assert!(lines[0].starts_with("Old Axe, Old Belt: Dota no longer has some of the files"), "{note}");
+        assert!(lines[1].starts_with("Arms: Some of its effects go by the arcana's level"), "{note}");
     }
 
     #[test]

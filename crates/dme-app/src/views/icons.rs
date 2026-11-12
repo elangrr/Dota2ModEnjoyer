@@ -11,6 +11,8 @@ pub enum Icon {
     Settings,
     Help,
     Update,
+    Day,
+    Night,
 }
 
 const UNITS: f32 = 24.0;
@@ -71,6 +73,17 @@ pub fn paint(painter: &egui::Painter, icon: Icon, room: Rect, color: Color32) {
             painter.add(ring(12.0, 12.0, 9.0));
             painter.add(line(&[[12.0, 16.5], [12.0, 8.0]]));
             painter.add(line(&[[8.6, 11.3], [12.0, 7.7], [15.4, 11.3]]));
+        }
+        Icon::Day => {
+            painter.add(ring(12.0, 12.0, 4.2));
+            for ray in 0..8 {
+                let (sin, cos) = (ray as f32 * half / 4.0).sin_cos();
+                painter.add(line(&[[12.0 + cos * 7.6, 12.0 + sin * 7.6], [12.0 + cos * 10.2, 12.0 + sin * 10.2]]));
+            }
+        }
+        Icon::Night => {
+            painter.add(line(&around(11.5, 12.5, 20, &|_| 8.0, 13.7_f32.to_radians(), 242.6_f32.to_radians())));
+            painter.add(line(&around(15.5, 8.5, 14, &|_| 7.0, 212.6_f32.to_radians(), -155.2_f32.to_radians())));
         }
     }
 }

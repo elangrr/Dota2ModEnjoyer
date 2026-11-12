@@ -1,0 +1,5 @@
+/target
+/sandbox
+*.dme-tmp
+# The secret key that releases are signed with (`dme dev update-key`) stays out of the repository.
+*.key

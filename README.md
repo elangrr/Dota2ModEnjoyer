@@ -1,22 +1,46 @@
-# Dota 2 Mod Enjoyer
+<p align="center"><img src="assets/logo.png" width="112" alt="The logo of Dota 2 Mod Enjoyer"></p>
 
-Pick what your heroes and your game look like, press Play, and Dota starts that way. Only you
-see the result.
+<h1 align="center">Dota 2 Mod Enjoyer</h1>
+
+<p align="center">Pick what your heroes and your game look like, press Play, and Dota starts that way.<br>Only you see the result.</p>
+
+<p align="center">
+  <a href="https://github.com/elangrr/Dota2ModEnjoyer/releases/latest/download/Dota2ModEnjoyer.exe"><img src="assets/buttons/download.svg" alt="Download for Windows" width="340"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/elangrr/Dota2ModEnjoyer"><img src="assets/buttons/star.svg" alt="Star on GitHub" height="40"></a>
+  &nbsp;
+  <a href="#supporting-the-project"><img src="assets/buttons/donate.svg" alt="Donate" height="40"></a>
+</p>
+
+<p align="center"><img src="assets/demo.webp" alt="The app being used: finding a hero, picking a set and a courier, and the list of picks" width="820"></p>
 
 > **Use at your own risk.** This tool edits two of Dota 2's own files. That may break Valve's terms
 > of service. It is not affiliated with Valve.
 
 ## Quick start
 
-1. Download `Dota2ModEnjoyer.exe` from the
-   [latest release](https://github.com/elangrr/Dota2ModEnjoyer/releases/latest). It is one file
-   and needs no installing.
+1. Press the download button above. You get `Dota2ModEnjoyer.exe`, which is one file and needs
+   no installing. Older versions are on the
+   [releases page](https://github.com/elangrr/Dota2ModEnjoyer/releases).
 2. Close Dota 2 if it is open, and start the app. It finds Dota 2 by itself.
 3. Choose a hero and click what you want it to wear.
 4. Press **Play**.
 
 Windows may warn about a program it has not seen before, because the file is not signed with a
 paid certificate.
+
+## What it looks like
+
+| | |
+|---|---|
+| ![The hero grid](assets/screens/heroes.jpg) | ![A hero's page with a set picked](assets/screens/hero.jpg) |
+| Every hero, with search and filters | A whole set in one click, or piece by piece |
+
+The app has a night look and a day look.
+
+![A hero's page by day](assets/screens/day.jpg)
 
 ## Where to read
 
@@ -30,6 +54,8 @@ paid certificate.
 | Know what the tool does to your game | [What it changes](#what-it-changes) |
 | Use the command line | [The command-line tool](#the-command-line-tool) |
 | Build it or work on the code | [Building](#building) |
+| Help the project | [Supporting the project](#supporting-the-project) |
+| Get a quick answer | [Questions and answers](#questions-and-answers) |
 
 ## Using the app
 
@@ -41,11 +67,26 @@ remembered. After a Dota 2 update, press Play as usual and they are put back.
 Under **Heroes**, choose a hero. Then pick a whole set, or go slot by slot and mix pieces.
 
 To search, just type. There is no need to click the search box first. Heroes are found by the
-short names Dota itself knows them by, such as `am`, `wr`, `qop`. Enter opens the first hero found,
-Escape clears what you typed.
+short names Dota itself knows them by, such as `am`, `wr`, `qop`. From the third letter on, items
+and sets are found too, wherever they are, so typing `dragonclaw` takes you straight to the
+hook. Enter opens the first thing found, Escape clears what you typed.
+
+The chips above the heroes show only Strength, Agility, Intelligence or Universal heroes, or
+only the heroes you picked something for.
+
+Rest the pointer on an item or a set for a larger picture of it, with its styles side by side.
 
 The line under a picture has the colour of the item's rarity, as in Dota: purple for mythical,
 gold for immortal and so on. The buttons above the pictures show only the rarities you choose.
+
+### My picks and presets
+
+The **My picks** tab lists everything you picked, for the world and for each hero. A click on a
+pick opens its page, and the cross beside it takes it off.
+
+You can keep what is picked as a preset. Type a name on that page and press "Save as preset".
+A click on a preset picks it again later, in the place of what is picked then, and Undo takes
+that back.
 
 ### Ability effects
 
@@ -111,7 +152,8 @@ everything is as before.
 
 ### Settings
 
-**Settings** (top right) has which heroes get the effects of events, Low-end PC mode, updates,
+**Settings** (bottom left) has which heroes get the effects of events, the look of the app
+(Night, Day, or whichever Windows is set to), Low-end PC mode, updates,
 and where Dota and your picks are.
 
 ### Going back to normal Dota
@@ -144,9 +186,9 @@ shows on all ten and only one of them can have a pick there. The app says so on 
 
 ## Updates
 
-The app updates itself. When a newer version is out, an **Update** button shows at the top.
+The app updates itself. When a newer version is out, an **Update** button shows on the left.
 One click downloads the new version, puts it in the place of the old one and starts it. Picks
-and settings stay as they are. The app looks when it starts and, left open, every half hour.
+and settings stay as they are. The app looks when it starts and, left open, every five minutes.
 
 **Settings** has "Update automatically", which is off by default. Switched on, the app updates
 and starts again by itself, without the click.
@@ -247,8 +289,72 @@ dme apply map_effect=18380                        the map drawn the way an event
 ## Building
 
 `cargo build --release` builds both programs: `target\release\Dota2ModEnjoyer.exe` and
-`target\release\dme.exe`. Each is one file that needs nothing else beside it.
+`target\release\dme.exe`. Each is one file that needs nothing else beside it. For the app's
+file to wear its icon, `windres` from the MinGW tools has to be in the `PATH`.
 [docs/DEVELOPING.md](docs/DEVELOPING.md) is for working on the code and making releases.
+
+## Questions and answers
+
+### Does it collect any data?
+
+No. The app collects nothing about you, your computer or your game, and sends nothing anywhere.
+It has no accounts, no statistics and no ads. Its one request to the internet asks GitHub
+whether a newer version is out, and downloads that version when you press Update. Your picks
+and settings stay in a folder on your own computer.
+
+### Do other players see my picks?
+
+No. Everything happens in the game's files on your computer, so only you see it.
+
+### Do I have to own the items?
+
+No. Dota already has every item in its files, because your game has to draw other players'
+items. The app has the game show them on you.
+
+### Can I get banned for it?
+
+Nobody can promise that you cannot. The app edits two of the game's files, which may be against
+Valve's rules, so you use it at your own risk. It never touches the running game or its memory,
+and it gives no advantage in a match.
+
+### How do I undo everything?
+
+Press **Back to normal Dota**. That puts the game's files back exactly as they were. Steam's
+"Verify integrity of game files" does the same.
+
+### My picks are gone after a Dota update.
+
+Press Play as usual. The app puts them back before the game starts.
+
+### Something I picked does not show in the game.
+
+Most often you wear an item of your own in that slot, and Dota shows that one. Unequip it in
+your Dota loadout. [When something does not show](#when-something-does-not-show) has the other
+causes.
+
+### Why does Windows warn about the file?
+
+The file is not signed with a paid certificate, so Windows has not seen it before. The code is
+open for anyone to read, and the app is built from it.
+
+### Is it free?
+
+Yes, and its code is open under the GPL. Donations are welcome and never asked for.
+
+## Supporting the project
+
+The tool is free and its code is open. If it is useful to you, give it a star on GitHub, which
+helps other players find it. The **Support** button in the app opens the same page.
+
+Donations are welcome and never asked for. The app works the same without one.
+
+| With | Where |
+|---|---|
+| PayPal | [paypal.me/elangrr](https://paypal.me/elangrr) |
+| Solana (SOL), on the Solana network | `122Y7kRw7ELd4SpVG9LPCfVMtQgHiWDiSKakQom966RG` |
+| Ethereum (ETH), on the Ethereum network | `0xccf73af707f8bd2ee81dec77467b473705ef901e` |
+
+Send only the currency named, on the network named. Anything else sent to an address is lost.
 
 ## License
 
@@ -259,6 +365,9 @@ the GNU General Public License as published by the Free Software Foundation, eit
 the License, or (at your option) any later version. It is distributed in the hope that it will
 be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
 FITNESS FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE) for the full text.
+
+The app's font is Inter, under the SIL Open Font License
+([assets/fonts/Inter-LICENSE.txt](assets/fonts/Inter-LICENSE.txt)).
 
 Dota 2 is a trademark of Valve Corporation. This project is not affiliated with or endorsed by
 Valve.

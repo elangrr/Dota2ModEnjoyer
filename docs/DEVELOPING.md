@@ -17,6 +17,16 @@ target\release\dme.exe dev try-all              builds every pick in memory; 0 F
 `cargo build --release` builds both programs: `target\release\Dota2ModEnjoyer.exe` and
 `target\release\dme.exe`. Each is one file that needs nothing else beside it.
 
+Both files say their name, maker and version to Windows, and the app's file wears the logo
+(`assets/icon.ico`). That is compiled in by `windres`, which comes with the MinGW tools. If
+`windres` is not in the `PATH`, the build warns and makes the programs without those details.
+`assets/logo.svg` is the one drawing of the logo. The app draws its window icon and the mark in
+its side bar from the same numbers (`crates/dme-app/src/logo.rs`), and a test compares the two.
+
+The app's font is Inter, in `assets/fonts` with its license (SIL Open Font License 1.1). The
+colours of its two looks are in `crates/dme-app/src/theme.rs`, and nowhere else: a test there
+holds them to a readable contrast.
+
 ## The code
 
 The code is three crates: `dme-core` (everything that reads and writes files), `dme-cli` (`dme`)

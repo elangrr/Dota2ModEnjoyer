@@ -1,10 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod logo;
 mod pictures;
+mod presets;
 mod script;
 mod settings;
 mod status;
+mod support;
 mod theme;
 mod update;
 mod views;
@@ -52,6 +55,10 @@ impl Options {
                 "--click" => {
                     let at: Option<[f32; 2]> = arguments.next().and_then(|at| read_numbers(&at, ','));
                     options.steps.extend(at.map(|[x, y]| Step::Click(pos2(x, y))));
+                }
+                "--rest" => {
+                    let at: Option<[f32; 2]> = arguments.next().and_then(|at| read_numbers(&at, ','));
+                    options.steps.extend(at.map(|[x, y]| Step::Rest(pos2(x, y))));
                 }
                 "--scroll" => {
                     let turn: Option<[f32; 3]> = arguments.next().and_then(|turn| read_numbers(&turn, ','));
@@ -105,7 +112,8 @@ fn main() -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(app::TITLE)
         .with_inner_size(options.size.unwrap_or(LIKED_SIZE))
-        .with_min_inner_size(LEAST_SIZE);
+        .with_min_inner_size(LEAST_SIZE)
+        .with_icon(logo::icon());
     if options.screenshot.is_some() {
         viewport = viewport.with_position([-8000.0, -8000.0]).with_active(false).with_taskbar(false);
     }

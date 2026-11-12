@@ -11,6 +11,10 @@ pub fn color(rarities: &[Rarity], place: Option<usize>) -> Option<Color32> {
     Some(Color32::from_rgb(red, green, blue))
 }
 
+pub fn named(rarities: &[Rarity], place: Option<usize>) -> Option<(&str, Color32)> {
+    Some((rarities.get(place?)?.name.as_str(), color(rarities, place)?))
+}
+
 pub fn wanted(asked: &BTreeSet<usize>, place: Option<usize>) -> bool {
     asked.is_empty() || place.is_some_and(|place| asked.contains(&place))
 }
@@ -39,16 +43,19 @@ pub fn chips(ui: &mut Ui, rarities: &[Rarity], present: &BTreeSet<usize>, asked:
 }
 
 fn chip(ui: &mut Ui, rarity: &Rarity, on: bool) -> Response {
-    let color = Color32::from_rgb(rarity.color[0], rarity.color[1], rarity.color[2]);
-    let name = ui.painter().layout_no_wrap(rarity.name.clone(), FontId::proportional(13.0), theme::TEXT);
+    pill(ui, &rarity.name, Color32::from_rgb(rarity.color[0], rarity.color[1], rarity.color[2]), on)
+}
+
+pub fn pill(ui: &mut Ui, name: &str, color: Color32, on: bool) -> Response {
+    let name = ui.painter().layout_no_wrap(name.to_string(), FontId::proportional(13.0), theme::text());
     let (rect, response) = ui.allocate_exact_size(vec2(name.size().x + 34.0, 26.0), Sense::click());
     if ui.is_rect_visible(rect) {
         let (fill, line, ink) = if on {
-            (color.gamma_multiply(0.3), color, theme::TEXT)
+            (color.gamma_multiply(0.3), color, theme::text())
         } else if response.hovered() {
-            (theme::CARD_HOVER, theme::LINE, theme::TEXT)
+            (theme::card_hover(), theme::line(), theme::text())
         } else {
-            (theme::CARD, theme::LINE, theme::TEXT_DIM)
+            (theme::card(), theme::line(), theme::text_dim())
         };
         let painter = ui.painter();
         let round = CornerRadius::same(13);

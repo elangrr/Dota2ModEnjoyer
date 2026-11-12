@@ -39,6 +39,7 @@ Nothing else under the Dota folder is written. Our own files live in
 | `picks.json` | What the player picked, and whether the picks are put away (3.12) |
 | `state.json` | What was last put in the game, for which game build (3.12) |
 | `settings.json` | What the app remembers about itself: that the notice was read, a Dota folder pointed out by hand, the mode for a low-end computer (3.18) |
+| `presets.json` | The picks a player kept under a name in the app (3.13) |
 | `backup\<game build>\` | The two game files as Valve shipped them |
 
 One more file is written, and only when the player asks for it: the app's own program file,
@@ -1054,21 +1055,44 @@ normal Dota" refuse to write then (3.9), and everything else only changes `picks
 
 ### 3.13 The app
 
-The app is one window. Its header has two tabs, Heroes and World. Its footer has one sentence
-saying where things stand, "Back to normal Dota", and Play.
+The app is one window. Down its left side are the logo and the names of its pages, each under
+a small drawing of what it is: Heroes, World and My picks at the top; Support, Settings and Help
+at the bottom, which open in front of the page. A bar along the bottom has a badge and one
+sentence saying where things stand, "Back to normal Dota", and Play. The side and the bar are
+panels of glass: sheets that let through what is behind them, which is the look's own plain
+colour with a faint glow of the app's colour in one corner. Nothing is blurred, and nothing
+scrolls under a panel. The app has two looks, Night and Day, and Settings chooses one or has
+the app follow Windows (`theme` in `settings.json`). Pictures of the game's stay on dark in
+both. Text is set in Inter (`assets/fonts`), titles in its heavier cut. The badge
+says in two or three words whether the game has the picks: "Mods on", "Not in the game yet",
+"Normal Dota", "Old picks in the game" or "Needs attention".
 
-- Heroes is a grid of heroes. A hero's page has the list of its slots on the left, with a row
+- Heroes is a grid of heroes, each a card that is all picture with the name on it. Chips above it show only the heroes of one main attribute, which
+  a hero's own file names with `AttributePrimary`, or only the heroes with picks. A hero's tile
+  has a dot in the colour of its attribute. A hero's page has the list of its slots on the left, with a row
   for whole sets at the top, and on the right what can go in the row that is open. The first tile
   is always the default. Styles of the picked item are chosen above the tiles.
 - World is the same page for the world slots. Under the game's own slots, a few words say
   where the effects begin that are for every hero: the emblem (3.19) and the effects of events
-  (3.16). Then come the experiments (3.17, 3.20). The page of each of these says under its
-  title what a pick there does and when it shows.
+  (3.16). Then come the experiments (3.17, 3.20). The page of each of these has a small "?"
+  beside its title, which says what a pick there does and when it shows while the pointer rests
+  on it.
+- My picks lists everything that is picked, the world's picks first and then each hero's. A
+  click on a pick opens its page, and its cross takes it off. Above the list are the presets:
+  picks kept under a name in `presets.json`, beside the app's settings. A click on a preset
+  picks what it has in the place of what is picked now, which can be undone. Items a Dota
+  update took away are left out and counted. The same name again takes the place of what was
+  kept under it.
 - Every page has one search box, and what is typed goes there without the box being clicked
   first, whatever was clicked last. Escape empties it. On the grid of heroes the best fit comes
   first: a hero whose short name was typed in full or whose name starts with what was typed,
-  then one with a word that starts with it, then one that has it anywhere (2.10). Enter opens
-  the first.
+  then one with a word that starts with it, then one that has it anywhere (2.10). From the
+  third letter on, the grid also lists the items and sets that have what was typed in their
+  names, wherever they are: the world's first, then each hero's, 120 at most. A click on one
+  opens its page with its name typed in. Enter opens the first hero, or the first of those.
+- A tile of an item or a set shows a larger look while the pointer rests on it: the picture
+  twice the size, the name in full, the rarity, the styles side by side or the pieces of the
+  set, and what may not show.
 - Once an item is picked in a slot that has effects to put on it, a list above the tiles
   chooses one, or none (3.15). On a hero, an effect made for couriers is marked "(courier)",
   and a line under it says it is an experiment. Picking another item in the slot keeps the
@@ -1081,9 +1105,9 @@ saying where things stand, "Back to normal Dota", and Play.
 - Low-end PC mode is a checkbox in the settings (3.18). It is kept with the app's own settings
   and is no pick.
 - In a hero's list, under what the hero wears, a few words say where the slots for ability
-  effects begin (3.11). Such a slot's page says what a pick there does and, once an item is
-  picked, which slot to look at in Dota if the effects do not show: the one the item is worn in
-  (3.14).
+  effects begin (3.11). The "?" of such a slot's page says what a pick there does and, once an
+  item is picked, which slot to look at in Dota if the effects do not show: the one the item is
+  worn in (3.14).
 - A picture of an item or a set has a band in the colour of its rarity along the bottom, as in
   Dota. A row of buttons above the tiles, one for each rarity that occurs in the list, shows
   only the rarities switched on; with none switched on, everything is shown. The choice holds
@@ -1091,18 +1115,26 @@ saying where things stand, "Back to normal Dota", and Play.
 - A pick is saved the moment it is made. Nothing is written to the game until Play.
 - After "Back to normal Dota" the picks are put away (3.12): the app shows nothing as picked,
   and the button beside Play reads "Bring back my picks".
-- The first start shows a notice about the risks, once. If Dota is not found, the app asks for
-  its folder.
-- Something that goes wrong is said in one sentence above the footer, with a "Copy details" button.
-  Taking several picks off at once can be undone from the same place.
-- Help says what a player cannot see for themselves (3.10), and which version the app is.
-- In a build that looks for newer versions of itself, an Update button shows in the header for
+- The first start shows a notice about the risks, once, and then four sentences on how the
+  app is used, once. If Dota is not found, the app asks for its folder.
+- Something that goes wrong is said in one sentence in the corner above the bar, with a "Copy
+  details" button. Taking several picks off at once can be undone from the same place. A
+  message that asks nothing of the player goes away by itself after 7 seconds, one with an
+  Undo after 12; one about something that went wrong, or about an update, stays until closed.
+- Help says what a player cannot see for themselves (3.10), as a list of headings that each
+  open on a click, and which version the app is.
+- In a build that looks for newer versions of itself, an Update button shows on the left side for
   as long as one is out, and Help says how updating goes (4).
 - The page of the persona slot says that a persona takes the place of what the hero wears
   (3.22). Picking it takes the hero's own picks for those slots off, which can be undone;
   picking one of those takes the persona off.
-- A button in the header opens the settings page, with: which heroes get the effects of events
+- "Support" on the left side opens a page with a button that opens the project's page on GitHub,
+  to give it a star, and, in a build that names them (`crates/dme-app/src/support.rs`), where
+  the maker takes donations: a page for PayPal, and wallets whose addresses are copied with a
+  click. The app opens `https` addresses only, and asks for nothing by itself.
+- "Settings" on the left side opens the settings page, with: which heroes get the effects of events
   and an emblem (3.21), as every hero, the heroes picked for, or heroes chosen from a list;
+  the look, Night, Day or the one Windows has;
   Low-end PC mode (3.18); "Update automatically" (4.2), off by default; where Dota is and where
   the app keeps the picks, its settings and the backups; and the version and license.
   `--open settings` shows it in a picture.
@@ -1114,13 +1146,14 @@ For testing, the app can work itself and take a picture of its own window, which
 meanwhile. Nobody's screen is captured.
 
 ```
-Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weapon | world:courier | help]
-                    [--click X,Y] [--type TEXT] [--scroll X,Y,DOWN] [--wait SECONDS] ...
+Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weapon | world:courier | picks | help | settings | support]
+                    [--click X,Y] [--rest X,Y] [--type TEXT] [--scroll X,Y,DOWN] [--wait SECONDS] ...
                     [--dota FOLDER] [--data-dir FOLDER] [--no-start] [--ignore-running]
                     [--update-from MANIFEST] [--pretend-version VERSION] [--no-restart]
 ```
 
-Steps are taken in the order given, each once the window has come to rest. `--wait` lets time
+Steps are taken in the order given, each once the window has come to rest. `--rest` leaves the
+pointer at a place, for what shows while it rests there. `--wait` lets time
 go by, for what the app comes to do by itself meanwhile; the picture is taken after two minutes
 at the latest, whatever is still to do. `--no-start` does everything Play does except start
 Dota. `--ignore-running` writes even while Dota runs and only works together with `--dota`: it
@@ -1536,12 +1569,12 @@ have the first four, is no manifest.
 
 1. At its start the app clears away what an earlier update left beside its file (step 5),
    and asks for the manifest, on a thread of its own. If nobody answers, or the answer is no
-   manifest, nothing is said and the app works as it is. Left open, it asks again every 30
+   manifest, nothing is said and the app works as it is. Left open, it asks again every 5
    minutes, so a release that comes out while the app is open beside Dota is noticed without
    the app being started again.
 2. If the manifest offers a newer version, and is signed where the build demands that, an
-   Update button shows in the header for as long as the app runs. One sentence above the
-   footer says so once for each version, with the notes, and with "Update" and "Later". It
+   Update button shows on the left side for as long as the app runs. One sentence in the corner above
+the    footer says so once for each version, with the notes, and with "Update" and "Later". It
    takes the place of nothing else that is being said there, only of the offer of a version
    before it.
 3. Update fetches the file, at most 256 MB of it, and takes it only if its length and its
@@ -1567,7 +1600,7 @@ The player's picks and settings are not touched. They are in the app's own folde
 beside the program.
 
 No new version is fetched or put in place without the click on Update, unless the player asked
-for that. Settings, in the header, has "Update automatically", which is off until it is
+for that. Settings has "Update automatically", which is off until it is
 switched on. With it on, a newer version is fetched and started as soon as the app hears of
 it, and nothing is offered first. Switched on while a version is on offer, it fetches that one
 at once. An update that fails is said as always, and is not tried again by itself. The Update
@@ -1623,7 +1656,7 @@ Dota2ModEnjoyer.exe --update-from MANIFEST [--pretend-version 0.0.1] [--no-resta
 `--update-from` names the manifest to ask for in the place of the build's, and makes this a
 trial. The manifest and the file may then be at a plain `http` address, or be files on this
 computer. A manifest that cannot be fetched or read the first time is said, not passed over.
-The app asks again every 10 seconds, not every 30 minutes. No signature is demanded in a
+The app asks again every 10 seconds, not every 5 minutes. No signature is demanded in a
 trial, since its manifest is one's own, on one's own computer. `--pretend-version` is the version the app is to take itself for.
 `--no-restart` puts the new version in place and does not start it.
 

@@ -4,7 +4,7 @@ use crate::apply::{self, Pick};
 use crate::effects;
 use crate::engine::ITEMS_GAME;
 use crate::error::{Error, Result};
-use crate::heroes::HeroFiles;
+use crate::heroes::{Attribute, HeroFiles};
 use crate::items::{self, AttachedEffect, Item, ItemSet, ItemsGame, Style};
 use crate::kv;
 use crate::map_effect;
@@ -50,6 +50,7 @@ pub struct Hero {
     pub id: String,
     pub name: String,
     pub aliases: Vec<String>,
+    pub attribute: Option<Attribute>,
     pub picture: Option<String>,
     pub sets: Vec<Set>,
     pub slots: Vec<Slot>,
@@ -328,7 +329,7 @@ impl Reader<'_, '_> {
         if !short.eq_ignore_ascii_case(&name) && !aliases.iter().any(|alias| alias.eq_ignore_ascii_case(&short)) {
             aliases.push(short);
         }
-        Some(Hero { id: id.to_string(), name, aliases, picture: self.picture(&format!("heroes/{id}")), sets, slots })
+        Some(Hero { id: id.to_string(), name, aliases, attribute: self.hero_files.attribute(id), picture: self.picture(&format!("heroes/{id}")), sets, slots })
     }
 
     fn hero_name(&self, id: &str) -> String {
@@ -1478,6 +1479,7 @@ mod tests {
             id: String::new(),
             name: name.to_string(),
             aliases: aliases.iter().map(|alias| alias.to_string()).collect(),
+            attribute: None,
             picture: None,
             sets: Vec::new(),
             slots: Vec::new(),

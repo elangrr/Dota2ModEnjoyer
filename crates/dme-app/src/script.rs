@@ -13,6 +13,7 @@ const LATEST: f64 = 120.0;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
     Click(Pos2),
+    Rest(Pos2),
     Type(String),
     Scroll(Pos2, f32),
     Wait(f64),
@@ -25,6 +26,7 @@ impl Step {
                 let button = |pressed| Event::PointerButton { pos: *at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
                 vec![vec![Event::PointerMoved(*at)], vec![button(true)], vec![button(false)]]
             }
+            Step::Rest(at) => vec![vec![Event::PointerMoved(*at)]],
             Step::Type(text) => vec![vec![Event::Text(text.clone())]],
             Step::Scroll(at, down) => {
                 let wheel = Event::MouseWheel {

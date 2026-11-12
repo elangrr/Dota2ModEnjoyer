@@ -13,6 +13,10 @@ pub struct Settings {
     pub low_end: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_update: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tour_seen: bool,
+    #[serde(default, skip_serializing_if = "crate::theme::Theme::is_night")]
+    pub theme: crate::theme::Theme,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -42,7 +46,7 @@ mod tests {
         let path = dir.path().join("deep").join("settings.json");
         assert_eq!(Settings::load(&path), Settings::default());
 
-        let settings = Settings { notice_accepted: true, dota_folder: Some(PathBuf::from(r"D:\Games\dota 2 beta")), low_end: true, auto_update: true };
+        let settings = Settings { notice_accepted: true, dota_folder: Some(PathBuf::from(r"D:\Games\dota 2 beta")), low_end: true, auto_update: true, tour_seen: true, theme: crate::theme::Theme::Day };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);
         assert!(!Settings::default().auto_update, "the app updates by itself only if it is told to");

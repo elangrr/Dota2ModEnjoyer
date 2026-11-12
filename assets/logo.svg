@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>Dota 2 Mod Enjoyer</title>
+  <defs>
+    <linearGradient id="back" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262b33"/>
+      <stop offset="1" stop-color="#14161a"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#back)"/>
+  <polygon points="128,34 208,81 168,128 106,92 48,81" fill="#f9a183"/>
+  <polygon points="48,81 106,92 106,164 48,175" fill="#e55a34"/>
+  <polygon points="208,81 208,175 128,222 48,175 106,164 168,128" fill="#b8431f"/>
+  <polygon points="106,92 168,128 106,164" fill="#14161a"/>
+</svg>

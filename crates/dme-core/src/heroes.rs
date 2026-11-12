@@ -19,8 +19,41 @@ impl HeroSlot {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Attribute {
+    Strength,
+    Agility,
+    Intelligence,
+    Universal,
+}
+
+impl Attribute {
+    pub const ALL: [Attribute; 4] = [Attribute::Strength, Attribute::Agility, Attribute::Intelligence, Attribute::Universal];
+
+    fn read(value: &[u8]) -> Option<Attribute> {
+        let value = std::str::from_utf8(value).ok()?.trim().to_ascii_uppercase();
+        match value.strip_prefix("DOTA_ATTRIBUTE_")? {
+            "STRENGTH" => Some(Attribute::Strength),
+            "AGILITY" => Some(Attribute::Agility),
+            "INTELLECT" => Some(Attribute::Intelligence),
+            "ALL" => Some(Attribute::Universal),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Attribute::Strength => "Strength",
+            Attribute::Agility => "Agility",
+            Attribute::Intelligence => "Intelligence",
+            Attribute::Universal => "Universal",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HeroFile {
+    pub attribute: Option<Attribute>,
     pub slots: Vec<HeroSlot>,
     pub aliases: Vec<String>,
 }
@@ -72,7 +105,8 @@ impl HeroFiles {
             }
             let aliases = body.str("NameAliases").and_then(|names| std::str::from_utf8(names).ok()).unwrap_or_default();
             let aliases = aliases.split([';', ',']).map(str::trim).filter(|alias| !alias.is_empty()).map(str::to_string).collect();
-            self.by_hero.insert(String::from_utf8_lossy(hero.key).to_ascii_lowercase(), HeroFile { slots, aliases });
+            let attribute = body.str("AttributePrimary").and_then(Attribute::read);
+            self.by_hero.insert(String::from_utf8_lossy(hero.key).to_ascii_lowercase(), HeroFile { attribute, slots, aliases });
         }
     }
 
@@ -109,6 +143,10 @@ impl HeroFiles {
         self.of(hero).map_or(&[], |file| file.aliases.as_slice())
     }
 
+    pub fn attribute(&self, hero: &str) -> Option<Attribute> {
+        self.of(hero)?.attribute
+    }
+
     pub fn len(&self) -> usize {
         self.by_hero.len()
     }
@@ -129,6 +167,7 @@ pub(crate) mod tests {
 	{
 		"Model"		"models/heroes/juggernaut/juggernaut.vmdl"
 		"NameAliases"		"Yurnero; jugg ,"
+		"AttributePrimary"		"DOTA_ATTRIBUTE_AGILITY"
 		"ItemSlots"
 		{
 			"0"
@@ -250,6 +289,11 @@ pub(crate) mod tests {
         files.add(JUGGERNAUT_FILE.as_bytes());
         assert_eq!(files.aliases(JUGG), ["Yurnero", "jugg"], "separated by ; or by , and tidied");
         assert!(files.aliases("npc_dota_hero_axe").is_empty());
+        assert_eq!(files.attribute(JUGG), Some(Attribute::Agility));
+        assert_eq!(files.attribute("npc_dota_hero_axe"), None);
+        assert_eq!(Attribute::read(b" dota_attribute_all "), Some(Attribute::Universal));
+        assert_eq!(Attribute::read(b"DOTA_ATTRIBUTE_INTELLECT"), Some(Attribute::Intelligence));
+        assert_eq!(Attribute::read(b"STRENGTH"), None);
     }
 
     #[test]

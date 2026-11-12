@@ -12,7 +12,7 @@ use crate::worker::Failure;
 
 const TRIAL_SOURCE: Option<&str> = option_env!("DME_UPDATE_TRIAL");
 
-const ASK_EVERY: Duration = Duration::from_secs(30 * 60);
+const ASK_EVERY: Duration = Duration::from_secs(5 * 60);
 const TRIAL_ASK_EVERY: Duration = if cfg!(test) { Duration::from_millis(40) } else { Duration::from_secs(10) };
 
 fn built_in_trial() -> Option<&'static str> {

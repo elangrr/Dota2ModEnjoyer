@@ -1,6 +1,6 @@
 use dme_core::apply::EffectsFor;
 use dme_core::catalog::Catalog;
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{self, Ui};
 
 use super::dim;
 
@@ -50,6 +50,6 @@ pub fn effects_for(ui: &mut Ui, catalog: Option<&Catalog>, current: &EffectsFor)
 
 pub fn heading(ui: &mut Ui, text: &str) {
     ui.add_space(10.0);
-    ui.label(RichText::new(text).size(17.0).strong());
+    ui.label(crate::theme::title(text, 17.0));
     ui.add_space(2.0);
 }

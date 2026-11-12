@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="340" height="76" viewBox="0 0 340 76" role="img" aria-label="Download for Windows">
+  <title>Download for Windows</title>
+  <defs><linearGradient id="lit" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6835f"/><stop offset="1" stop-color="#d94a24"/></linearGradient></defs>
+  <rect x="1" y="1" width="338" height="74" rx="14" fill="url(#lit)"/>
+  <text x="170.0" y="35.0" text-anchor="middle" font-family="Inter, 'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="23" font-weight="700" fill="#ffffff">Download for Windows</text>
+  <text x="170.0" y="57.0" text-anchor="middle" font-family="Inter, 'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="13" fill="#ffffff" fill-opacity="0.88">Free. One file, nothing to install.</text>
+</svg>

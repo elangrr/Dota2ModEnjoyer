@@ -27,7 +27,9 @@ these and say why:
 - Adding a downloader, an installer for other software, ads, mining, or anything that runs code
   the player did not ask for. The update check must keep its signature and checksum checks.
 - Shipping Valve's files. Game files, pictures, names and extracted data are read from the
-  player's own install at run time and never go in the repository or in a release.
+  player's own install at run time and never go in the repository or in a release. The
+  pictures of the app at work in `assets/` (the README's screenshots and its moving picture)
+  are the one exception: they show the game's art as a player sees it in the app.
 - Selling the tool or builds of it as if the cosmetics were unlocked, or removing the warning
   that the player uses it at their own risk.
 - Removing the license or the copyright notices, or passing the code off under another license.
@@ -71,12 +73,14 @@ whether a request is one of the above, ask the person before writing code.
 | `dota.rs`, `process.rs`, `launch.rs` | Finding Dota, whether it runs, starting it through Steam |
 | `update.rs` | The app updating itself: manifest, checks, putting the new file in place (SPEC 4) |
 | `crates/dme-app/src/` | The window, made with `egui`/`eframe` |
-| `app.rs`, `views/` | The app's state and the pages: hero grid, slots and tiles, rarity chips, settings |
+| `app.rs`, `views/` | The app's state, the side bar, the bar at the bottom, the messages, and the pages: hero grid and search, slots and tiles, all picks and presets, rarity chips, settings, the drawings beside the pages' names |
 | `worker.rs` | The one thread that reads and writes game files |
 | `update.rs` | Asking for updates on threads of its own, fetching with WinHTTP, starting again |
 | `script.rs`, `main.rs` | Working the window from the command line for testing; the options |
-| `status.rs`, `settings.rs`, `theme.rs`, `pictures.rs` | The status sentence, settings, colours, picture cache |
+| `status.rs`, `settings.rs`, `presets.rs`, `theme.rs`, `pictures.rs`, `logo.rs`, `support.rs` | The status sentence and badge, settings, presets, the two looks (colours, fonts, glass), picture cache, the logo as the app draws it, where to star and donate |
 | `crates/dme-cli/src/` | `dme`: `main.rs` the commands, `dev.rs` and `dev/` the developer checks |
+| `crates/winres.rs`, `build.rs` of both programs | The name, maker, version and icon a program's file has for Windows, compiled in with `windres` |
+| `assets/` | The logo: `logo.svg` is the drawing, `logo.png` and `icon.ico` are made from it. `fonts/`: Inter, with its license |
 
 Inside Dota, the tool's folder is `game\mod_enjoyer` and its package is
 `game\mod_enjoyer\pak01_dir.vpk`.

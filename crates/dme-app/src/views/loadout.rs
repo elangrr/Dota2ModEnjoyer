@@ -6,15 +6,15 @@ use dme_core::loadout::Loadout;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{self, Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 
-use super::tiles::{self, Look, Tile, WHOLE, fit};
+use super::tiles::{self, Detail, Look, Tile, WHOLE, fit};
 use super::{dim, fits, rarity, title_bar};
 use crate::pictures::Pictures;
 use crate::theme;
 
 const LIST_WIDTH: f32 = 310.0;
-const ROW_HEIGHT: f32 = 60.0;
-const ITEM_LOOK: Look = Look { picture: vec2(150.0, 100.0), name_lines: 2, note: false };
-const SET_LOOK: Look = Look { picture: vec2(110.0, 167.0), name_lines: 3, note: true };
+pub(super) const ROW_HEIGHT: f32 = 60.0;
+const ITEM_LOOK: Look = Look { picture: vec2(150.0, 100.0), name_lines: 2, note: false, name_over: false };
+const SET_LOOK: Look = Look { picture: vec2(110.0, 167.0), name_lines: 3, note: true, name_over: false };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Row {
@@ -105,17 +105,7 @@ impl<'a> Page<'a> {
                 let pick = self.loadout.get(hero_id, &slot.id);
                 let picked = pick.and_then(|pick| Some((pick, slot.entry(&pick.item)?)));
                 let (value, picture) = match picked {
-                    Some((pick, entry)) => {
-                        let (style, picture) = entry.in_style(pick.style);
-                        let mut value = match style.filter(|_| pick.style > 0) {
-                            Some(style) => format!("{} ({style})", entry.name),
-                            None => entry.name.clone(),
-                        };
-                        if let Some(effect) = pick.effect.and_then(|id| slot.effect(id)) {
-                            value = format!("{value} + {}", effect.name);
-                        }
-                        (value, picture)
-                    }
+                    Some((pick, entry)) => in_words(slot, pick, entry),
                     None => ("Default".to_string(), slot.default.picture.as_deref()),
                 };
                 let look = RowLook {
@@ -149,7 +139,7 @@ impl<'a> Page<'a> {
     }
 
     fn sets(&mut self, ui: &mut Ui, hero: &Hero) -> bool {
-        title_bar(ui, "Whole sets", Some((&mut *self.search, "Type to find a set")), |_| {});
+        title_bar(ui, "Whole sets", None, Some((&mut *self.search, "Type to find a set")), |_| {});
         rarity::chips(ui, self.rarities, &hero.sets.iter().filter_map(|set| set.rarity).collect(), self.asked);
 
         let wanted = self.search.trim().to_lowercase();
@@ -168,7 +158,7 @@ impl<'a> Page<'a> {
         let mut changed = false;
         tiles::grid(ui, ("sets", &hero.id), shown.len() + usize::from(default_first), SET_LOOK, |ui, index, look| {
             if default_first && index == 0 {
-                let tile = Tile { picture: hero.picture.as_deref(), name: "Default look", note: None, badge: None, band: None, picked: bare, faint: true, warning: None };
+                let tile = Tile { picture: hero.picture.as_deref(), name: "Default look", note: None, badge: None, band: None, picked: bare, faint: true, warning: None, detail: None, mark: None };
                 if tiles::tile(ui, self.pictures, look, &tile).clicked() && !bare {
                     self.loadout.clear_owner(hero_id);
                     changed = true;
@@ -178,6 +168,7 @@ impl<'a> Page<'a> {
             let set = shown[index - usize::from(default_first)];
             let worn = self.loadout.wears(&set.pieces);
             let note = pieces_note(set.pieces.len());
+            let detail = Detail { rarity: rarity::named(self.rarities, set.rarity), looks: Vec::new(), facts: pieces_of(set, self.slots) };
             let tile = Tile {
                 picture: set.picture.as_deref(),
                 name: &set.name,
@@ -187,6 +178,8 @@ impl<'a> Page<'a> {
                 picked: worn,
                 faint: false,
                 warning: None,
+                detail: Some(&detail),
+                mark: None,
             };
             if tiles::tile(ui, self.pictures, look, &tile).clicked() && !worn {
                 self.loadout.put_set(&set.pieces, hero.sets.iter().map(|set| set.pieces.as_slice()));
@@ -204,17 +197,17 @@ impl<'a> Page<'a> {
     fn items(&mut self, ui: &mut Ui, slot: &Slot) -> bool {
         let hero_id = self.hero_id();
         let mut changed = false;
-        title_bar(ui, &slot.name, Some((&mut *self.search, "Type to search")), |_| {});
         let current = self.loadout.get(hero_id, &slot.id).cloned();
         let current_entry = current.as_ref().and_then(|pick| slot.entry(&pick.item));
-        if slot.is_for_effects() {
-            ui.label(dim(effects_note(current_entry)));
-            ui.add_space(6.0);
-        } else if let Some(note) = note_of(slot) {
+        let in_the_open = slot.id == dme_core::apply::PERSONA_SELECTOR || !slot.shared_with.is_empty();
+        let note = match () {
+            () if slot.is_for_effects() => Some(effects_note(current_entry)),
+            () if !slot.shared_with.is_empty() && note_of(slot).is_none() => Some(shared_note(slot)),
+            () => note_of(slot).map(str::to_string),
+        };
+        title_bar(ui, &slot.name, note.as_deref().filter(|_| !in_the_open), Some((&mut *self.search, "Type to search")), |_| {});
+        if let Some(note) = note.filter(|_| in_the_open) {
             ui.label(dim(note));
-            ui.add_space(6.0);
-        } else if !slot.shared_with.is_empty() {
-            ui.label(dim(shared_note(slot)));
             ui.add_space(6.0);
         }
         rarity::chips(ui, self.rarities, &slot.items.iter().filter_map(|entry| entry.rarity).collect(), self.asked);
@@ -238,7 +231,7 @@ impl<'a> Page<'a> {
                 changed = true;
             }
             if let Some(warning) = gaps_note(&entry.gaps) {
-                ui.label(RichText::new(warning).color(theme::WARN).size(theme::SMALL));
+                ui.label(RichText::new(warning).color(theme::warn()).size(theme::SMALL));
                 ui.add_space(4.0);
             }
         }
@@ -257,7 +250,7 @@ impl<'a> Page<'a> {
         tiles::grid(ui, ("items", hero_id, &slot.id), shown.len() + usize::from(default_first), ITEM_LOOK, |ui, index, look| {
             if default_first && index == 0 {
                 let picked = current.is_none();
-                let tile = Tile { picture: slot.default.picture.as_deref(), name: "Default", note: None, badge: None, band: None, picked, faint: true, warning: None };
+                let tile = Tile { picture: slot.default.picture.as_deref(), name: "Default", note: None, badge: None, band: None, picked, faint: true, warning: None, detail: None, mark: None };
                 if tiles::tile(ui, self.pictures, look, &tile).clicked() && current.is_some() {
                     self.loadout.clear(hero_id, &slot.id);
                     changed = true;
@@ -272,6 +265,11 @@ impl<'a> Page<'a> {
             };
             let styles = styles_note(entry.styles.len(), slot.is_for_an_event());
             let warning = gaps_note(&entry.gaps);
+            let detail = Detail {
+                rarity: rarity::named(self.rarities, entry.rarity),
+                looks: entry.styles.iter().map(|style| (style.name.as_str(), style.picture.as_deref().or(entry.picture.as_deref()))).collect(),
+                facts: Vec::new(),
+            };
             let tile = Tile {
                 picture,
                 name: &entry.name,
@@ -281,6 +279,8 @@ impl<'a> Page<'a> {
                 picked: picked.is_some(),
                 faint: false,
                 warning: warning.as_deref(),
+                detail: Some(&detail),
+                mark: None,
             };
             if tiles::tile(ui, self.pictures, look, &tile).clicked() && picked.is_none() {
                 self.loadout.set(pick_of(hero_id, slot, entry, current.as_ref()));
@@ -290,6 +290,26 @@ impl<'a> Page<'a> {
         });
         changed
     }
+}
+
+pub(super) fn in_words<'a>(slot: &'a Slot, pick: &Pick, entry: &'a Entry) -> (String, Option<&'a str>) {
+    let (style, picture) = entry.in_style(pick.style);
+    let mut value = match style.filter(|_| pick.style > 0) {
+        Some(style) => format!("{} ({style})", entry.name),
+        None => entry.name.clone(),
+    };
+    if let Some(effect) = pick.effect.and_then(|id| slot.effect(id)) {
+        value = format!("{value} + {}", effect.name);
+    }
+    (value, picture)
+}
+
+fn pieces_of(set: &Set, slots: &[Slot]) -> Vec<String> {
+    let piece = |pick: &Pick| {
+        let slot = slots.iter().find(|slot| slot.id == pick.slot)?;
+        Some(format!("{}: {}", slot.name, slot.entry(&pick.item)?.name))
+    };
+    set.pieces.iter().filter_map(piece).collect()
 }
 
 fn make_way(loadout: &mut Loadout, slot: &Slot) {
@@ -418,9 +438,9 @@ fn effects_note(picked: Option<&Entry>) -> String {
 fn caption(ui: &mut Ui, text: &str) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
     let line = rect.bottom() - 9.0;
-    ui.painter().text(pos2(rect.left() + 12.0, line), Align2::LEFT_CENTER, text, FontId::proportional(theme::SMALL), theme::TEXT_DIM);
-    let words = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(theme::SMALL), theme::TEXT_DIM).size().x;
-    let stroke = Stroke::new(1.0, theme::LINE);
+    ui.painter().text(pos2(rect.left() + 12.0, line), Align2::LEFT_CENTER, text, FontId::proportional(theme::SMALL), theme::text_dim());
+    let words = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(theme::SMALL), theme::text_dim()).size().x;
+    let stroke = Stroke::new(1.0, theme::line());
     ui.painter().line_segment([pos2(rect.left() + 22.0 + words, line), pos2(rect.right() - 10.0, line)], stroke);
 }
 
@@ -428,40 +448,40 @@ fn styles_note(styles: usize, of_an_event: bool) -> Option<String> {
     (styles > 1).then(|| format!("{styles} {}", if of_an_event { "levels" } else { "styles" }))
 }
 
-struct RowLook<'a> {
-    label: &'a str,
-    value: &'a str,
-    picked: bool,
-    picture: Option<&'a str>,
-    band: Option<Color32>,
-    open: bool,
-    clear_hint: &'a str,
+pub(super) struct RowLook<'a> {
+    pub label: &'a str,
+    pub value: &'a str,
+    pub picked: bool,
+    pub picture: Option<&'a str>,
+    pub band: Option<Color32>,
+    pub open: bool,
+    pub clear_hint: &'a str,
 }
 
-struct RowAnswer {
-    clicked: bool,
-    cleared: bool,
+pub(super) struct RowAnswer {
+    pub clicked: bool,
+    pub cleared: bool,
 }
 
-fn row(ui: &mut Ui, pictures: &mut Pictures, look: &RowLook<'_>) -> RowAnswer {
+pub(super) fn row(ui: &mut Ui, pictures: &mut Pictures, look: &RowLook<'_>) -> RowAnswer {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter_at(rect);
         let fill = if look.open {
-            theme::CARD_HOVER
+            theme::card_hover()
         } else if response.hovered() {
-            theme::CARD
+            theme::card()
         } else {
             Color32::TRANSPARENT
         };
         painter.rect_filled(rect, CornerRadius::same(theme::ROUND), fill);
         if look.open {
             let bar = Rect::from_min_size(rect.min + vec2(0.0, 12.0), vec2(3.0, rect.height() - 24.0));
-            painter.rect_filled(bar, CornerRadius::same(2), theme::ACCENT);
+            painter.rect_filled(bar, CornerRadius::same(2), theme::accent());
         }
 
         let thumb = Rect::from_min_size(rect.min + vec2(12.0, 8.0), vec2(66.0, 44.0));
-        painter.rect_filled(thumb, CornerRadius::same(4), theme::BACKGROUND);
+        painter.rect_filled(thumb, CornerRadius::same(4), theme::well());
         if let Some((texture, size)) = look.picture.and_then(|path| pictures.get(path)) {
             let tint = if look.picked { Color32::WHITE } else { Color32::from_gray(120) };
             painter.image(texture, fit(size, thumb), WHOLE, tint);
@@ -472,8 +492,8 @@ fn row(ui: &mut Ui, pictures: &mut Pictures, look: &RowLook<'_>) -> RowAnswer {
 
         let left = thumb.right() + 10.0;
         let width = rect.right() - left - if look.picked { 38.0 } else { 10.0 };
-        painter.text(pos2(left, rect.top() + 11.0), Align2::LEFT_TOP, look.label, FontId::proportional(theme::SMALL), theme::TEXT_DIM);
-        let color = if look.picked { theme::TEXT } else { theme::TEXT_DIM };
+        painter.text(pos2(left, rect.top() + 11.0), Align2::LEFT_TOP, look.label, FontId::proportional(theme::SMALL), theme::text_dim());
+        let color = if look.picked { theme::text() } else { theme::text_dim() };
         let mut value = LayoutJob::simple(look.value.to_string(), FontId::proportional(theme::BODY), color, width);
         value.wrap.max_rows = 1;
         value.wrap.break_anywhere = true;
@@ -487,9 +507,9 @@ fn row(ui: &mut Ui, pictures: &mut Pictures, look: &RowLook<'_>) -> RowAnswer {
         let cross = ui.interact(button, response.id.with("clear"), Sense::click());
         let painter = ui.painter();
         if cross.hovered() {
-            painter.rect_filled(button, CornerRadius::same(13), theme::LINE);
+            painter.rect_filled(button, CornerRadius::same(13), theme::line());
         }
-        let stroke = Stroke::new(1.6, if cross.hovered() { theme::TEXT } else { theme::TEXT_DIM });
+        let stroke = Stroke::new(1.6, if cross.hovered() { theme::text() } else { theme::text_dim() });
         let (center, arm) = (button.center(), 4.5);
         painter.line_segment([center + vec2(-arm, -arm), center + vec2(arm, arm)], stroke);
         painter.line_segment([center + vec2(-arm, arm), center + vec2(arm, -arm)], stroke);
@@ -513,7 +533,7 @@ mod tests {
     }
 
     fn hero(sets: Vec<Set>) -> Hero {
-        Hero { id: AXE.to_string(), name: "Axe".to_string(), aliases: Vec::new(), picture: None, sets, slots: Vec::new() }
+        Hero { id: AXE.to_string(), name: "Axe".to_string(), aliases: Vec::new(), attribute: None, picture: None, sets, slots: Vec::new() }
     }
 
     fn entry(id: &str) -> Entry {

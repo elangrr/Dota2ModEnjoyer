@@ -78,6 +78,20 @@ impl Facts {
         }
     }
 
+    pub fn badge(&self) -> Option<(Tone, &'static str)> {
+        if !self.loaded || self.busy.is_some() || self.starting {
+            return None;
+        }
+        let ours_in_game = matches!(self.mods, ModState::On | ModState::NeedsRepair(_));
+        Some(match (&self.mods, self.picks, self.in_game) {
+            (ModState::ChangedByOther(_), ..) => (Tone::Warn, "Needs attention"),
+            (_, 0, _) if ours_in_game => (Tone::Warn, "Old picks in the game"),
+            (_, 0, _) => (Tone::Plain, "Normal Dota"),
+            (_, _, true) => (Tone::Good, "Mods on"),
+            (_, _, false) => (Tone::Warn, "Not in the game yet"),
+        })
+    }
+
     pub fn tip(&self) -> Option<&'static str> {
         let pressing = matches!(self.mods, ModState::ChangedByOther(_));
         (self.loaded && self.picks > 0 && !pressing).then_some(TIP)
@@ -142,6 +156,19 @@ mod tests {
             away: false,
             in_game: false,
         }
+    }
+
+    #[test]
+    fn the_badge_says_whether_the_game_has_the_picks() {
+        assert_eq!(facts().badge(), Some((Tone::Plain, "Normal Dota")));
+        assert_eq!(Facts { picks: 2, ..facts() }.badge(), Some((Tone::Warn, "Not in the game yet")));
+        assert_eq!(Facts { picks: 2, mods: ModState::On, in_game: true, ..facts() }.badge(), Some((Tone::Good, "Mods on")));
+        assert_eq!(Facts { picks: 3, mods: ModState::On, ..facts() }.badge(), Some((Tone::Warn, "Not in the game yet")), "other picks than the game has");
+        assert_eq!(Facts { mods: ModState::On, ..facts() }.badge(), Some((Tone::Warn, "Old picks in the game")));
+        assert_eq!(Facts { mods: ModState::ChangedByOther("x".to_string()), picks: 1, ..facts() }.badge(), Some((Tone::Warn, "Needs attention")));
+        assert_eq!(Facts { loaded: false, ..facts() }.badge(), None);
+        assert_eq!(Facts { busy: Some(Busy::Playing), picks: 1, ..facts() }.badge(), None);
+        assert_eq!(Facts { starting: true, picks: 1, ..facts() }.badge(), None);
     }
 
     #[test]

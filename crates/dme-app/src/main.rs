@@ -1,9 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod changelog;
+mod crash;
+mod glass;
 mod logo;
+mod one_copy;
 mod pictures;
 mod presets;
+mod report;
 mod script;
 mod settings;
 mod status;
@@ -56,6 +61,10 @@ impl Options {
                     let at: Option<[f32; 2]> = arguments.next().and_then(|at| read_numbers(&at, ','));
                     options.steps.extend(at.map(|[x, y]| Step::Click(pos2(x, y))));
                 }
+                "--right-click" => {
+                    let at: Option<[f32; 2]> = arguments.next().and_then(|at| read_numbers(&at, ','));
+                    options.steps.extend(at.map(|[x, y]| Step::RightClick(pos2(x, y))));
+                }
                 "--rest" => {
                     let at: Option<[f32; 2]> = arguments.next().and_then(|at| read_numbers(&at, ','));
                     options.steps.extend(at.map(|[x, y]| Step::Rest(pos2(x, y))));
@@ -107,19 +116,118 @@ fn screen_room() -> Option<[f32; 2]> {
     None
 }
 
-fn main() -> eframe::Result {
+const TRY_NO_GLASS: &str = "DME_TRY_NO_GLASS";
+const TRY_ONE_COPY: &str = "DME_TRY_ONE_COPY";
+
+fn main() -> std::process::ExitCode {
     let options = Options::read(std::env::args().skip(1));
+    let data_dir = options.data_dir.clone().unwrap_or_else(dme_core::engine::default_data_dir);
+    let picture_only = options.screenshot.is_some();
+    crash::watch(&data_dir);
+    let trying_copies = std::env::var_os(TRY_ONE_COPY).is_some();
+    let held = match picture_only && !trying_copies {
+        true => None,
+        false => {
+            let wait = if options.updated_from.is_some() { one_copy::AFTER_AN_UPDATE } else { one_copy::AT_A_START };
+            match one_copy::take(&data_dir, wait) {
+                one_copy::Taken::Alone(held) => Some(held),
+                one_copy::Taken::Other => {
+                    if !picture_only {
+                        one_copy::bring_forward();
+                    }
+                    return std::process::ExitCode::SUCCESS;
+                }
+            }
+        }
+    };
+    let settings_file = data_dir.join(app::SETTINGS_FILE);
+    let mut settings = settings::Settings::load(&settings_file);
+    let trying = std::env::var_os(TRY_NO_GLASS).is_some();
+    let glass = !settings.no_glass && (!picture_only || trying);
+
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(app::TITLE)
         .with_inner_size(options.size.unwrap_or(LIKED_SIZE))
         .with_min_inner_size(LEAST_SIZE)
         .with_icon(logo::icon());
-    if options.screenshot.is_some() {
+    if picture_only {
         viewport = viewport.with_position([-8000.0, -8000.0]).with_active(false).with_taskbar(false);
+    }
+    if glass {
+        viewport = viewport.with_transparent(true);
     }
     let fit_the_screen: eframe::WindowBuilderHook = Box::new(|viewport| viewport.with_inner_size(opening_size(screen_room())));
     let native = eframe::NativeOptions { viewport, window_builder: options.size.is_none().then_some(fit_the_screen), ..Default::default() };
-    eframe::run_native(app::TITLE, native, Box::new(move |creation| Ok(Box::new(app::App::new(creation, options)))))
+    crash::making_window(true);
+    let shown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eframe::run_native(
+            app::TITLE,
+            native,
+            Box::new(move |creation| {
+                if trying && glass {
+                    panic!("{TRY_NO_GLASS} is set: the window is taken not to be see-through on this computer");
+                }
+                crash::making_window(false);
+                Ok(Box::new(app::App::new(creation, options, glass)))
+            }),
+        )
+    }));
+    let outcome = match shown {
+        Ok(Ok(())) => Shown::Closed,
+        Ok(Err(error)) => Shown::Failed(error.to_string()),
+        Err(_) => Shown::Crashed,
+    };
+    match afterwards(outcome, crash::is_making_window(), glass) {
+        Afterwards::Done => std::process::ExitCode::SUCCESS,
+        Afterwards::WithoutGlass => {
+            settings.no_glass = true;
+            let _ = settings.save(&settings_file);
+            drop(held);
+            let again = std::env::current_exe().and_then(|app| std::process::Command::new(app).args(std::env::args_os().skip(1)).spawn());
+            if again.is_err() && !picture_only {
+                crash::tell("The app could not start with its see-through window. Start it again: it starts without it from now on.");
+            }
+            std::process::ExitCode::SUCCESS
+        }
+        Afterwards::NoWindow(why) => {
+            if !picture_only {
+                crash::tell(&format!("The app's window could not be made on this computer: {why}\n\nUpdating the driver of the graphics card may help."));
+            }
+            std::process::ExitCode::FAILURE
+        }
+        Afterwards::Crashed => {
+            if !picture_only {
+                let written = Some(data_dir.join(crash::FILE)).filter(|file| file.exists());
+                crash::tell(&crash::closed_words(written.as_deref()));
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Shown {
+    Closed,
+    Failed(String),
+    Crashed,
+}
+
+#[derive(Debug, PartialEq)]
+enum Afterwards {
+    Done,
+    WithoutGlass,
+    NoWindow(String),
+    Crashed,
+}
+
+fn afterwards(shown: Shown, making: bool, glass: bool) -> Afterwards {
+    match shown {
+        Shown::Closed => Afterwards::Done,
+        _ if making && glass => Afterwards::WithoutGlass,
+        Shown::Failed(why) => Afterwards::NoWindow(why),
+        Shown::Crashed if making => Afterwards::NoWindow(crash::last().unwrap_or_else(|| "no reason was given".to_string())),
+        Shown::Crashed => Afterwards::Crashed,
+    }
 }
 
 #[cfg(test)]
@@ -164,7 +272,7 @@ mod tests {
 
     #[test]
     fn steps_are_kept_in_the_order_they_were_given() {
-        let options = read(&["--click", "640,260", "--type", "baby roshan", "--scroll", "700, 400, 900", "--wait", "2.5", "--click", "12.5,7"]);
+        let options = read(&["--click", "640,260", "--type", "baby roshan", "--scroll", "700, 400, 900", "--wait", "2.5", "--right-click", "30,40", "--click", "12.5,7"]);
         assert_eq!(
             options.steps,
             [
@@ -172,6 +280,7 @@ mod tests {
                 Step::Type("baby roshan".to_string()),
                 Step::Scroll(pos2(700.0, 400.0), 900.0),
                 Step::Wait(2.5),
+                Step::RightClick(pos2(30.0, 40.0)),
                 Step::Click(pos2(12.5, 7.0)),
             ]
         );
@@ -197,6 +306,18 @@ mod tests {
     #[test]
     fn the_screen_says_how_much_room_it_has() {
         assert!(screen_room().is_none_or(|[width, height]| width >= 320.0 && height >= 200.0));
+    }
+
+    #[test]
+    fn a_window_that_cannot_be_see_through_is_made_again_without_and_a_crash_is_told() {
+        assert_eq!(afterwards(Shown::Closed, false, true), Afterwards::Done);
+        assert_eq!(afterwards(Shown::Crashed, true, true), Afterwards::WithoutGlass);
+        assert_eq!(afterwards(Shown::Failed("no pixel format".to_string()), true, true), Afterwards::WithoutGlass);
+        assert_eq!(afterwards(Shown::Failed("no OpenGL".to_string()), true, false), Afterwards::NoWindow("no OpenGL".to_string()));
+        assert!(matches!(afterwards(Shown::Crashed, true, false), Afterwards::NoWindow(_)));
+        assert_eq!(afterwards(Shown::Crashed, false, true), Afterwards::Crashed);
+        assert_eq!(afterwards(Shown::Crashed, false, false), Afterwards::Crashed);
+        assert_eq!(afterwards(Shown::Failed("lost".to_string()), false, false), Afterwards::NoWindow("lost".to_string()));
     }
 
     #[test]

@@ -79,9 +79,10 @@ enum Command {
     /// A hero's slots for ability effects take an item's effects for one ability and leave
     /// the item itself out: juggernaut.ability_effects_1=9984. `dme slots HERO` lists them.
     ///
-    /// The world's fx_ slots take the effect an event had for one kind of thing, for every
-    /// hero: fx_teleport=17482:2 is that event's third level. `dme world` lists them.
-    /// emblem=12996 puts the glow of an event's emblem on every hero.
+    /// The world's fx_ slots take the effect an event had for one kind of thing, for the
+    /// heroes of `dme effects-for`: fx_teleport=17482:2 is that event's third level. `dme
+    /// world` lists them. emblem=12996 puts the glow of an event's emblem around those heroes.
+    /// They are the heroes something is picked for, unless `dme effects-for` says otherwise.
     ///
     /// An item can be given an effect on top of its own, the way a gem gives one in Dota:
     /// "courier=10003,effect=15". `dme effects` lists them.
@@ -265,6 +266,10 @@ impl Place {
     fn shows_an_item(&self) -> bool {
         let of_its_own_kind = self.event_kind().is_some() || self.is_for_trees() || self.is_for_an_emblem() || self.is_for_the_map();
         !of_its_own_kind && !(self.hero.is_some() && items::effects_slot(&self.slot).is_some())
+    }
+
+    fn takes_an_effect(&self) -> bool {
+        self.shows_an_item() && !(self.hero.is_some() && self.slot.eq_ignore_ascii_case(apply::PERSONA_SELECTOR))
     }
 }
 
@@ -473,7 +478,7 @@ fn list_items(dota: &DotaInstall, place: &str, slot: Option<&str>) -> Result<()>
             println!("{:<7} {}{levels}", event.id, data.item_name(event));
         }
         println!(
-            "\n{} events have an effect for this: {}. Use one, for every hero, with: dme apply {}=<number from the left column>",
+            "\n{} events have an effect for this: {}. Use one, for the heroes of dme effects-for, with: dme apply {}=<number from the left column>",
             found.len(),
             kind.name,
             place.slot
@@ -486,7 +491,7 @@ fn list_items(dota: &DotaInstall, place: &str, slot: Option<&str>) -> Result<()>
             println!("{:<7} {:<10} {}", item.id, game.rarity(item).unwrap_or("-"), data.item_name(item));
         }
         match place.is_for_an_emblem() {
-            true => println!("\n{} emblems. Put one on every hero with: dme apply emblem=<number from the left column>", found.len()),
+            true => println!("\n{} emblems. Put one around the heroes of dme effects-for with: dme apply emblem=<number from the left column>", found.len()),
             false => println!("\nAn experiment: {} looks for the whole map. Use one with: dme apply map_effect=<number from the left column>", found.len()),
         }
         return Ok(());
@@ -585,12 +590,19 @@ fn apply(engine: &Engine, wanted: &[String]) -> Result<()> {
             println!("  ... and {} more", applied.missing_files.len() - 8);
         }
     }
+    say_if_nobody_gets_them(&picks, saved.effects_for());
     println!(
         "\nWrote the mod package ({:.1} MB) and set the game up to load it.",
         applied.package_len as f64 / 1_048_576.0
     );
     println!("Start Dota 2 to see it, or let `dme play` start it. To go back to normal Dota: dme restore");
     Ok(())
+}
+
+fn say_if_nobody_gets_them(picks: &[Pick], effects_for: &EffectsFor) {
+    if apply::reach_nobody(picks, effects_for) {
+        println!("note: no hero gets the effects of events or the emblem, for they go on {}. Pick something for a hero, or: dme effects-for every", effects_for_words(effects_for));
+    }
 }
 
 fn effects_for(engine: &Engine, choice: Option<&str>) -> Result<()> {
@@ -623,6 +635,7 @@ fn effects_for_words(effects_for: &EffectsFor) -> String {
     match effects_for {
         EffectsFor::Every => "every hero".to_string(),
         EffectsFor::Picked => "the heroes you picked something for".to_string(),
+        EffectsFor::These(heroes) if heroes.is_empty() => "no hero".to_string(),
         EffectsFor::These(heroes) => heroes.iter().map(|hero| items::hero_short_name(hero)).collect::<Vec<_>>().join(", "),
     }
 }
@@ -643,6 +656,7 @@ fn play(engine: &Engine, start: bool, low_end: bool) -> Result<()> {
         ),
         Ready::Normal(_) => println!("You have no picks, so Dota 2 is as Valve ships it. Pick something with: dme apply"),
     }
+    say_if_nobody_gets_them(saved.picks(), saved.effects_for());
     if !start {
         return Ok(());
     }
@@ -681,7 +695,7 @@ fn read_pick(game: &ItemsGame<'_>, data: &GameData, text: &str) -> Result<SetPic
         }
         let item = find_item(game, data, &place, what)?;
         let first = items::effects_slot(&place.slot).filter(|_| place.hero.is_some()).map_or(0, |effects| item.first_effects_style(effects.number));
-        if effect.is_some() && !place.shows_an_item() {
+        if effect.is_some() && !place.takes_an_effect() {
             bail!("an effect goes on an item that takes the place of a default item, and nothing in {} does", place.words());
         }
         if style.is_some() && (place.is_for_an_emblem() || place.is_for_the_map()) {
@@ -898,5 +912,24 @@ mod tests {
         assert_eq!(split_gem("Hat, Cape and Boots,effect=15"), ("Hat, Cape and Boots", Some("15"), None));
         assert_eq!(split_gem("One,size=2"), ("One,size=2", None, None), "nothing that is known");
         assert_eq!(split_gem(",effect="), ("", Some(""), None));
+    }
+
+    #[test]
+    fn an_effect_goes_on_an_item_that_shows_and_not_on_a_persona() {
+        let place = |hero: Option<&str>, slot: &str| Place { hero: hero.map(str::to_string), slot: slot.to_string() };
+        const PUDGE: &str = "npc_dota_hero_pudge";
+        assert!(place(None, "courier").takes_an_effect());
+        assert!(place(Some(PUDGE), "weapon").takes_an_effect());
+        assert!(place(Some(PUDGE), "weapon_persona_1").takes_an_effect(), "what the persona wears is an item of its own");
+        assert!(!place(Some(PUDGE), "persona_selector").takes_an_effect());
+        assert!(!place(Some(PUDGE), "ability_effects_1").takes_an_effect());
+        assert!(!place(None, "fx_teleport").takes_an_effect());
+    }
+
+    #[test]
+    fn the_heroes_that_get_what_is_for_every_hero_are_said_in_words() {
+        assert_eq!(effects_for_words(&EffectsFor::Every), "every hero");
+        assert_eq!(effects_for_words(&EffectsFor::These(vec!["npc_dota_hero_axe".to_string(), "npc_dota_hero_lina".to_string()])), "axe, lina");
+        assert_eq!(effects_for_words(&EffectsFor::These(Vec::new())), "no hero");
     }
 }

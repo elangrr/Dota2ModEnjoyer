@@ -17,6 +17,40 @@ pub enum Icon {
 
 const UNITS: f32 = 24.0;
 
+pub fn paint_coming(painter: &egui::Painter, room: Rect, come: Option<f32>, color: Color32, time: f64) {
+    let side = room.width().min(room.height());
+    let scale = side / UNITS;
+    let origin = room.center() - egui::vec2(side, side) / 2.0;
+    let at = |x: f32, y: f32| -> Pos2 { pos2(origin.x + x * scale, origin.y + y * scale) };
+    let width = (1.8 * scale).max(1.2);
+    let (middle, radius) = (at(12.0, 12.0), 9.0 * scale);
+    painter.circle_stroke(middle, radius, Stroke::new(width, color.gamma_multiply(0.28)));
+    let turn = std::f32::consts::TAU;
+    let (from, sweep) = match come {
+        Some(come) => (-turn / 4.0, come.clamp(0.0, 1.0) * turn),
+        None => (time.fract() as f32 * turn, turn / 4.0),
+    };
+    if sweep > 0.0 {
+        let steps = ((sweep / turn) * 72.0).ceil().max(2.0) as usize;
+        let point = |step: usize| {
+            let angle = from + sweep * step as f32 / steps as f32;
+            pos2(middle.x + angle.cos() * radius, middle.y + angle.sin() * radius)
+        };
+        painter.add(Shape::line((0..=steps).map(point).collect(), Stroke::new(width * 1.5, color)));
+    }
+    match come.filter(|_| side >= 40.0) {
+        Some(come) => {
+            let share = format!("{}%", (come.clamp(0.0, 1.0) * 100.0).floor() as u32);
+            painter.text(middle, Align2::CENTER_CENTER, share, theme::heavy(side * 0.22), color);
+        }
+        None => {
+            let stroke = Stroke::new(width, color);
+            painter.add(Shape::line(vec![at(12.0, 16.5), at(12.0, 8.0)], stroke));
+            painter.add(Shape::line(vec![at(8.6, 11.3), at(12.0, 7.7), at(15.4, 11.3)], stroke));
+        }
+    }
+}
+
 pub fn paint(painter: &egui::Painter, icon: Icon, room: Rect, color: Color32) {
     let side = room.width().min(room.height());
     let scale = side / UNITS;

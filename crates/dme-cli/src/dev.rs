@@ -170,13 +170,14 @@ fn release(file: &Path, url: &str, version: Option<String>, key: Option<&Path>, 
                 bail!("that is not the key this build takes releases of: its PUBLIC_KEY is {}", update::PUBLIC_KEY);
             }
         }
+        None if trial => println!("Not signed: an app that tries updates out asks for no signature."),
         None if !update::PUBLIC_KEY.is_empty() => bail!("the app is built to take signed releases only: give the secret key with --key"),
         None => println!("Not signed: the app is built to go by the checksum alone."),
     }
     let written = manifest.to_json();
     let read = Manifest::parse(written.as_bytes())?;
     read.check_file(&bytes)?;
-    read.check_signature(update::PUBLIC_KEY)?;
+    read.check_signature(if trial { "" } else { update::PUBLIC_KEY })?;
     fsutil::write_atomic(out, written.as_bytes())?;
     println!("{written}");
     if trial {
@@ -538,6 +539,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     let bytes = archive.read(ITEMS_GAME)?.with_context(|| format!("{ITEMS_GAME} is not in the game's archive"))?;
     let game = ItemsGame::parse(&bytes)?;
     let heroes = game.heroes();
+    let mut failed = 0;
 
     let in_every_style = |pick: Pick, item: &Item<'_>| -> Vec<Vec<Pick>> {
         (0..item.styles_to_choose().len().max(1) as u32).map(|style| vec![pick.clone().styled(style)]).collect()
@@ -569,7 +571,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     let styled = slots.iter().flatten().flatten().filter(|pick| pick.style > 0).count();
     println!("SINGLE ITEMS: {hero_slots} hero slots and {world_slots} world slots");
     println!("{picks} picks, {styled} of them for a style other than the first");
-    run_rounds(&game, &bytes, &in_rounds(&slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &in_rounds(&slots)).report(dota, &archive);
 
     let mut personas: Vec<Vec<Vec<Pick>>> = Vec::new();
     for hero in &heroes {
@@ -585,7 +587,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
         personas.push(candidates);
     }
     println!("\nPERSONAS ON THE HERO'S OWN ITEMS: {} heroes, {} picks", personas.len(), personas.iter().flatten().count());
-    run_rounds(&game, &bytes, &in_rounds(&personas)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &in_rounds(&personas)).report(dota, &archive);
 
     let mut reasons = Counter::default();
     let (mut sets, mut styled_sets, mut empty_sets) = (0, 0, 0);
@@ -611,7 +613,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     }
     println!("\nSETS: {sets} sets of {} heroes", heroes.len());
     println!("{styled_sets} have pieces with styles; {empty_sets} have no piece that can be shown");
-    run_rounds(&game, &bytes, &in_rounds(&per_hero)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &in_rounds(&per_hero)).report(dota, &archive);
     reasons.print("set pieces left out, by reason");
 
     let mut effect_slots: Vec<Vec<Vec<Pick>>> = Vec::new();
@@ -623,7 +625,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
             let Some(effects) = items::effects_slot(&slot) else { continue };
             let mut candidates = Vec::new();
             for item in game.items_for(Some(hero), &slot) {
-                if item.effects_in_style(effects.number, item.first_effects_style(effects.number)).is_empty() {
+                if item.effects_picked(effects.number, item.first_effects_style(effects.number)).is_empty() {
                     in_no_style.push(format!("{}.{slot}={}", items::hero_short_name(hero), item.id));
                     continue;
                 }
@@ -648,7 +650,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     for line in in_no_style.iter().take(8) {
         println!("  {line}");
     }
-    run_rounds(&game, &bytes, &in_rounds(&effect_slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &in_rounds(&effect_slots)).report(dota, &archive);
 
     let mut pairs: Vec<Vec<Vec<Pick>>> = Vec::new();
     for (hero, of_hero) in heroes.iter().zip(&carriers) {
@@ -663,7 +665,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
         pairs.push(of_this_hero);
     }
     println!("\nABILITY EFFECTS WITH AN ITEM WORN WHERE THEY RIDE: {} pairs", pairs.iter().flatten().count());
-    run_rounds(&game, &bytes, &in_rounds(&pairs)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &in_rounds(&pairs)).report(dota, &archive);
 
     let catalog = Catalog::load(&archive)?;
     let mut gem_slots: BTreeMap<&str, Vec<Vec<Pick>>> = BTreeMap::new();
@@ -687,7 +689,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     }
     let gem_slots: Vec<Vec<Vec<Pick>>> = gem_slots.into_values().collect();
     println!("\nEFFECTS PUT ON ITEMS: {} slots, {} picks", gem_slots.len(), gem_slots.iter().flatten().count());
-    run_rounds(&game, &bytes, &in_rounds(&gem_slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &in_rounds(&gem_slots)).report(dota, &archive);
 
     let mut event_slots: Vec<Vec<Vec<Pick>>> = Vec::new();
     for slot in catalog.world.iter().filter(|slot| slot.is_for_an_event()) {
@@ -699,7 +701,18 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
         event_slots.push(candidates);
     }
     println!("\nEFFECTS OF EVENTS: {} kinds, {} picks", event_slots.len(), event_slots.iter().flatten().count());
-    run_rounds(&game, &bytes, &in_rounds(&event_slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &in_rounds(&event_slots)).report(dota, &archive);
+
+    let ability_rounds = in_rounds(&effect_slots);
+    let longest = event_slots.iter().map(Vec::len).max().unwrap_or(0);
+    let together: Vec<Vec<Vec<Pick>>> = (0..longest)
+        .map(|round| {
+            let events = event_slots.iter().filter(|candidates| !candidates.is_empty()).map(|candidates| candidates[round % candidates.len()].clone());
+            ability_rounds.get(round % ability_rounds.len().max(1)).into_iter().flatten().cloned().chain(events).collect()
+        })
+        .collect();
+    println!("\nABILITY EFFECTS WITH THE EFFECTS OF EVENTS: {} rounds", together.len());
+    failed += run_rounds(&game, &bytes, &together).report(dota, &archive);
 
     let mut socket_slots: BTreeMap<&str, Vec<Vec<Pick>>> = BTreeMap::new();
     let (mut most, mut held) = (0, 0);
@@ -716,7 +729,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     let socket_slots: Vec<Vec<Vec<Pick>>> = socket_slots.into_values().collect();
     println!("\nITEMS THAT COME WITH A GEM: {} picks", socket_slots.iter().flatten().count());
     println!("{held} gems in those items, at most {most} in one");
-    run_rounds(&game, &bytes, &in_rounds(&socket_slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &in_rounds(&socket_slots)).report(dota, &archive);
 
     let hero_files = HeroFiles::read(&archive);
     let live = |hero: &str, slot: &str| hero_files.has_slot(hero, slot);
@@ -744,7 +757,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
         }
     }
     outcome.seconds = started.elapsed().as_secs_f32();
-    outcome.report(dota, &archive);
+    failed += outcome.report(dota, &archive);
 
     println!("\nTREES: {} kinds", trees::KINDS.len());
     let listed = |name: &str, files: dme_core::Result<Vec<dme_core::vpk::NewFile>>| match files {
@@ -762,6 +775,9 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     println!("\nLOOKS FOR THE MAP: {} items", looks.len());
     for item in looks {
         listed(&format!("{} ({})", item.name.unwrap_or(item.id), item.id), map_effect::files(&game, &archive, item));
+    }
+    if failed > 0 {
+        bail!("{failed} picks FAILED");
     }
     Ok(())
 }
@@ -821,7 +837,7 @@ fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>
 }
 
 impl Outcome {
-    fn report(&self, dota: &DotaInstall, archive: &Archive) {
+    fn report(&self, dota: &DotaInstall, archive: &Archive) -> usize {
         println!(
             "{} rounds in {:.1} s: {} default items rewritten, {} picks FAILED",
             self.rounds,
@@ -860,6 +876,7 @@ impl Outcome {
                 println!("  {file}   item {}", items.iter().copied().take(4).collect::<Vec<_>>().join(", "));
             }
         }
+        self.failures.len()
     }
 }
 
@@ -1170,4 +1187,52 @@ fn compare(dota: &DotaInstall, package: &Path) -> Result<()> {
         bail!("the package differs from the game outside the listed items");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use dme_core::vpk::{self, PackFile};
+
+    use super::*;
+
+    #[test]
+    fn a_release_to_try_updates_out_with_needs_no_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("Dota2ModEnjoyer.exe");
+        std::fs::write(&app, b"the new app").unwrap();
+        let out = dir.path().join("update.json");
+        release(&app, &app.to_string_lossy(), Some("9.9.9".to_string()), None, None, &out, true).unwrap();
+        let manifest = Manifest::parse(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!(manifest.version, "9.9.9");
+        assert!(manifest.check_file(b"the new app").is_ok());
+        if !update::PUBLIC_KEY.is_empty() {
+            assert!(release(&app, "https://example.org/Dota2ModEnjoyer.exe", None, None, None, &out, false).is_err());
+        }
+    }
+
+    const PERSONA_WITHOUT_ROOM: &str = r#""items_game" { "items" {
+        "1" { "name" "Pudge's Hook" "prefab" "default_item" "item_slot" "weapon" "used_by_heroes" { "npc_dota_hero_pudge" "1" } }
+        "5" { "name" "Pudge's Persona" "prefab" "default_item" "item_slot" "persona_selector" "used_by_heroes" { "npc_dota_hero_pudge" "1" } }
+        "6" { "name" "Pudge Persona Weapon" "prefab" "default_item" "item_slot" "weapon_persona_1" "used_by_heroes" { "npc_dota_hero_pudge" "1" } }
+        "8" { "name" "Pudge Persona Costume" "prefab" "default_item" "item_slot" "armor_persona_1" "used_by_heroes" { "npc_dota_hero_pudge" "1" } }
+        "20" { "name" "The Toy Butcher" "prefab" "wearable" "item_slot" "persona_selector" "used_by_heroes" { "npc_dota_hero_pudge" "1" }
+            "visuals" { "asset_modifier" { "type" "persona" "persona" "1" } } }
+    } }"#;
+
+    fn try_all_on(items_game: &str) -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        std::fs::create_dir_all(game.join("bin").join("win64")).unwrap();
+        std::fs::create_dir_all(game.join("dota")).unwrap();
+        std::fs::write(game.join("bin").join("win64").join("dota2.exe"), b"").unwrap();
+        let archive = vpk::build(&[PackFile { path: ITEMS_GAME, data: items_game.as_bytes() }]).unwrap();
+        std::fs::write(game.join("dota").join("pak01_dir.vpk"), archive).unwrap();
+        try_all(&DotaInstall::at(dir.path()).unwrap())
+    }
+
+    #[test]
+    fn try_all_fails_where_a_pick_fails() {
+        assert!(try_all_on(&PERSONA_WITHOUT_ROOM.replace("armor_persona_1", "weapon_persona_2")).is_ok());
+        assert!(try_all_on(PERSONA_WITHOUT_ROOM).is_err(), "a pick FAILED, and try-all said all was well");
+    }
 }

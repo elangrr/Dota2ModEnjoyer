@@ -116,6 +116,22 @@ impl DotaInstall {
         parse_steam_inf(&text)
             .ok_or_else(|| Error::format(path.display().to_string(), "there is no ClientVersion line"))
     }
+
+    pub fn app_manifest(&self) -> Option<PathBuf> {
+        Some(self.root.parent()?.parent()?.join("appmanifest_570.acf"))
+    }
+
+    pub fn steam_is_busy(&self) -> bool {
+        let Some(bytes) = self.app_manifest().and_then(|path| std::fs::read(path).ok()) else { return false };
+        parse_state_flags(&bytes).is_some_and(|flags| flags != FULLY_INSTALLED)
+    }
+}
+
+const FULLY_INSTALLED: u64 = 4;
+
+fn parse_state_flags(bytes: &[u8]) -> Option<u64> {
+    let state = kv::Block::document(bytes).pairs().find_map(|pair| pair.value.as_block())?;
+    std::str::from_utf8(state.str("StateFlags")?).ok()?.trim().parse().ok()
 }
 
 fn parse_steam_inf(text: &str) -> Option<GameVersion> {
@@ -196,6 +212,29 @@ pub(crate) fn steam_folders() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn steam_is_busy_with_dota_unless_its_file_says_installed_whole_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("steamapps").join("common").join(DOTA_FOLDER);
+        std::fs::create_dir_all(root.join("game").join("bin").join("win64")).unwrap();
+        std::fs::write(root.join("game").join("bin").join("win64").join("dota2.exe"), b"").unwrap();
+        let dota = DotaInstall::at(&root).unwrap();
+        assert_eq!(dota.app_manifest(), Some(dir.path().join("steamapps").join("appmanifest_570.acf")));
+        let manifest = |flags: &str| {
+            let text = format!("\"AppState\"\n{{\n\t\"appid\"\t\t\"570\"\n\t\"StateFlags\"\t\t\"{flags}\"\n\t\"buildid\"\t\t\"26632873\"\n}}\n");
+            std::fs::write(dota.app_manifest().unwrap(), text).unwrap();
+        };
+        assert!(!dota.steam_is_busy(), "no file of Steam's: a copy of the game, with nobody to wait for");
+        manifest("4");
+        assert!(!dota.steam_is_busy());
+        for busy in ["6", "1026", "1030", "1048580"] {
+            manifest(busy);
+            assert!(dota.steam_is_busy(), "{busy}");
+        }
+        std::fs::write(dota.app_manifest().unwrap(), b"not what Steam writes").unwrap();
+        assert!(!dota.steam_is_busy(), "what cannot be read says nothing");
+    }
 
     #[test]
     fn steam_inf_gives_build_and_date() {

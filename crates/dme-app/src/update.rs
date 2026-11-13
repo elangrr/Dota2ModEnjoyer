@@ -4,16 +4,20 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
+use dme_core::fsutil;
 use dme_core::update::{self, Manifest};
 use eframe::egui;
 
 use crate::Options;
+use crate::crash;
 use crate::worker::Failure;
 
 const TRIAL_SOURCE: Option<&str> = option_env!("DME_UPDATE_TRIAL");
 
 const ASK_EVERY: Duration = Duration::from_secs(5 * 60);
 const TRIAL_ASK_EVERY: Duration = if cfg!(test) { Duration::from_millis(40) } else { Duration::from_secs(10) };
+const TRIAL_STEPS: u64 = 20;
+const TRIAL_STEP: Duration = if cfg!(test) { Duration::from_millis(1) } else { Duration::from_millis(250) };
 
 fn built_in_trial() -> Option<&'static str> {
     TRIAL_SOURCE.map(str::trim).filter(|source| !source.is_empty())
@@ -22,6 +26,7 @@ fn built_in_trial() -> Option<&'static str> {
 pub enum News {
     Offered(Manifest),
     Nothing(Option<Failure>),
+    Progress(u64, u64),
     Installed,
     Failed(Failure),
 }
@@ -35,6 +40,7 @@ pub struct Updater {
     offer: Option<Manifest>,
     asking: bool,
     fetching: bool,
+    progress: Option<(u64, u64)>,
     installed: bool,
     alive: Arc<()>,
 }
@@ -51,7 +57,7 @@ impl Updater {
         }
         let version = options.pretend_version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
         let (outbox, inbox) = mpsc::channel();
-        let updater = Updater { source, trial, version, inbox, outbox, offer: None, asking: true, fetching: false, installed: false, alive: Arc::new(()) };
+        let updater = Updater { source, trial, version, inbox, outbox, offer: None, asking: true, fetching: false, progress: None, installed: false, alive: Arc::new(()) };
         updater.watch(ctx);
         Some(updater)
     }
@@ -80,6 +86,11 @@ impl Updater {
         self.installed
     }
 
+    pub fn progress(&self) -> Option<f32> {
+        let (come, all) = self.progress.filter(|_| self.fetching || self.installed)?;
+        Some(if all == 0 { 1.0 } else { (come as f64 / all as f64).clamp(0.0, 1.0) as f32 })
+    }
+
     pub fn poll(&mut self) -> Option<News> {
         let news = self.inbox.try_recv().ok()?;
         match &news {
@@ -90,11 +101,15 @@ impl Updater {
                 }
             }
             News::Nothing(_) => self.asking = false,
+            News::Progress(come, all) => self.progress = Some((*come, *all)),
             News::Installed => {
                 self.fetching = false;
                 self.installed = true;
             }
-            News::Failed(_) => self.fetching = false,
+            News::Failed(_) => {
+                self.fetching = false;
+                self.progress = None;
+            }
         }
         Some(news)
     }
@@ -108,7 +123,8 @@ impl Updater {
             let mut offered: Option<String> = None;
             let mut first = true;
             while wanted.upgrade().is_some() {
-                let news = look(&source, trial, &version);
+                let asked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| look(&source, trial, &version)));
+                let news = asked.unwrap_or_else(|_| News::Nothing(trial.then(|| failure(&version, &source, "something went wrong inside the app"))));
                 let worth_telling = match &news {
                     News::Offered(manifest) => offered.as_deref() != Some(manifest.version.as_str()),
                     _ => first,
@@ -131,21 +147,53 @@ impl Updater {
     pub fn update(&mut self, ctx: &egui::Context) {
         let Some(manifest) = self.offer.clone().filter(|_| !self.fetching && !self.installed) else { return };
         self.fetching = true;
+        self.progress = None;
         let (trial, version) = (self.trial, self.version.clone());
         let (outbox, ctx) = (self.outbox.clone(), ctx.clone());
         spawn("update", move || {
-            let done = fetch(&manifest.url, update::RELEASE_LIMIT, trial).and_then(|file| {
-                manifest.check_file(&file).map_err(|error| error.to_string())?;
-                let app = std::env::current_exe().map_err(|error| format!("the app could not tell where its own file is: {error}"))?;
-                update::install(&app, &file).map_err(|error| error.to_string())
-            });
+            let mut hundredths = Hundredths { all: manifest.size, told: None };
+            let mut come = |bytes: u64| {
+                if let Some(news) = hundredths.news(bytes) {
+                    let _ = outbox.send(news);
+                    ctx.request_repaint();
+                }
+            };
+            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let file = fetch_counting(&manifest.url, update::RELEASE_LIMIT, trial, Some(&mut come)).map_err(|error| (error, None))?;
+                manifest.check_file(&file).map_err(|error| (error.to_string(), None))?;
+                let app = std::env::current_exe().map_err(|error| (format!("the app could not tell where its own file is: {error}"), None))?;
+                update::install(&app, &file).map_err(|error| (error.to_string(), installing_in_plain_words(&error)))
+            }));
             let news = match done {
-                Ok(()) => News::Installed,
-                Err(error) => News::Failed(failure(&version, &manifest.url, &error)),
+                Ok(Ok(())) => News::Installed,
+                Ok(Err((error, plain))) => {
+                    let mut failed = failure(&version, &manifest.url, &error);
+                    if let Some(plain) = plain {
+                        failed.sentence = plain.to_string();
+                    }
+                    News::Failed(failed)
+                }
+                Err(_) => News::Failed(failure(&version, &manifest.url, &crash::last().unwrap_or_else(|| "something went wrong inside the app".to_string()))),
             };
             let _ = outbox.send(news);
             ctx.request_repaint();
         });
+    }
+}
+
+struct Hundredths {
+    all: u64,
+    told: Option<u64>,
+}
+
+impl Hundredths {
+    fn news(&mut self, bytes: u64) -> Option<News> {
+        let come = bytes.min(self.all);
+        let hundredths = come.saturating_mul(100).checked_div(self.all).unwrap_or(100);
+        (self.told != Some(hundredths)).then(|| {
+            self.told = Some(hundredths);
+            News::Progress(come, self.all)
+        })
     }
 }
 
@@ -216,6 +264,19 @@ fn spawn(name: &str, work: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new().name(name.to_string()).spawn(work).expect("a thread can be started");
 }
 
+fn installing_in_plain_words(error: &dme_core::Error) -> Option<&'static str> {
+    let dme_core::Error::Io { action, source, .. } = error else { return None };
+    if *action == "write" && source.raw_os_error() == Some(5) {
+        Some("The update could not be put in place: Windows does not let the app write in its own folder. Move the app to a folder of your own, such as Documents or Downloads, then try again.")
+    } else if fsutil::is_held(source) {
+        Some("The update could not be put in place: another program, such as an antivirus, is holding the app's file. Try again in a moment. This version goes on working as it is.")
+    } else if fsutil::is_disk_full(source) {
+        Some("The update could not be put in place: the disk is full. Make some room on it, then try again.")
+    } else {
+        None
+    }
+}
+
 fn failure(version: &str, address: &str, error: &str) -> Failure {
     Failure {
         sentence: format!("The update did not work: {error}. This version goes on working as it is."),
@@ -224,14 +285,31 @@ fn failure(version: &str, address: &str, error: &str) -> Failure {
 }
 
 fn fetch(address: &str, limit: usize, testing: bool) -> Result<Vec<u8>, String> {
+    fetch_counting(address, limit, testing, None)
+}
+
+fn fetch_counting(address: &str, limit: usize, testing: bool, mut come: Option<&mut dyn FnMut(u64)>) -> Result<Vec<u8>, String> {
     if !update::may_fetch(address, testing) {
         return Err(format!("{address} is not an https address"));
     }
     if update::is_at(address, "https://") || update::is_at(address, "http://") {
-        return http::get(address, limit);
+        return http::get(address, limit, &mut |bytes| {
+            if let Some(come) = come.as_mut() {
+                come(bytes);
+            }
+        });
     }
     let file = std::fs::read(PathBuf::from(address)).map_err(|error| format!("{address} could not be read: {error}"))?;
-    if file.len() > limit { Err(too_large(limit)) } else { Ok(file) }
+    if file.len() > limit {
+        return Err(too_large(limit));
+    }
+    if let Some(come) = come {
+        for step in 1..=TRIAL_STEPS {
+            std::thread::sleep(TRIAL_STEP);
+            come(file.len() as u64 * step / TRIAL_STEPS);
+        }
+    }
+    Ok(file)
 }
 
 fn too_large(limit: usize) -> String {
@@ -274,7 +352,7 @@ mod http {
         format!("{what} did not work (Windows error {})", unsafe { GetLastError() })
     }
 
-    pub fn get(address: &str, limit: usize) -> Result<Vec<u8>, String> {
+    pub fn get(address: &str, limit: usize, come: &mut dyn FnMut(u64)) -> Result<Vec<u8>, String> {
         let address_wide = wide(address);
         let (mut host, mut path, mut query) = ([0u16; 256], [0u16; 2048], [0u16; 2048]);
         let mut parts: URL_COMPONENTS = unsafe { std::mem::zeroed() };
@@ -328,6 +406,7 @@ mod http {
                     return Err(failed("receiving"));
                 }
                 body.truncate(have + got as usize);
+                come(body.len() as u64);
             }
         }
     }
@@ -335,7 +414,7 @@ mod http {
 
 #[cfg(not(windows))]
 mod http {
-    pub fn get(_address: &str, _limit: usize) -> Result<Vec<u8>, String> {
+    pub fn get(_address: &str, _limit: usize, _come: &mut dyn FnMut(u64)) -> Result<Vec<u8>, String> {
         Err("this app fetches its updates on Windows only".to_string())
     }
 }
@@ -343,6 +422,18 @@ mod http {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_update_that_cannot_be_put_in_place_says_what_to_do_in_plain_words() {
+        let app = Path::new(r"C:\Program Files\Dota2ModEnjoyer\Dota2ModEnjoyer.exe");
+        let io = |action: &'static str, code: i32| dme_core::Error::io(action, app, std::io::Error::from_raw_os_error(code));
+        assert!(installing_in_plain_words(&io("write", 5)).is_some_and(|said| said.contains("Move the app to a folder of your own")));
+        assert!(installing_in_plain_words(&io("replace", 32)).is_some_and(|said| said.contains("antivirus")));
+        assert!(installing_in_plain_words(&io("move aside", 5)).is_some_and(|said| said.contains("antivirus")));
+        assert!(installing_in_plain_words(&io("write", 112)).is_some_and(|said| said.contains("disk is full")));
+        assert_eq!(installing_in_plain_words(&io("write", 3)), None, "said as it is");
+        assert_eq!(installing_in_plain_words(&dme_core::Error::Refused("no".to_string())), None);
+    }
 
     #[test]
     fn a_test_may_fetch_from_a_file_and_a_player_may_not() {
@@ -433,6 +524,53 @@ mod tests {
         publish("0.7.0");
         assert!(matches!(next(&mut updater), News::Offered(offered) if offered.version == "0.7.0"));
         assert_eq!(updater.offer().map(|offer| offer.version.as_str()), Some("0.7.0"));
+    }
+
+    #[test]
+    fn how_much_of_a_new_version_has_come_is_told_as_it_comes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("new.exe");
+        std::fs::write(&file, vec![7u8; 1000]).unwrap();
+        let address = file.to_string_lossy().into_owned();
+        let mut told = Vec::new();
+        let fetched = fetch_counting(&address, 4096, true, Some(&mut |bytes| told.push(bytes))).unwrap();
+        assert_eq!(fetched.len(), 1000);
+        assert_eq!(told.len() as u64, TRIAL_STEPS);
+        assert!(told.windows(2).all(|pair| pair[0] < pair[1]) && told.last() == Some(&1000), "{told:?}");
+        assert_eq!(fetch(&address, 4096, true).unwrap(), fetched);
+
+        let mut hundredths = Hundredths { all: 1000, told: None };
+        let progress = |news: Option<News>| match news {
+            Some(News::Progress(come, all)) => Some((come, all)),
+            _ => None,
+        };
+        assert_eq!(progress(hundredths.news(0)), Some((0, 1000)));
+        assert_eq!(progress(hundredths.news(9)), None, "less than a hundredth more");
+        assert_eq!(progress(hundredths.news(10)), Some((10, 1000)));
+        assert_eq!(progress(hundredths.news(999)), Some((999, 1000)));
+        assert_eq!(progress(hundredths.news(1200)), Some((1000, 1000)), "never more than there is");
+        assert_eq!(progress(Hundredths { all: 0, told: None }.news(0)), Some((0, 0)));
+    }
+
+    #[test]
+    fn the_window_is_told_how_far_the_new_version_has_come_while_it_comes() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("update.json");
+        let release = Manifest::describe(b"the new app", "0.5.0", &dir.path().join("new.exe").to_string_lossy());
+        std::fs::write(&manifest, release.to_json()).unwrap();
+        let mut updater = asking_at(&manifest, "0.4.9");
+        assert!(matches!(next(&mut updater), News::Offered(_)));
+        assert_eq!(updater.progress(), None, "nothing is coming yet");
+
+        updater.fetching = true;
+        assert_eq!(updater.progress(), None, "how much there is to come is not known yet");
+        updater.outbox.send(News::Progress(250, 1000)).unwrap();
+        assert!(matches!(next(&mut updater), News::Progress(250, 1000)));
+        assert_eq!(updater.progress(), Some(0.25));
+        updater.outbox.send(News::Failed(failure("0.4.9", "here", "it broke"))).unwrap();
+        assert!(matches!(next(&mut updater), News::Failed(_)));
+        assert_eq!(updater.progress(), None);
+        assert!(!updater.is_fetching());
     }
 
     #[test]

@@ -42,7 +42,7 @@ are for releases of the app (see below) and have nothing to do with the game:
 ```
 dme dev check-vpk               recompute the checksums in the game's archive
 dme dev check-signatures        recompute the hash of every file dota.signatures declares
-dme dev try-all                 build every item, style, set, effect, gem and emblem, in memory
+dme dev try-all                 build every item, style, set, effect, gem and emblem, in memory; fails if a pick does
 dme dev copied-keys             which keys a default item takes from a picked item; run after a Dota update
 dme dev catalog                 count what the app offers, read every picture it would show, list the files that are gone
 dme dev effects                 how the game describes ability effects worn apart from their item
@@ -67,6 +67,15 @@ To try Play and "Back to normal Dota" without touching the real game, point both
 copy of the game's small files with `--dota <folder> --data-dir <folder>`, and give the app
 `--no-start`. [SPEC.md](SPEC.md), section 3.13, lists the options.
 
+Such a window leaves your clipboard and your browser alone. What it would copy, such as a share
+code or the details of a problem, goes to `copied.txt` in its data folder, and an address it
+would open, such as a report, goes to `opened.txt`. Two settings of the environment try out what
+a test window cannot meet by itself. `DME_TRY_NO_GLASS=1` makes the window fail as it is made
+see-through, as on a computer that cannot; the app should start again, plain. `DME_TRY_ONE_COPY=1`
+has a test window hold its data folder like a player's, so that a second one started meanwhile
+closes. The app has no `--help`: an option it does not know is left alone, and without
+`--screenshot` the window opens on your screen with your own picks.
+
 ## Releases of the app
 
 The app updates itself (see Updates in the [README](../README.md)). A build looks at this
@@ -82,7 +91,9 @@ only its maintainer has. If you hand out builds of your own, have them look at y
 
 Then, for every release:
 
-1. Raise `version` in `Cargo.toml` and build.
+1. Raise `version` in `Cargo.toml`, write what is new in it at the top of
+   [CHANGELOG.md](../CHANGELOG.md) in words a player understands, and build. The app shows
+   those words once after the update, and a test fails until the new version has them.
 2. Describe the release. This writes `update.json`:
 
    ```

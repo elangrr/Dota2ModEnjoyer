@@ -110,6 +110,22 @@ impl EffectsFor {
             EffectsFor::These(heroes) => heroes.iter().any(|chosen| chosen.eq_ignore_ascii_case(hero)),
         }
     }
+
+    pub fn reaches_anyone(&self, picks: &[Pick]) -> bool {
+        match self {
+            EffectsFor::Every => true,
+            EffectsFor::Picked => picks.iter().any(|pick| pick.hero.is_some()),
+            EffectsFor::These(heroes) => !heroes.is_empty(),
+        }
+    }
+}
+
+pub fn is_for_heroes(pick: &Pick) -> bool {
+    effects::is_emblem_pick(pick) || (pick.hero.is_none() && effects::kind_of(&pick.slot).is_some())
+}
+
+pub fn reach_nobody(picks: &[Pick], effects_for: &EffectsFor) -> bool {
+    picks.iter().any(is_for_heroes) && !effects_for.reaches_anyone(picks)
 }
 
 impl Pick {
@@ -226,6 +242,7 @@ pub fn patch_with<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], l
 
 pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], live: &dyn Fn(&str, &str) -> bool, effects_for: &EffectsFor) -> Result<Patched> {
     let reaches = |hero: &str| effects_for.reaches(hero, picks);
+    let reaches_all = |default: &Item<'_>| default.heroes.iter().all(|hero| reaches(hero));
     let mut plans: Vec<Plan<'_, 'a>> = Vec::new();
     let mut effects_taken = HashSet::new();
     let mut for_all: Vec<ForAll<'_, 'a>> = Vec::new();
@@ -309,7 +326,8 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
                 if !effects_taken.insert((hero.to_ascii_lowercase(), pick.slot.to_ascii_lowercase())) {
                     return Err(twice());
                 }
-                plan.effects.push(Effects { index, slot: pick.slot.to_ascii_lowercase(), number: slot.number, item, style: pick.style });
+                let style = if item.switches_styles_itself() { 0 } else { pick.style };
+                plan.effects.push(Effects { index, slot: pick.slot.to_ascii_lowercase(), number: slot.number, item, style });
             }
             None if plan.look.is_some() && plan.hero.as_deref().is_some_and(|other| !hero.is_some_and(|hero| hero.eq_ignore_ascii_case(other))) => {
                 let other = plan.hero.as_deref().map(items::hero_short_name).unwrap_or_default();
@@ -352,7 +370,7 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
     }
 
     if !for_all.is_empty() {
-        for (hero, default) in game.hero_default_items().into_iter().filter(|(hero, _)| reaches(hero)) {
+        for (hero, default) in game.hero_default_items().into_iter().filter(|(_, default)| reaches_all(default)) {
             plan_for(&mut plans, default, Some(hero));
         }
     }
@@ -383,7 +401,7 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
         }
         plan.effects.sort_by_key(|effects| effects.number);
         let gem = plan.look.as_ref().and_then(|look| look.effect);
-        let carries = plan.hero.as_deref().is_some_and(reaches) && !for_all.is_empty();
+        let carries = plan.hero.is_some() && reaches_all(default) && !for_all.is_empty();
         let emblem = emblem.as_ref().filter(|_| plan.emblem);
         let mut added = Vec::new();
         let mut blocks = None;
@@ -392,7 +410,7 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
             if plan.persona_base {
                 visuals.shown.retain(|visual| visual.kind.as_deref() != Some(PERSONA_TYPE));
             }
-            added = add_effects(vanilla, &mut visuals, &plan.effects)?;
+            added = add_effects(vanilla, &layout, &mut visuals, &plan.effects)?;
             if let Some(effect) = gem {
                 for block in gem_blocks(&layout, &visuals, effect) {
                     visuals.add(block);
@@ -405,6 +423,9 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
             }
             for pair in emblem.iter().flat_map(|emblem| &emblem.blocks) {
                 visuals.add(Visual::new(pair, vanilla[pair.start..pair.end].to_vec()));
+            }
+            for (effects, added) in plan.effects.iter().zip(&mut added) {
+                added.blocks = visuals.shown.iter().filter(|visual| visual.mark == Some(effects.number)).count();
             }
             blocks = Some(visuals.put_back(vanilla, default.block, &mut rewritten.parts));
         }
@@ -823,36 +844,128 @@ struct Added {
     blocks: usize,
 }
 
-fn add_effects(src: &[u8], visuals: &mut Visuals, effects: &[Effects<'_, '_>]) -> Result<Vec<Added>> {
-    let shown = &mut visuals.shown;
+fn add_effects(src: &[u8], layout: &Layout<'_>, visuals: &mut Visuals, effects: &[Effects<'_, '_>]) -> Result<Vec<Added>> {
     let mut added = Vec::new();
     for one in effects {
-        let incoming: Vec<Visual> = one
-            .item
-            .effects_in_style(one.number, one.style)
-            .iter()
-            .map(|pair| {
+        let (incoming, states) = if one.item.switches_styles_itself() {
+            effects_of_states(src, layout, one.item, one.number, &visuals.shown)
+        } else {
+            let blocks = one.item.effects_in_style(one.number, one.style);
+            let incoming = blocks.iter().map(|pair| {
                 let of_a_later_style = pair.value.as_block().filter(|block| block.str("style").and_then(parse_number).is_some_and(|style| style > 0));
                 let text = match of_a_later_style {
                     Some(block) => without_key(src, pair, block, "style"),
                     None => src[pair.start..pair.end].to_vec(),
                 };
                 Visual::new(pair, text)
-            })
-            .collect();
+            });
+            (incoming.collect(), None)
+        };
         if incoming.is_empty() {
             let name = one.item.name.unwrap_or(one.item.id);
             return Err(Error::NotFound(format!("{name} has no ability effects for the {} slot in style {}", one.slot, one.style)));
         }
-        shown.retain(|old| old.mark != Some(one.number) && !incoming.iter().any(|new| new.replaces.is_some() && new.replaces == old.replaces));
+        visuals.shown.retain(|old| old.mark != Some(one.number) && !incoming.iter().any(|new| new.replaces.is_some() && new.replaces == old.replaces));
         let texts: Vec<&[u8]> = incoming.iter().map(|new| new.text.as_slice()).collect();
         added.push(Added { text: texts.join(b"\n".as_slice()), blocks: 0 });
-        shown.extend(incoming);
-    }
-    for (one, added) in effects.iter().zip(&mut added) {
-        added.blocks = shown.iter().filter(|visual| visual.mark == Some(one.number)).count();
+        visuals.shown.extend(incoming);
+        visuals.shown.extend(states);
     }
     Ok(added)
+}
+
+fn effects_of_states(src: &[u8], layout: &Layout<'_>, item: &Item<'_>, number: u32, shown: &[Visual]) -> (Vec<Visual>, Option<Visual>) {
+    let blocks = item.effects_for(number);
+    let state_of = |pair: &Pair<'_>| pair.value.as_block().and_then(|block| block.str("style")).and_then(parse_number);
+    let what = |pair: &Pair<'_>| {
+        let fields = pair.value.as_block().into_iter().flat_map(|block| block.pairs()).filter(|inner| !is(inner.key, "style"));
+        let mut fields: Vec<(Vec<u8>, Vec<u8>)> = fields
+            .map(|inner| {
+                let value = match inner.value {
+                    Value::Str(text) => text.trim_ascii().to_ascii_lowercase(),
+                    Value::Block(_) => src[inner.start..inner.end].to_vec(),
+                };
+                (inner.key.to_ascii_lowercase(), value)
+            })
+            .collect();
+        fields.sort();
+        fields
+    };
+    let replaces = |pair: &Pair<'_>| Visual::new(pair, Vec::new()).replaces;
+    let states: Vec<u32> = item.styles().iter().map(|style| style.index).collect();
+    let in_every_state = |pair: &Pair<'_>| {
+        let mine = what(pair);
+        states.iter().all(|&state| blocks.iter().any(|other| state_of(other).is_none_or(|marked| marked == state) && what(other) == mine))
+    };
+    let alone = |pair: &Pair<'_>| replaces(pair).is_some() && blocks.iter().all(|other| replaces(other) != replaces(pair) || what(other) == what(pair));
+    let keeps_its_mark = |pair: &Pair<'_>| state_of(pair).is_some() && !in_every_state(pair) && !alone(pair);
+
+    let theirs = shown.iter().find_map(|visual| rules_of_states(&visual.text));
+    let ours = rules_of(item);
+    let go_through = blocks.iter().any(keeps_its_mark) && theirs.as_ref().is_none_or(|theirs| *theirs == ours);
+    let first = states.first().copied().unwrap_or(0);
+    let (mut incoming, mut taken) = (Vec::new(), Vec::new());
+    for pair in &blocks {
+        if keeps_its_mark(pair) {
+            if go_through {
+                incoming.push(Visual::new(pair, src[pair.start..pair.end].to_vec()));
+                continue;
+            }
+            if state_of(pair) != Some(first) {
+                continue;
+            }
+        }
+        let mine = what(pair);
+        if taken.contains(&mine) {
+            continue;
+        }
+        taken.push(mine);
+        let text = match pair.value.as_block().filter(|block| block.get("style").is_some()) {
+            Some(block) => without_key(src, pair, block, "style"),
+            None => src[pair.start..pair.end].to_vec(),
+        };
+        incoming.push(Visual::new(pair, text));
+    }
+    let states = (go_through && theirs.is_none()).then(|| states_pair(layout, item));
+    (incoming, states)
+}
+
+fn rules_of(item: &Item<'_>) -> Vec<Vec<u8>> {
+    item.styles().iter().map(|style| rule_text(style.block.str(items::AUTO_STYLE_RULE))).collect()
+}
+
+fn rules_of_states(text: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let pair = Block::document(text).pairs().next().filter(|pair| is(pair.key, "styles"))?;
+    let styles = pair.value.as_block()?;
+    Some(styles.pairs().map(|style| rule_text(style.value.as_block().and_then(|block| block.str(items::AUTO_STYLE_RULE)))).collect())
+}
+
+fn rule_text(rule: Option<&[u8]>) -> Vec<u8> {
+    rule.unwrap_or_default().iter().filter(|byte| !byte.is_ascii_whitespace()).map(u8::to_ascii_lowercase).collect()
+}
+
+fn states_pair(layout: &Layout<'_>, item: &Item<'_>) -> Visual {
+    let line = [layout.newline, &layout.pair_indent, b"\t".as_slice()].concat();
+    let inner = [line.as_slice(), b"\t"].concat();
+    let mut text = b"\"styles\"".to_vec();
+    text.extend_from_slice(&line);
+    text.push(b'{');
+    for style in item.styles() {
+        text.extend_from_slice(&inner);
+        text.extend_from_slice(format!("\"{}\"", style.index).as_bytes());
+        text.extend_from_slice(&inner);
+        text.push(b'{');
+        if let Some(rule) = style.block.str(items::AUTO_STYLE_RULE) {
+            text.extend_from_slice(&inner);
+            text.push(b'\t');
+            text.extend_from_slice(&string_pair(items::AUTO_STYLE_RULE, rule));
+        }
+        text.extend_from_slice(&inner);
+        text.push(b'}');
+    }
+    text.extend_from_slice(&line);
+    text.push(b'}');
+    Visual::made(text)
 }
 
 fn gem_blocks(layout: &Layout<'_>, visuals: &Visuals, effect: &AttachedEffect<'_>) -> Vec<Visual> {

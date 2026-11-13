@@ -2,373 +2,125 @@
 
 <h1 align="center">Dota 2 Mod Enjoyer</h1>
 
-<p align="center">Pick what your heroes and your game look like, press Play, and Dota starts that way.<br>Only you see the result.</p>
-
 <p align="center">
-  <a href="https://github.com/elangrr/Dota2ModEnjoyer/releases/latest/download/Dota2ModEnjoyer.exe"><img src="assets/buttons/download.svg" alt="Download for Windows" width="340"></a>
+  <a href="https://github.com/elangrr/Dota2ModEnjoyer/releases/latest/download/Dota2ModEnjoyer.exe"><img src="assets/buttons/download.svg" alt="Download, for Windows 10 and 11, 64-bit (x64)" width="340"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/elangrr/Dota2ModEnjoyer"><img src="assets/buttons/star.svg" alt="Star on GitHub" height="40"></a>
+  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/29081e9b765b43bb631bda9018d4adaf7fa006e70beb6b76d788bdb020237a4d"><img src="https://img.shields.io/badge/VirusTotal-3%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 3 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
   &nbsp;
-  <a href="#supporting-the-project"><img src="assets/buttons/donate.svg" alt="Donate" height="40"></a>
+  <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
 
 <p align="center"><img src="assets/demo.webp" alt="The app being used: finding a hero, picking a set and a courier, and the list of picks" width="820"></p>
 
-> **Use at your own risk.** This tool edits two of Dota 2's own files. That may break Valve's terms
-> of service. It is not affiliated with Valve.
+> [!CAUTION]
+> Use at your own risk. This app edits two of Dota 2's own files, which may break Valve's terms
+> of service. It is not made or approved by Valve.
 
-## Quick start
+## How to use
 
-1. Press the download button above. You get `Dota2ModEnjoyer.exe`, which is one file and needs
-   no installing. Older versions are on the
-   [releases page](https://github.com/elangrr/Dota2ModEnjoyer/releases).
-2. Close Dota 2 if it is open, and start the app. It finds Dota 2 by itself.
-3. Choose a hero and click what you want it to wear.
-4. Press **Play**.
+1. Download `Dota2ModEnjoyer.exe` and start it. It is one file, with nothing to install.
+2. Close Dota 2 if it is open. The app finds the game by itself.
+3. Choose a hero and click what it should wear.
+4. Press **Play**. Your picks are put in the game and Dota starts.
 
-Windows may warn about a program it has not seen before, because the file is not signed with a
-paid certificate.
+The first time, Windows may say "Windows protected your PC", because the file is not signed with
+a paid certificate. Click **More info**, then **Run anyway**.
 
-## What it looks like
+Only you see your picks, and you do not need to own the items.
+
+## Screenshots
 
 | | |
 |---|---|
 | ![The hero grid](assets/screens/heroes.jpg) | ![A hero's page with a set picked](assets/screens/hero.jpg) |
 | Every hero, with search and filters | A whole set in one click, or piece by piece |
 
-The app has a night look and a day look. The sun and the moon at the bottom left switch
-between them.
-
 ![A hero's page by day](assets/screens/day.jpg)
 
-## Where to read
+## What you can change
 
-| You want to | Read |
-|---|---|
-| Change how a hero looks | [Heroes](#heroes) |
-| Change the courier, ward, terrain or music | [World](#world) |
-| Add glows, teleport and attack effects | [Effects](#effects) |
-| Know why something does not show | [When something does not show](#when-something-does-not-show) |
-| Undo everything | [Going back to normal Dota](#going-back-to-normal-dota) |
-| Know what the tool does to your game | [What it changes](#what-it-changes) |
-| Use the command line | [The command-line tool](#the-command-line-tool) |
-| Build it or work on the code | [Building](#building) |
-| Help the project | [Supporting the project](#supporting-the-project) |
-| Get a quick answer | [Questions and answers](#questions-and-answers) |
-| See what virus scanners say | [Virus scans](#virus-scans) |
+- Every hero's items, as whole sets or piece by piece, with their styles.
+- Ability effects, such as an immortal's Blade Fury on a plain sword.
+- Personas, without owning them (an experiment).
+- The courier, ward, terrain, weather, music, announcer, HUD, loading screen and more.
+- Effects of past events, such as teleports, Blink Dagger and emblems. They go on the heroes you
+  picked something for, and Settings can make that every hero.
+- Other trees, an event's look for the whole map, and a mode for low-end PCs (experiments).
 
-## Using the app
-
-The app reads the heroes, items, names and pictures from your own game. Your picks are
-remembered. After a Dota 2 update, press Play as usual and they are put back.
-
-### Heroes
-
-Under **Heroes**, choose a hero. Then pick a whole set, or go slot by slot and mix pieces.
-
-To search, just type. There is no need to click the search box first. Heroes are found by the
-short names Dota itself knows them by, such as `am`, `wr`, `qop`. From the third letter on, items
-and sets are found too, wherever they are, so typing `dragonclaw` takes you straight to the
-hook. Enter opens the first thing found, Escape clears what you typed.
-
-The chips above the heroes show only Strength, Agility, Intelligence or Universal heroes, or
-only the heroes you picked something for.
-
-Rest the pointer on an item or a set for a larger picture of it, with its styles side by side.
-
-The line under a picture has the colour of the item's rarity, as in Dota: purple for mythical,
-gold for immortal and so on. The buttons above the pictures show only the rarities you choose.
-
-### My picks and presets
-
-The **My picks** tab lists everything you picked, for the world and for each hero. A click on a
-pick opens its page, and the cross beside it takes it off.
-
-You can keep what is picked as a preset. Type a name on that page and press "Save as preset".
-A click on a preset picks it again later, in the place of what is picked then, and Undo takes
-that back.
-
-### Ability effects
-
-Under what a hero wears, its page lists the abilities that items have effects for, such as "Blade
-Fury effects". Pick an item there and the ability gets that item's effects, icon and sounds,
-whatever the hero wears, so a plain sword can have an immortal sword's Blade Fury. Only effects
-that Dota itself lets players use apart from their item are listed, which is most immortals' and a
-few others'.
-
-### Personas
-
-A persona you pick is put on the hero's own items, so it shows without your owning it in Dota. It
-takes the place of what the hero wears: picks for those slots are taken off, and you can still
-pick for the persona's own slots. Personas are an experiment.
-
-### World
-
-Under **World** are the courier, ward, terrain, announcers, music and the rest. They work the same
-way as a hero's slots.
-
-### Effects
-
-There are two kinds.
-
-An effect on one item. Once you have picked a courier, or something a hero wears, the **Effect**
-list above the pictures puts one more effect on it, the way a gem does in Dota: Ethereal Flame and
-42 others. On a hero, the eight seasonal ones (Frostbloom, Snowdrift ...) are made for it. The 35
-marked "(courier)" are made for couriers and are an experiment there.
-
-Effects from past events. These are on the World page, under "Effects". They are what events gave
-the players who took part.
-
-- Emblem puts the glow of an event's emblem around your heroes. It rides on one slot of each
-  hero. For about half of the heroes that is a slot nothing else can go in, so they always
-  show it; the others show it while that slot is on its default item in your Dota loadout.
-- For Teleport, Blink Dagger, Attack Projectile, Force Staff, Eul's Scepter, Bottle, level up, the fountain
-  and more, pick an event and, where it had several, a level. A hero shows the effect as long as
-  one of its slots in your Dota loadout is on its default item.
-
-These go on the heroes you picked something for in the app. A hero with no pick stays plain. In
-**Settings** you can have them on every hero, or on heroes you choose. Dota's files cannot tell
-your own hero from the others, so anyone in a match who plays one of those heroes shows them
-too, on your screen only.
-
-Colours (the Prismatic gems) are gone. In a match, Dota's servers decide what colour a gem has
-from what you really own, so a colour never showed there.
-
-### Experiments
-
-Three things are new enough to be marked as experiments. If one misbehaves, turn it off and
-everything is as before.
-
-- Trees (World page, at the bottom) puts the leaves of Valve's autumn, winter or spring terrain
-  on the trees of the normal map. The trees stay where they are and as large as they are, so
-  nothing is made smaller or easier to see through.
-- Map Effect (World page, at the bottom) draws the whole map the way one of Valve's events had
-  it, such as Diretide's. Aghanim's Labyrinth's is marked "!" because its fog of war can look
-  like a checkerboard.
-- Low-end PC mode (in **Settings**) makes Play start Dota with its lightest video
-  settings: no shadows, simple water and lighting, no fog, grass or other extras. No file is
-  written for this. Dota may keep the settings afterwards; you can change them back in Dota's
-  video options.
-
-### Settings
-
-**Settings** (bottom left) has which heroes get the effects of events, Low-end PC mode, updates,
-and where Dota and your picks are.
-
-### Going back to normal Dota
-
-**Back to normal Dota** takes every change out of the game's files and puts your picks away, so
-nothing is picked any more and Play starts normal Dota. **Bring back my picks** picks everything
-again as it was. If you pick something new instead, you start over from there.
-
-## When something does not show
-
-- You wear an item of your own in that slot. A pick takes the place of a slot's default item, and
-  Dota shows your own item instead. Unequip it in your Dota loadout for the pick to show.
-- Ability effects come along with the default item of the slot their item belongs to. An immortal
-  sword's show while your Dota loadout has the default weapon. The app names the slot.
-- The item or the set has a small "!". A part of it may not show. Either Dota no longer has some of its
-  files, or some of its effects go by the level of an arcana, which Dota's servers give only to
-  its owner.
-- Your video settings are on their lightest. Those leave parts of effects out.
-- Dota 2 was running. Nothing is written while it runs. Close the game, then press Play. The app
-  can stay open while you play.
-- You changed Dota's video settings in the middle of a match. That makes Dota show picked
-  heroes as "ERROR" until the next game. Change video settings before a match.
-
-Some things cannot be changed at all, because the game has no default item for them: taunts,
-kill banners, effigies, the Tormentor and the Ancient.
-
-Two more things to know. Other players who use the default look show your pick too, on your
-screen only. And ten heroes have one default pet between them, so a pet picked for one of them
-shows on all ten and only one of them can have a pick there. The app says so on the pet's page.
+Just type to search, for heroes, items and sets. **My picks** lists everything you picked.
+There you can save your picks as a preset, and **Share** copies a short code that a friend
+pastes under **Use a code** to get the same look.
 
 ## Updates
 
-The app updates itself. When a newer version is out, an **Update** button shows on the left.
-One click downloads the new version, puts it in the place of the old one and starts it. Picks
-and settings stay as they are. The app looks when it starts and, left open, every five minutes.
+The app updates itself. When a new version is out, an **Update** button shows on the left. One
+click downloads it and starts it again, and your picks stay. [CHANGELOG.md](CHANGELOG.md) lists
+what each version changed.
 
-**Settings** has "Update automatically", which is off by default. Switched on, the app updates
-and starts again by itself, without the click.
+After a Dota update, start Dota with **Play** in the app. Steam updates Dota by itself, and that
+undoes half of the app's changes until Play puts them back.
 
-Versions before 0.1.2 do not look for updates, so get 0.1.2 or later by hand once.
+## Troubleshooting
 
-## How it works
+Most problems are fixed by checking the game's files in Steam. Right-click Dota 2, then
+**Properties**, **Installed Files**, **Verify integrity of game files**. Then press Play in the
+app again.
 
-Dota 2 already ships its cosmetic items in its own files, because your game has to draw other
-players' items. Every slot has a built-in "default item" that the game shows when you have put
-nothing there: one per slot of each hero, and one each for the courier, the ward, the terrain and
-so on. The tool makes a copy of the game's item list in which the default items of the slots you
-picked look like the items you picked, puts that copy in its own folder, and tells the game to look
-in that folder first.
-
-Nothing of the game's is downloaded, and none of Valve's files are copied anywhere else.
-[docs/SPEC.md](docs/SPEC.md) has the details.
-
-The newest parts have been checked against the game's files and not yet seen in the game:
-personas without owning them, courier effects on heroes, emblems, event attacks, and the three
-experiments.
-
-## What it changes
-
-| File | Change |
+| Problem | What to do |
 |---|---|
-| `game\mod_enjoyer\pak01_dir.vpk` | Created. Holds the edited item list and, if you picked other trees or a map effect, a few small copies of Valve's own material files under other names. |
-| `game\dota\gameinfo_branchspecific.gi` | A marked block of lines is added. |
-| `game\bin\win64\dota.signatures` | One line is added at the end. |
+| A pick does not show | Unequip your own item in that slot in your Dota loadout. |
+| An item has a small "!" | Dota no longer has some of its files, so a part of it may not show. |
+| Dota says Valve Anti-Cheat could not verify your machine | Close Dota, press **Back to normal Dota**, and look for a match again. |
+| Picked heroes show as "ERROR" | Do not change video settings during a match. It is fine again next game. |
+| Nothing changes in Dota | Dota was running when you pressed Play. Close it and press Play again. |
+| Something else | Press **Report** beside the message, or **Report a problem** in Help. |
 
-"Back to normal Dota" (`dme restore`) undoes all three exactly. So does Steam's "Verify integrity
-of game files". Copies of the two original files are kept in
-`%LOCALAPPDATA%\Dota2ModEnjoyer\backup`, next to your picks and the app's settings.
+**Report** opens a new report on this GitHub page with the details filled in, and the name of
+your Windows account left out. It needs a free GitHub account. Without one, **Copy details**
+copies the same text.
 
-While your picks are on, Dota keeps a few small files of its own in `game\mod_enjoyer` too: hero
-guides it has downloaded and, after a crash, its crash report. Going back to normal removes the
-folder with them, and Dota downloads guides again when it needs them. Downloaded replays are
-kept where they always are.
+## Questions
 
-The tool refuses to write while Dota 2 is running, and it never touches the running game. To
-start the game it asks Steam to.
+**Does it collect any data?** No. Its one request to the internet asks GitHub whether a new
+version is out.
 
-## The command-line tool
+**Can I get banned?** Nobody can promise that you cannot. The app never touches the running game
+and gives no advantage in a match.
 
-`dme.exe` does what the app does, from a terminal. It is on the same release page. The app and
-`dme` share the picks: what you pick in one, the other plays.
+**How do I undo everything?** Press **Back to normal Dota**. It puts the game's files back
+exactly as they were.
 
-### Commands
+**What does it change?** It adds a folder, `game\mod_enjoyer`, and a few lines to
+`game\dota\gameinfo_branchspecific.gi` and `game\bin\win64\dota.signatures`. Copies of the
+originals are kept in `%LOCALAPPDATA%\Dota2ModEnjoyer\backup`.
 
-```
-dme status                  where Dota is, whether mods are on, and what is picked
-dme heroes                  the heroes, with how many sets and items each has
-dme sets axe                the sets of one hero
-dme slots axe               the slots of one hero and what it has in each normally
-dme items axe weapon        the items that can go in one slot of a hero
-dme world                   the slots that are not a hero's: courier, ward, terrain ...
-dme items courier           the items that can go in a world slot
-dme effects                 the effects that can be put on an item
-dme apply <picks>           show the picks in the game, and remember them
-dme play                    put the remembered picks in the game if they are not there, start Dota
-dme play --low-end          the same, starting Dota with its lightest video settings (an experiment)
-dme restore                 back to normal Dota; the picks are put away until dme play
-dme restore --forget        the same, and forget the picks
-dme effects-for every       the effects of events and an emblem on every hero
-dme effects-for axe,lina    ... only on these heroes; `picked` for the heroes you picked for, as at first
-```
+## Command line
 
-The listings of sets and items say how rare each one is.
-
-### Writing a pick
-
-```
-dme apply axe=armor_of_the_shattered_vanguard     a whole set on a hero
-dme apply axe.weapon=5675                         one item in one slot of a hero
-dme apply courier=10096                           a world item
-dme apply juggernaut.ability_effects_1=9984       an item's effects for one ability, without the item
-dme apply "courier=10096,effect=ethereal flame"    an item with an effect on it
-dme apply pudge.persona_selector=13786           a persona, put on the hero's own items
-dme apply fx_teleport=17482:2                     the effect an event had for a teleport, in its third level
-dme apply emblem=12996                            the glow of an event's emblem around every hero
-dme apply trees=winter                            winter leaves on the normal map's trees (an experiment)
-dme apply map_effect=18380                        the map drawn the way an event had it (an experiment)
-```
-
-- Sets and items go by the id or name the listings show, or a part of the name that fits only one.
-- `dme slots <hero>` lists a hero's slots for ability effects after the slots things are worn in,
-  and `dme items <hero> ability_effects_1` the items that have effects for one.
-- Add `:N` for a style: `invoker.head=7986:1` is that item's second style.
-- An effect goes by its number or its name, or by a part of the name that fits only one;
-  `dme effects` lists them. Put a pick with spaces in it in quotes.
-- `dme world` lists the `fx_` slots after the game's own, and `dme items fx_teleport` the events
-  that have an effect for one. `:N` after an event is its level, counted from 0.
-- `dme items emblem`, `dme items trees` and `dme items map_effect` list what can go there.
-- Give as many picks as you like. A later pick for a slot replaces an earlier one, so
-  `dme apply axe=armor_of_the_shattered_vanguard axe.weapon=5675` is the set with another weapon.
-- `dme apply` replaces whatever was applied before. After a Dota 2 update, run `dme play`.
+`dme.exe` does the same from a terminal. `dme status`, `dme apply axe.weapon=5675`, `dme play`
+and `dme restore` are the main commands, and `dme --help` lists the rest.
 
 ## Building
 
-`cargo build --release` builds both programs: `target\release\Dota2ModEnjoyer.exe` and
-`target\release\dme.exe`. Each is one file that needs nothing else beside it. For the app's
-file to wear its icon, `windres` from the MinGW tools has to be in the `PATH`.
-[docs/DEVELOPING.md](docs/DEVELOPING.md) is for working on the code and making releases.
-
-## Questions and answers
-
-### Does it collect any data?
-
-No. The app collects nothing about you, your computer or your game, and sends nothing anywhere.
-It has no accounts, no statistics and no ads. Its one request to the internet asks GitHub
-whether a newer version is out, and downloads that version when you press Update. Your picks
-and settings stay in a folder on your own computer.
-
-### Do other players see my picks?
-
-No. Everything happens in the game's files on your computer, so only you see it.
-
-### Do I have to own the items?
-
-No. Dota already has every item in its files, because your game has to draw other players'
-items. The app has the game show them on you.
-
-### Can I get banned for it?
-
-Nobody can promise that you cannot. The app edits two of the game's files, which may be against
-Valve's rules, so you use it at your own risk. It never touches the running game or its memory,
-and it gives no advantage in a match.
-
-### How do I undo everything?
-
-Press **Back to normal Dota**. That puts the game's files back exactly as they were. Steam's
-"Verify integrity of game files" does the same.
-
-### My picks are gone after a Dota update.
-
-Press Play as usual. The app puts them back before the game starts.
-
-### Something I picked does not show in the game.
-
-Most often you wear an item of your own in that slot, and Dota shows that one. Unequip it in
-your Dota loadout. [When something does not show](#when-something-does-not-show) has the other
-causes.
-
-### Why does Windows warn about the file?
-
-The file is not signed with a paid certificate, so Windows has not seen it before. The code is
-open for anyone to read, and the app is built from it.
-
-Every release is scanned on VirusTotal before it goes out, and [Virus scans](#virus-scans) has
-the result of each. A new, unsigned program often gets a few heuristic detections there, which
-are guesses by pattern and name no known malware. If your antivirus removes the file, that is
-such a guess.
-
-### Is it free?
-
-Yes, and its code is open under the GPL. Donations are welcome and never asked for.
+You need Rust. Run `cargo build --release`. [docs/DEVELOPING.md](docs/DEVELOPING.md) has the
+rest, and [docs/SPEC.md](docs/SPEC.md) explains how it works.
 
 ## Virus scans
 
-Every release is scanned on [VirusTotal](https://www.virustotal.com) before it goes out, with
-about 70 virus scanners. Each link opens the full result for that exact file. A release that
-Microsoft's scanner flags is not put out.
+Every release is scanned on [VirusTotal](https://www.virustotal.com) before it goes out. Each
+link opens the full result for that file. A release that Microsoft's scanner flags is not put out.
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.2.3 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/29081e9b765b43bb631bda9018d4adaf7fa006e70beb6b76d788bdb020237a4d) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/7702421d7dd1590ba45f96078a82f42a0f1c6f1148d93eafe47db78686ad12c0) |
 | 0.2.2 | [0 of 66 scanners flag it](https://www.virustotal.com/gui/file/4bcc6789a106aad87dae596f72e6c4e83ebb725feaa6477076e9bd48c0513ed4) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/c0a1879c6fb6d66e477678ab6fc1a535a2e9e046263088e59266be36290108c7) |
 | 0.2.1 | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/49f0b1372cf47ea129d2c8eb793f7e4cdc34a390af9954e91d82f4cd00232cde) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/09fda3379fdef4d66bdf03399b351a86160124a48a672bf62cd4a5176dadfea6) |
 | 0.2.0 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/ee7fac6d829cc825357d50f0246eed970065cca191ba637a2d976f251b45e6ed) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/d769c42b799c6b232b7bd9bc2cc566a3c3ac53bb100817071e4714755390cae8) |
 
-In 0.2.0, Microsoft's scanner was one of the three. It was a wrong guess, caused by how the
-file was built, and the build was changed for the next version. Versions before 0.2.0 were not
-scanned.
+## Support us
 
-## Supporting the project
-
-The tool is free and its code is open. If it is useful to you, give it a star on GitHub, which
-helps other players find it. The **Support** button in the app opens the same page.
-
-Donations are welcome and never asked for. The app works the same without one.
+The app is free and its code is open. Donations are welcome and never asked for.
 
 | With | Where |
 |---|---|

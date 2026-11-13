@@ -22,19 +22,20 @@ pub fn effects_for(ui: &mut Ui, catalog: Option<&Catalog>, current: &EffectsFor)
     if let (EffectsFor::These(heroes), Some(catalog)) = (current, catalog) {
         ui.indent("chosen heroes", |ui| {
             ui.horizontal_wrapped(|ui| {
+                let name_of = |hero: &str| catalog.every_hero.iter().find(|(id, _)| id.eq_ignore_ascii_case(hero)).map(|(_, name)| name.clone());
                 for hero in heroes {
-                    let name = catalog.hero(hero).map_or(hero.as_str(), |known| known.name.as_str());
+                    let name = name_of(hero).unwrap_or_else(|| hero.clone());
                     let chip = ui.button(format!("{name}  ×")).on_hover_text("Take this hero off the list");
                     if chip.clicked() {
                         chosen = Some(EffectsFor::These(heroes.iter().filter(|other| *other != hero).cloned().collect()));
                     }
                 }
-                let others = catalog.heroes.iter().filter(|hero| !heroes.iter().any(|known| known.eq_ignore_ascii_case(&hero.id)));
+                let others = catalog.every_hero.iter().filter(|(id, _)| !heroes.iter().any(|known| known.eq_ignore_ascii_case(id)));
                 egui::ComboBox::from_id_salt("add a hero").selected_text("Add a hero").width(160.0).height(320.0).show_ui(ui, |ui| {
-                    for hero in others {
-                        if ui.selectable_label(false, hero.name.as_str()).clicked() {
+                    for (id, name) in others {
+                        if ui.selectable_label(false, name.as_str()).clicked() {
                             let mut more = heroes.clone();
-                            more.push(hero.id.clone());
+                            more.push(id.clone());
                             chosen = Some(EffectsFor::These(more));
                         }
                     }

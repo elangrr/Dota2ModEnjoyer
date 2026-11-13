@@ -17,6 +17,7 @@ use crate::vpk::Archive;
 #[derive(Debug, Default)]
 pub struct Catalog {
     pub heroes: Vec<Hero>,
+    pub every_hero: Vec<(String, String)>,
     pub world: Vec<Slot>,
     pub rarities: Vec<Rarity>,
     pub lost_files: Vec<String>,
@@ -174,6 +175,8 @@ impl Catalog {
         let reader = Reader { game, names, archive, rarity_places, hero_files: HeroFiles::read(archive), for_heroes, for_couriers, wholeness };
         let mut heroes: Vec<Hero> = game.heroes().into_iter().filter_map(|hero| reader.hero(hero)).collect();
         heroes.sort_by_cached_key(|hero| hero.name.to_lowercase());
+        let mut every_hero: Vec<(String, String)> = game.heroes().into_iter().map(|hero| (hero.to_string(), reader.hero_name(hero))).collect();
+        every_hero.sort_by_cached_key(|(_, name)| name.to_lowercase());
         let mut world: Vec<Slot> = game.world_slots().iter().filter_map(|slot| reader.slot(None, slot)).collect();
         world.extend(reader.emblem_slot());
         let events: Vec<&Item<'_>> = game.items().iter().filter(|item| effects::is_pack(game, item)).collect();
@@ -183,7 +186,7 @@ impl Catalog {
         world.extend(reader.map_slot());
         let (lost_files, moved_files) = (reader.wholeness.gone(), reader.wholeness.stand_ins());
         drop(reader);
-        Catalog { heroes, world, rarities, lost_files, moved_files }
+        Catalog { heroes, every_hero, world, rarities, lost_files, moved_files }
     }
 
     pub fn hero(&self, id: &str) -> Option<&Hero> {
@@ -548,14 +551,14 @@ impl Reader<'_, '_> {
     }
 
     fn effects_entry(&self, hero: &str, item: &Item<'_>, number: u32) -> Option<Entry> {
-        if item.effects_in_style(number, item.first_effects_style(number)).is_empty() {
+        if item.effects_picked(number, item.first_effects_style(number)).is_empty() {
             return None;
         }
         let picture = self.item_picture(item);
         let styles: Vec<StyleEntry> = item.effects_styles(number).iter().map(|style| self.style_look(item, style, picture.as_deref())).collect();
         let styles = if styles.len() == 1 && styles[0].index == 0 { Vec::new() } else { styles };
         let indexes: Vec<u32> = if styles.is_empty() { vec![item.first_effects_style(number)] } else { styles.iter().map(|style| style.index).collect() };
-        let blocks: Vec<kv::Pair<'_>> = indexes.into_iter().flat_map(|index| item.effects_in_style(number, index)).collect();
+        let blocks: Vec<kv::Pair<'_>> = indexes.into_iter().flat_map(|index| item.effects_picked(number, index)).collect();
         Some(Entry {
             id: item.id.to_string(),
             name: self.item_name(item),
@@ -626,7 +629,7 @@ impl Reader<'_, '_> {
     }
 
     fn is_whole(&self, blocks: &[kv::Pair<'_>]) -> bool {
-        blocks.iter().filter_map(file_of).all(|file| self.wholeness.is_whole(file))
+        blocks.iter().filter_map(file_of).filter(|file| !self.wholeness.is_whole(file)).count() == 0
     }
 
     fn style(&self, item: &Item<'_>, style: &Style<'_>, item_picture: Option<&str>) -> Option<StyleEntry> {
@@ -789,6 +792,8 @@ mod tests {
     fn lists_heroes_with_their_slots_and_sets() {
         let catalog = catalog(&everything());
         assert_eq!(catalog.heroes.len(), 1);
+        let every: Vec<(&str, &str)> = catalog.every_hero.iter().map(|(id, name)| (id.as_str(), name.as_str())).collect();
+        assert_eq!(every, [(AXE, "Axe"), ("npc_dota_hero_bane", "Bane")]);
         let axe = &catalog.heroes[0];
         assert_eq!((axe.id.as_str(), axe.name.as_str()), (AXE, "Axe"));
         assert_eq!(axe.picture.as_deref(), Some(PICTURES[0]));
@@ -1472,6 +1477,43 @@ mod tests {
         assert_eq!(catalog.settled(&thawed.clone().styled(7)), Some(thawed.styled(0)));
         assert_eq!(catalog.settled(&Pick::hero(TINY, "weapon", "99")), None);
         assert_eq!(catalog.settled(&Pick::hero(TINY, "head", "11")), None, "a slot he has no more");
+    }
+
+    #[test]
+    fn states_the_game_switches_by_itself_are_no_styles_for_ability_effects_either() {
+        const LIFESTEALER: &str = "npc_dota_hero_life_stealer";
+        let items = r#""items_game" { "prefabs" { "default_item" { "item_slot" "back" "baseitem" "1" } "wearable" { "item_slot" "back" } } "items" {
+            "1" { "name" "Lifestealer's Back" "prefab" "default_item" "used_by_heroes" { "npc_dota_hero_life_stealer" "1" } }
+            "11" { "name" "Profane Union" "prefab" "wearable" "used_by_heroes" { "npc_dota_hero_life_stealer" "1" }
+                "static_attributes" { "can_equip_as_ability_effects" "1" }
+                "visuals" {
+                    "styles" { "0" { "auto_style_rule" "modifier_life_stealer_rage <= 0" } "1" { "auto_style_rule" "modifier_life_stealer_rage > 0" } }
+                    "asset_modifier" { "type" "ability_icon" "asset" "life_stealer_rage" "modifier" "life_stealer_rage_immortal" "apply_when_equipped_in_ability_effects_slot" "1" }
+                    "asset_modifier" { "type" "particle" "asset" "particles/rage.vpcf" "modifier" "particles/rage_immortal.vpcf" "style" "1" "apply_when_equipped_in_ability_effects_slot" "1" }
+                } }
+        } }"#;
+        let file = r##""DOTAHeroes" { "npc_dota_hero_life_stealer" { "ItemSlots" {
+            "0" { "SlotName" "back" "SlotText" "#LoadoutSlot_Back" } "1" { "SlotName" "ability_effects_1" "SlotText" "life_stealer_rage" } } } }"##;
+        let catalog = catalog_of(items, Some(file), &[]);
+        assert!(catalog.slot(Some(LIFESTEALER), "back").unwrap().entry("11").unwrap().styles.is_empty(), "worn, the item has states");
+        let rage = catalog.slot(Some(LIFESTEALER), "ability_effects_1").unwrap().entry("11").unwrap();
+        assert!(rage.styles.is_empty(), "its effects for Rage are one choice: those of all its states");
+        assert_eq!(rage.first_style(), 0);
+        assert_eq!(rage.gaps, [Gap::Files], "the effect of its second state is looked for too, and the game here has none");
+    }
+
+    #[test]
+    fn every_file_that_is_gone_is_listed_not_only_the_first_of_an_item() {
+        let items = r#""items_game" { "prefabs" { "default_item" { "item_slot" "weapon" "baseitem" "1" } "wearable" { "item_slot" "weapon" } } "items" {
+            "1" { "name" "Axe's Axe" "prefab" "default_item" "used_by_heroes" { "npc_dota_hero_axe" "1" } }
+            "11" { "name" "Two Lost Glows" "prefab" "wearable" "used_by_heroes" { "npc_dota_hero_axe" "1" } "visuals" {
+                "asset_modifier" { "type" "particle_create" "modifier" "particles/lost/one.vpcf" }
+                "asset_modifier" { "type" "particle_create" "modifier" "particles/lost/two.vpcf" }
+            } }
+        } }"#;
+        let catalog = catalog_of(items, None, &[]);
+        assert_eq!(catalog.slot(Some(AXE), "weapon").unwrap().entry("11").unwrap().gaps, [Gap::Files]);
+        assert_eq!(catalog.lost_files, ["particles/lost/one.vpcf", "particles/lost/two.vpcf"]);
     }
 
     #[test]

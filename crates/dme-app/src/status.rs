@@ -26,7 +26,13 @@ pub struct Facts {
     pub picks: usize,
     pub away: bool,
     pub in_game: bool,
+    pub reach_nobody: bool,
+    pub half_undone: bool,
 }
+
+pub const HALF_UNDONE: &str = "Dota was updated while your picks were in it. If it cannot find a match, close it, then press Play here.";
+
+pub const REACH_NOBODY: &str = "No hero gets your event effects or emblem yet. Pick something for a hero, or give them to every hero.";
 
 impl Facts {
     pub fn sentence(&self) -> (Tone, String) {
@@ -48,7 +54,9 @@ impl Facts {
         }
         let ours_in_game = matches!(self.mods, ModState::On | ModState::NeedsRepair(_));
         if self.running {
-            return if self.picks == 0 && ours_in_game {
+            return if self.half_undone {
+                warn(HALF_UNDONE)
+            } else if self.picks == 0 && ours_in_game {
                 warn("Dota 2 is running. Close it, then press Play for normal Dota.")
             } else if self.picks == 0 {
                 plain("Dota 2 is running.")
@@ -69,6 +77,9 @@ impl Facts {
                 (false, true) => plain("You have no picks. Press Play for normal Dota."),
             };
         }
+        if self.reach_nobody {
+            return warn(REACH_NOBODY);
+        }
         if self.in_game {
             return good("Your picks are in the game. Press Play.");
         }
@@ -85,6 +96,7 @@ impl Facts {
         let ours_in_game = matches!(self.mods, ModState::On | ModState::NeedsRepair(_));
         Some(match (&self.mods, self.picks, self.in_game) {
             (ModState::ChangedByOther(_), ..) => (Tone::Warn, "Needs attention"),
+            _ if self.half_undone && self.running => (Tone::Warn, "Needs attention"),
             (_, 0, _) if ours_in_game => (Tone::Warn, "Old picks in the game"),
             (_, 0, _) => (Tone::Plain, "Normal Dota"),
             (_, _, true) => (Tone::Good, "Mods on"),
@@ -93,7 +105,7 @@ impl Facts {
     }
 
     pub fn tip(&self) -> Option<&'static str> {
-        let pressing = matches!(self.mods, ModState::ChangedByOther(_));
+        let pressing = matches!(self.mods, ModState::ChangedByOther(_)) || self.reach_nobody;
         (self.loaded && self.picks > 0 && !pressing).then_some(TIP)
     }
 
@@ -136,7 +148,15 @@ impl Facts {
     }
 
     pub fn why_no_switch(&self) -> &'static str {
-        if self.running { "Close Dota 2 first." } else { "Dota 2 is as Valve ships it." }
+        if self.running {
+            "Close Dota 2 first."
+        } else if self.starting {
+            "Dota 2 is starting."
+        } else if self.busy.is_some() {
+            "Wait until this is done."
+        } else {
+            "Dota 2 is as Valve ships it."
+        }
     }
 }
 
@@ -155,7 +175,33 @@ mod tests {
             picks: 0,
             away: false,
             in_game: false,
+            reach_nobody: false,
+            half_undone: false,
         }
+    }
+
+    #[test]
+    fn dota_running_with_what_an_update_left_half_undone_is_told_to_close() {
+        let half = ModState::NeedsRepair(dme_core::engine::UNDECLARED.to_string());
+        let running = Facts { running: true, picks: 3, mods: half.clone(), half_undone: true, ..facts() };
+        assert_eq!(running.sentence(), (Tone::Warn, HALF_UNDONE.to_string()));
+        assert_eq!(running.badge(), Some((Tone::Warn, "Needs attention")));
+        assert!(!running.can_play() && !running.can_switch(), "nothing is written while Dota runs");
+        let closed = Facts { running: false, ..running };
+        assert_eq!(closed.sentence().1, "3 picks are ready. Press Play to see them in Dota.");
+        assert_eq!(Facts { busy: Some(Busy::Restoring), ..closed }.sentence().1, "Going back to normal Dota…");
+    }
+
+    #[test]
+    fn effects_that_go_on_no_hero_are_not_called_ready() {
+        let nobody = Facts { picks: 2, reach_nobody: true, ..facts() };
+        assert_eq!(nobody.sentence(), (Tone::Warn, REACH_NOBODY.to_string()));
+        assert_eq!(Facts { in_game: true, mods: ModState::On, ..nobody.clone() }.sentence(), (Tone::Warn, REACH_NOBODY.to_string()));
+        assert!(nobody.can_play(), "Play still puts the rest in the game");
+        assert_eq!(nobody.tip(), None, "unequipping an item of one's own would not help");
+        assert_eq!(Facts { busy: Some(Busy::Playing), ..nobody.clone() }.sentence().1, "Putting your picks in the game…");
+        assert_eq!(Facts { running: true, ..nobody.clone() }.sentence().1, "Dota 2 is running. Close it, then press Play to use your new picks.");
+        assert!(Facts { mods: ModState::ChangedByOther("x".into()), ..nobody }.sentence().1.contains("verify the game's files"));
     }
 
     #[test]
@@ -255,9 +301,11 @@ mod tests {
         let busy = Facts { busy: Some(Busy::Playing), mods: ModState::On, ..facts() };
         assert!(!busy.can_play() && !busy.can_switch());
         assert_eq!(busy.play_label(), "Working…");
+        assert_eq!(busy.why_no_switch(), "Wait until this is done.", "the game may have the picks by now");
         let starting = Facts { starting: true, mods: ModState::On, ..facts() };
         assert!(!starting.can_play() && !starting.can_switch());
         assert_eq!(starting.play_label(), "Starting…");
+        assert_eq!(starting.why_no_switch(), "Dota 2 is starting.");
         assert!(!Facts { busy: Some(Busy::Restoring), away: true, ..facts() }.can_switch());
     }
 

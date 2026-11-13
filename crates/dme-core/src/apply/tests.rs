@@ -548,6 +548,144 @@ fn ability_effects_come_in_the_style_that_is_picked() {
     assert_eq!(modifiers(&ItemsGame::parse(&bloom.bytes).unwrap(), "101"), ["particles/bloomer/slash.vpcf"]);
 }
 
+const SWITCHING: &str = r##"
+"items_game"
+{
+"prefabs"
+{
+    "default_item" { "item_class" "dota_item_wearable" "item_slot" "weapon" "baseitem" "1" }
+    "wearable" { "item_class" "dota_item_wearable" "item_slot" "weapon" }
+}
+"items"
+{
+    "1" { "name" "Troll's Axes" "prefab" "default_item" "used_by_heroes" { "npc_dota_hero_troll_warlord" "1" } }
+    "2" { "name" "Troll's Head" "prefab" "default_item" "item_slot" "head" "used_by_heroes" { "npc_dota_hero_troll_warlord" "1" } }
+    "3" { "name" "Troll's Shoulder" "prefab" "default_item" "item_slot" "shoulder" "used_by_heroes" { "npc_dota_hero_troll_warlord" "1" } }
+    "11"
+    {
+        "name" "Lineage"
+        "prefab" "wearable"
+        "model_player" "models/troll/lineage.vmdl"
+        "static_attributes" { "can_equip_as_ability_effects" "1" }
+        "used_by_heroes" { "npc_dota_hero_troll_warlord" "1" }
+        "visuals"
+        {
+            "styles"
+            {
+                "0" { "name" "#Ranged" "skin" "0" "auto_style_rule" "modifier_troll_warlord_melee == 0" }
+                "1" { "name" "#Melee" "skin" "1" "auto_style_rule" "modifier_troll_warlord_melee > 0" "model_player" "models/troll/lineage_melee.vmdl" }
+            }
+            "asset_modifier" { "type" "particle" "asset" "particles/bash.vpcf" "modifier" "particles/troll/bash.vpcf" "apply_when_equipped_in_ability_effects_slot" "1" }
+            "asset_modifier" { "type" "ability_icon" "asset" "troll_switch_stance" "modifier" "troll_rage" "style" "0" "apply_when_equipped_in_ability_effects_slot" "1" }
+            "asset_modifier" { "type" "ability_icon" "asset" "troll_switch_stance" "modifier" "troll_rage_active" "style" "1" "apply_when_equipped_in_ability_effects_slot" "1" }
+        }
+    }
+    "12"
+    {
+        "name" "Union"
+        "prefab" "wearable"
+        "item_slot" "head"
+        "model_player" "models/troll/union.vmdl"
+        "static_attributes" { "can_equip_as_ability_effects" "2" }
+        "used_by_heroes" { "npc_dota_hero_troll_warlord" "1" }
+        "visuals"
+        {
+            "styles"
+            {
+                "0" { "auto_style_rule" "modifier_troll_rage <= 0" "model_player" "models/troll/union.vmdl" }
+                "1" { "auto_style_rule" "modifier_troll_rage > 0" "model_player" "models/troll/union_rage.vmdl" }
+            }
+            "asset_modifier" { "type" "particle" "asset" "particles/rage.vpcf" "modifier" "particles/troll/rage.vpcf" "style" "1" "apply_when_equipped_in_ability_effects_slot" "2" }
+            "asset_modifier" { "type" "ability_icon" "asset" "troll_rage" "modifier" "troll_rage_union" "apply_when_equipped_in_ability_effects_slot" "2" }
+            "asset_modifier" { "type" "particle_create" "modifier" "particles/troll/union_ambient.vpcf" "style" "0" }
+        }
+    }
+    "13"
+    {
+        "name" "Spear"
+        "prefab" "wearable"
+        "item_slot" "shoulder"
+        "model_player" "models/troll/spear.vmdl"
+        "static_attributes" { "can_equip_as_ability_effects" "3" }
+        "used_by_heroes" { "npc_dota_hero_troll_warlord" "1" }
+        "visuals"
+        {
+            "styles" { "0" { "auto_style_rule" "modifier_troll_sprint == 0" } "1" { "auto_style_rule" "modifier_troll_sprint > 0" } }
+            "asset_modifier" { "type" "ability_icon" "asset" "troll_axes" "modifier" "troll_axes_spear" "style" "0" "apply_when_equipped_in_ability_effects_slot" "3" }
+            "asset_modifier" { "type" "ability_icon" "asset" "troll_axes" "modifier" "troll_axes_spear" "style" "1" "apply_when_equipped_in_ability_effects_slot" "3" }
+            "asset_modifier" { "type" "particle" "asset" "particles/axes.vpcf" "modifier" "particles/troll/axes.vpcf" "apply_when_equipped_in_ability_effects_slot" "3" }
+        }
+    }
+    "14"
+    {
+        "name" "Two Looks"
+        "prefab" "wearable"
+        "model_player" "models/troll/two_looks.vmdl"
+        "used_by_heroes" { "npc_dota_hero_troll_warlord" "1" }
+        "visuals" { "styles" { "0" { "name" "#One" } "1" { "name" "#Two" "skin" "1" } } }
+    }
+}
+}
+"##;
+
+fn state_marks(game: &ItemsGame<'_>, id: &str) -> Vec<Option<String>> {
+    let visuals = game.item(id).unwrap().block.block("visuals");
+    let marked = |pair: Pair<'_>| pair.value.as_block().filter(|block| block.get("type").is_some()).map(|block| block.str("style").map(|style| String::from_utf8_lossy(style).into_owned()));
+    visuals.into_iter().flat_map(|visuals| visuals.pairs()).filter_map(marked).collect()
+}
+
+fn states_of(game: &ItemsGame<'_>, id: &str) -> Vec<Vec<String>> {
+    let pair_text = |pair: Pair<'_>| format!("{} {}", String::from_utf8_lossy(pair.key), pair.value.as_str().map(String::from_utf8_lossy).unwrap_or_default());
+    game.item(id).unwrap().styles().iter().map(|style| style.block.pairs().map(pair_text).collect()).collect()
+}
+
+#[test]
+fn ability_effects_of_an_item_that_switches_its_styles_come_from_all_its_states() {
+    const TROLL: &str = "npc_dota_hero_troll_warlord";
+    let game = ItemsGame::parse(SWITCHING.as_bytes()).unwrap();
+    for (id, number) in [("11", 1), ("12", 2), ("13", 3)] {
+        assert!(game.item(id).unwrap().effects_styles(number).is_empty(), "the states of {id} are no styles to choose");
+    }
+    let run = |picks: &[Pick]| patch_items_game(SWITCHING.as_bytes(), picks).unwrap();
+
+    let union = run(&[Pick::hero(TROLL, "ability_effects_2", "12")]);
+    let after = ItemsGame::parse(&union.bytes).unwrap();
+    assert_eq!(blocks(&after, "2"), ["particle particles/rage.vpcf -> particles/troll/rage.vpcf", "ability_icon troll_rage -> troll_rage_union"]);
+    assert_eq!(state_marks(&after, "2"), [None, None]);
+    assert!(after.item("2").unwrap().styles().is_empty() && after.item("2").unwrap().model.is_none(), "nothing of the item's own look");
+    assert_eq!(run(&[Pick::hero(TROLL, "ability_effects_2", "12").styled(1)]).bytes, union.bytes);
+    assert_eq!(union.changes[0].style, 0);
+
+    let spear = run(&[Pick::hero(TROLL, "ability_effects_3", "13")]);
+    let after = ItemsGame::parse(&spear.bytes).unwrap();
+    assert_eq!(blocks(&after, "3"), ["ability_icon troll_axes -> troll_axes_spear", "particle particles/axes.vpcf -> particles/troll/axes.vpcf"]);
+    assert_eq!(state_marks(&after, "3"), [None, None]);
+
+    let lineage = run(&[Pick::hero(TROLL, "ability_effects_1", "11")]);
+    let after = ItemsGame::parse(&lineage.bytes).unwrap();
+    let axes = after.item("1").unwrap();
+    assert!(axes.switches_styles_itself() && axes.model.is_none());
+    assert_eq!(states_of(&after, "1"), [["auto_style_rule modifier_troll_warlord_melee == 0"], ["auto_style_rule modifier_troll_warlord_melee > 0"]]);
+    assert_eq!(
+        blocks(&after, "1"),
+        ["particle particles/bash.vpcf -> particles/troll/bash.vpcf", "ability_icon troll_switch_stance -> troll_rage", "ability_icon troll_switch_stance -> troll_rage_active"]
+    );
+    assert_eq!(state_marks(&after, "1"), [None, Some("0".to_string()), Some("1".to_string())]);
+
+    let looks = run(&[Pick::hero(TROLL, "weapon", "14"), Pick::hero(TROLL, "ability_effects_1", "11")]);
+    let after = ItemsGame::parse(&looks.bytes).unwrap();
+    assert_eq!(after.item("1").unwrap().model, Some("models/troll/two_looks.vmdl"));
+    assert_eq!(states_of(&after, "1"), [vec!["name #One"], vec!["name #Two", "skin 1"]]);
+    assert_eq!(blocks(&after, "1"), ["particle particles/bash.vpcf -> particles/troll/bash.vpcf", "ability_icon troll_switch_stance -> troll_rage"]);
+    assert_eq!(state_marks(&after, "1"), [None, None]);
+
+    let both = run(&[Pick::hero(TROLL, "weapon", "11"), Pick::hero(TROLL, "ability_effects_1", "11")]);
+    let after = ItemsGame::parse(&both.bytes).unwrap();
+    assert_eq!(after.item("1").unwrap().model, Some("models/troll/lineage.vmdl"));
+    assert_eq!(states_of(&after, "1")[1], ["name #Melee", "skin 1", "auto_style_rule modifier_troll_warlord_melee > 0", "model_player models/troll/lineage_melee.vmdl"]);
+    assert_eq!(state_marks(&after, "1"), [None, Some("0".to_string()), Some("1".to_string())]);
+}
+
 #[test]
 fn a_personas_ability_effects_ride_on_what_the_persona_wears() {
     let text = effects_sample();
@@ -777,6 +915,101 @@ fn events_effects_go_with_each_other_and_with_what_is_picked_for_a_hero() {
     assert!(first.item("3").unwrap().block.block("visuals").unwrap().pairs().all(|pair| pair.value.as_block().is_some_and(|block| block.get("criteria").is_none())));
     let deny = gems(&[Pick::world("fx_deny", "500")]);
     assert_eq!(blocks(&ItemsGame::parse(&deny.bytes).unwrap(), "3"), ["point 4 of particles/msg_fx/msg_deny.vpcf = 30 0 0"]);
+}
+
+#[test]
+fn an_events_effect_takes_the_place_of_ability_effects_that_replace_the_same_thing() {
+    const TINKER: &str = "npc_dota_hero_tinker";
+    let text = r##"
+"items_game"
+{
+"prefabs"
+{
+    "default_item" { "item_class" "dota_item_wearable" "item_slot" "weapon" "baseitem" "1" }
+    "wearable" { "item_class" "dota_item_wearable" "item_slot" "weapon" }
+    "tool" { "item_class" "tool" "item_slot" "none" }
+}
+"items"
+{
+    "1" { "name" "Tinker's Misc" "prefab" "default_item" "item_slot" "misc" "used_by_heroes" { "npc_dota_hero_tinker" "1" } }
+    "2"
+    {
+        "name" "Boots of Travel"
+        "prefab" "wearable"
+        "item_slot" "misc"
+        "model_player" "models/tinker/boots.vmdl"
+        "static_attributes" { "can_equip_as_ability_effects" "5" }
+        "used_by_heroes" { "npc_dota_hero_tinker" "1" }
+        "visuals"
+        {
+            "asset_modifier0" { "type" "particle" "asset" "particles/items2_fx/teleport_start.vpcf" "modifier" "particles/tinker/boots_start.vpcf" "apply_when_equipped_in_ability_effects_slot" "5" }
+            "asset_modifier1" { "type" "sound" "asset" "Portal.Loop_Appear" "modifier" "Tinker.Boots.Loop" "apply_when_equipped_in_ability_effects_slot" "5" }
+        }
+    }
+    "500"
+    {
+        "name" "In-Game Effects Team"
+        "prefab" "tool"
+        "item_class" "dota_item_wearable"
+        "visuals"
+        {
+            "asset_modifier0" { "type" "particle" "asset" "particles/items2_fx/teleport_start.vpcf" "modifier" "particles/teams/team_teleport_start.vpcf" }
+        }
+    }
+}
+}
+"##;
+    let (boots, teleport) = (Pick::hero(TINKER, "ability_effects_5", "2"), Pick::world("fx_teleport", "500"));
+    let result = patch_items_game(text.as_bytes(), &[boots, teleport]).unwrap();
+    let game = ItemsGame::parse(&result.bytes).unwrap();
+    assert_eq!(
+        blocks(&game, "1"),
+        ["sound Portal.Loop_Appear -> Tinker.Boots.Loop", "particle particles/items2_fx/teleport_start.vpcf -> particles/teams/team_teleport_start.vpcf"]
+    );
+}
+
+#[test]
+fn a_default_item_that_heroes_share_carries_an_events_effects_only_if_all_of_them_are_to_have_them() {
+    const SVEN: &str = "npc_dota_hero_sven";
+    let text = r##"
+"items_game"
+{
+"prefabs"
+{
+    "default_item" { "item_class" "dota_item_wearable" "item_slot" "weapon" "baseitem" "1" }
+    "wearable" { "item_class" "dota_item_wearable" "item_slot" "weapon" }
+    "tool" { "item_class" "tool" "item_slot" "none" }
+}
+"items"
+{
+    "1" { "name" "Everybody's Pet" "prefab" "default_item" "item_slot" "summon" "used_by_heroes" { "npc_dota_hero_axe" "1" "npc_dota_hero_sven" "1" } }
+    "2" { "name" "Axe's Axe" "prefab" "default_item" "used_by_heroes" { "npc_dota_hero_axe" "1" } }
+    "3" { "name" "Sven's Sword" "prefab" "default_item" "used_by_heroes" { "npc_dota_hero_sven" "1" } }
+    "20" { "name" "Red Axe" "prefab" "wearable" "model_player" "models/red_axe.vmdl" "used_by_heroes" { "npc_dota_hero_axe" "1" } }
+    "500"
+    {
+        "name" "In-Game Effects Team"
+        "prefab" "tool"
+        "item_class" "dota_item_wearable"
+        "visuals"
+        {
+            "asset_modifier0" { "type" "particle" "asset" "particles/items2_fx/teleport_start.vpcf" "modifier" "particles/teams/team_teleport_start.vpcf" }
+        }
+    }
+}
+}
+"##;
+    let game = ItemsGame::parse(text.as_bytes()).unwrap();
+    let teleport = Pick::world("fx_teleport", "500");
+    let carrying = |picks: &[Pick], effects_for: &EffectsFor| -> Vec<&str> {
+        let result = patch_for(&game, text.as_bytes(), picks, &|_, _| true, effects_for).unwrap();
+        let after = ItemsGame::parse(&result.bytes).unwrap();
+        ["1", "2", "3"].into_iter().filter(|id| !modifiers(&after, id).is_empty()).collect()
+    };
+    assert_eq!(carrying(std::slice::from_ref(&teleport), &EffectsFor::Every), ["1", "2", "3"]);
+    assert_eq!(carrying(std::slice::from_ref(&teleport), &EffectsFor::These(vec![AXE.to_string()])), ["2"]);
+    assert_eq!(carrying(&[teleport.clone(), Pick::hero(AXE, "weapon", "20")], &EffectsFor::Picked), ["2"]);
+    assert_eq!(carrying(std::slice::from_ref(&teleport), &EffectsFor::These(vec![SVEN.to_string(), AXE.to_string()])), ["1", "2", "3"]);
 }
 
 #[test]
@@ -1017,6 +1250,26 @@ fn what_is_for_every_hero_goes_to_the_heroes_chosen_for_it() {
     let reach = EffectsFor::Picked;
     assert!(reach.reaches(&first, &with_a_pick) && !reach.reaches(&every[1], &with_a_pick));
     assert!(EffectsFor::Every.reaches("anyone", &[]) && !EffectsFor::These(Vec::new()).reaches(&first, &[]));
+}
+
+#[test]
+fn effects_of_events_and_an_emblem_picked_with_nothing_for_a_hero_are_known_to_reach_nobody() {
+    let emblem = Pick::world("emblem", "638");
+    let teleport = Pick::world("fx_teleport", "1");
+    let courier = Pick::world("courier", "3");
+    let weapon = Pick::hero(AXE, "weapon", "5");
+    assert!(is_for_heroes(&emblem) && is_for_heroes(&teleport));
+    assert!(!is_for_heroes(&courier) && !is_for_heroes(&weapon), "they show whoever is chosen");
+    assert!(!is_for_heroes(&Pick::hero(AXE, "fx_teleport", "1")), "no hero's slot");
+
+    let world_only = [emblem.clone(), teleport.clone(), courier.clone()];
+    assert!(reach_nobody(&world_only, &EffectsFor::Picked));
+    assert!(!reach_nobody(&[teleport.clone(), weapon.clone()], &EffectsFor::Picked));
+    assert!(!reach_nobody(&world_only, &EffectsFor::Every));
+    assert!(reach_nobody(&world_only, &EffectsFor::These(Vec::new())), "a list that is empty");
+    assert!(!reach_nobody(&world_only, &EffectsFor::These(vec![AXE.to_string()])));
+    assert!(!reach_nobody(&[courier], &EffectsFor::Picked));
+    assert!(!reach_nobody(&[], &EffectsFor::These(Vec::new())));
 }
 
 const PERSONA_TEXT: &str = r##"

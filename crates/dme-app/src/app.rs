@@ -3,21 +3,27 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dme_core::apply::Pick;
+use dme_core::apply::{self, Pick};
 use dme_core::catalog::{Catalog, Hero};
 use dme_core::dota::DotaInstall;
 use dme_core::engine::{self, Engine, ModState, Ready};
 use dme_core::items;
 use dme_core::loadout::Loadout;
+use dme_core::share;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{self, Align, Color32, CornerRadius, CursorIcon, FontId, Layout, Rect, Sense, Ui, pos2, vec2};
 
 use crate::Options;
+use crate::changelog;
+use crate::crash;
+use crate::glass;
 use crate::pictures::Pictures;
 use crate::presets::Presets;
+use crate::report;
 use crate::script::Script;
 use crate::settings::Settings;
 use crate::status::{Busy, Facts, Tone};
+use crate::support;
 use crate::theme;
 use crate::update::{self, News, Updater};
 use crate::views::icons::Icon;
@@ -31,9 +37,13 @@ pub const TITLE: &str = "Dota 2 Mod Enjoyer";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const SETTINGS_FILE: &str = "settings.json";
+pub const SETTINGS_FILE: &str = "settings.json";
 const PRESETS_FILE: &str = "presets.json";
 const STARTING_SECONDS: f64 = 90.0;
+const CLOSED_LAST_TIME: &str = "The app closed last time because something went wrong inside it. Your picks are kept. Reporting it helps to get it fixed.";
+const TIDIED: &str = "Dota was updated, which undid half of the app's changes. The app put Dota back to normal, so that Valve's anti-cheat check finds nothing half-changed. Press Play to put your picks back.";
+const COPY_HINT: &str = "Copy what happened, to send to whoever helps you or to paste in a report";
+const REPORT_HINT: &str = "Open a new report on the app's GitHub page, with what happened written in. You read it over and send it yourself. It needs a GitHub account.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -95,6 +105,7 @@ pub struct App {
     starting_until: Option<f64>,
     banner: Option<Banner>,
     close_when_done: bool,
+    tidy_tried: bool,
 
     tab: Tab,
     hero: Option<String>,
@@ -110,7 +121,12 @@ pub struct App {
     help_open: bool,
     settings_open: bool,
     support_open: bool,
+    share_open: bool,
+    share_text: String,
+    share_name: String,
+    whats_new: Option<Vec<changelog::Version>>,
     look: (theme::Theme, Option<egui::Theme>),
+    backdrop: theme::Backdrop,
     footer_top: f32,
 
     updater: Option<Updater>,
@@ -121,19 +137,33 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(creation: &eframe::CreationContext<'_>, options: Options) -> App {
+    pub fn new(creation: &eframe::CreationContext<'_>, options: Options, glass: bool) -> App {
         let ctx = &creation.egui_ctx;
         let data_dir = options.data_dir.clone().unwrap_or_else(engine::default_data_dir);
-        let settings = Settings::load(&data_dir.join(SETTINGS_FILE));
+        let mut settings = Settings::load(&data_dir.join(SETTINGS_FILE));
         theme::install_fonts(ctx);
         theme::apply(ctx, settings.theme);
         let look = (settings.theme, ctx.system_theme());
+        let backdrop = match options.screenshot.is_some() {
+            true => theme::Backdrop::StandIn,
+            false if glass && glass::frost(creation, !theme::is_day()) => theme::Backdrop::SeeThrough,
+            false => theme::Backdrop::Own,
+        };
         let presets = Presets::load(&data_dir.join(PRESETS_FILE));
         let script = options.screenshot.clone().map(|shot| Script::new(options.steps.clone(), shot));
         update::clean_up();
         let updater = Updater::start(&options, ctx);
+        let before = version_before(options.updated_from.as_deref(), &settings, options.screenshot.is_some());
+        let whats_new = before.map(|before| changelog::since(&before, VERSION)).filter(|news| !news.is_empty());
         let updated = options.updated_from.as_deref().is_some_and(|before| before != VERSION);
-        let banner = updated.then(|| Banner::new(Tone::Good, format!("The app was updated. This is version {VERSION} now.")));
+        let mut banner = (updated && whats_new.is_none()).then(|| Banner::new(Tone::Good, format!("The app was updated. This is version {VERSION} now.")));
+        if let Some(details) = crash::left_from_last_time(&data_dir) {
+            banner = Some(Banner::failure(Failure { sentence: CLOSED_LAST_TIME.to_string(), details }));
+        }
+        if whats_new.is_none() && options.screenshot.is_none() && settings.seen_version.as_deref() != Some(VERSION) {
+            settings.seen_version = Some(VERSION.to_string());
+            let _ = settings.save(&data_dir.join(SETTINGS_FILE));
+        }
 
         let found = match (&options.dota, &settings.dota_folder) {
             (Some(folder), _) => DotaInstall::at(folder),
@@ -158,6 +188,7 @@ impl App {
             starting_until: None,
             banner,
             close_when_done: false,
+            tidy_tried: false,
             tab: Tab::Heroes,
             hero: None,
             hero_search: String::new(),
@@ -172,7 +203,12 @@ impl App {
             help_open: false,
             settings_open: false,
             support_open: false,
+            share_open: false,
+            share_text: String::new(),
+            share_name: String::new(),
+            whats_new,
             look,
+            backdrop,
             footer_top: 0.0,
             updater,
             start_again: false,
@@ -215,6 +251,14 @@ impl App {
                         self.starting_until = None;
                     }
                     self.game = Some(game);
+                    self.tidy_if_half_undone();
+                }
+                Reply::Tidied(done) => {
+                    self.busy = None;
+                    self.banner = Some(match done {
+                        Ok(_) => Banner::new(Tone::Plain, TIDIED),
+                        Err(failure) => Banner::failure(failure),
+                    });
                 }
                 Reply::Played(Ok(played)) => {
                     self.busy = None;
@@ -244,6 +288,16 @@ impl App {
                     self.busy = None;
                     self.banner = Some(Banner::failure(failure));
                 }
+                Reply::Stopped(failure) => {
+                    self.busy = None;
+                    if self.catalog.is_none() {
+                        self.load_failure = Some(failure.clone());
+                    }
+                    self.banner = Some(Banner::failure(failure));
+                    if let Some(engine) = &self.engine {
+                        self.worker = Some(Worker::start(engine.clone(), ctx.clone()));
+                    }
+                }
             }
         }
         if self.starting_until.is_some_and(|until| now >= until) {
@@ -261,7 +315,7 @@ impl App {
                     let text = format!("Version {} of this app is out.{notes}", manifest.version);
                     self.banner = Some(Banner { update: true, ..Banner::new(Tone::Plain, text) });
                 }
-                News::Offered(_) | News::Nothing(None) => {}
+                News::Offered(_) | News::Nothing(None) | News::Progress(..) => {}
                 News::Nothing(Some(failure)) | News::Failed(failure) => self.banner = Some(Banner::failure(failure)),
                 News::Installed => self.start_again = true,
             }
@@ -351,6 +405,7 @@ impl App {
             Some("help") => self.help_open = true,
             Some("settings") => self.settings_open = true,
             Some("support") => self.support_open = true,
+            Some("share") => self.share_open = true,
             _ => {}
         }
     }
@@ -361,6 +416,7 @@ impl App {
             Some(game) => (game.running && !self.options.ignore_running, game.mods.clone(), game.shows(self.loadout.picks(), self.loadout.effects_for())),
             None => (false, ModState::Off, false),
         };
+        let half_undone = mods.is_half_undone();
         Facts {
             loaded: self.catalog.is_some(),
             load_failed: self.load_failure.is_some(),
@@ -371,7 +427,26 @@ impl App {
             picks: self.loadout.len(),
             away: self.loadout.is_put_away(),
             in_game,
+            reach_nobody: apply::reach_nobody(self.loadout.picks(), self.loadout.effects_for()),
+            half_undone,
         }
+    }
+
+    fn tidy_if_half_undone(&mut self) {
+        let Some(game) = &self.game else { return };
+        if !game.mods.is_half_undone() {
+            self.tidy_tried = false;
+            return;
+        }
+        let running = game.running && !self.options.ignore_running;
+        let may_write = self.options.screenshot.is_none() || self.options.dota.is_some();
+        if !tidies(running || game.steam_busy, self.tidy_tried, self.busy.is_some(), may_write) {
+            return;
+        }
+        let Some(worker) = &self.worker else { return };
+        self.tidy_tried = true;
+        self.busy = Some(Busy::Restoring);
+        worker.send(Job::Tidy);
     }
 
     fn play(&mut self) {
@@ -448,6 +523,32 @@ impl App {
         }
     }
 
+    fn share(&mut self, ctx: &egui::Context, name: Option<&str>, picks: &[Pick], what: String) {
+        self.copy(ctx, &share::code(name, picks));
+        self.banner = Some(Banner::new(Tone::Good, format!("A share code of {what} is copied. Paste it anywhere: whoever has the app uses it under My picks, \"Use a code\".")));
+    }
+
+    fn take_in(&mut self, catalog: &Catalog, picks: &[Pick], left_out: usize) {
+        let before = self.loadout.clone();
+        for pick in picks {
+            if let Some(slot) = catalog.slot(pick.hero.as_deref(), &pick.slot) {
+                views::loadout::make_way(&mut self.loadout, slot);
+            }
+            self.loadout.set(pick.clone());
+        }
+        self.saved = self.loadout.clone();
+        let text = taken_in_words(picks.len(), left_out, before.kept_away().len());
+        if self.save_picks() {
+            self.banner = Some(Banner::with_undo(text, before));
+        }
+    }
+
+    fn keep_code(&mut self, name: &str, picks: &[Pick]) {
+        let Some(name) = self.presets.keep(name, picks) else { return };
+        self.banner = Some(Banner::new(Tone::Good, format!("The code is kept as the preset \"{name}\", under My picks. A click on it picks it.")));
+        self.save_presets();
+    }
+
     fn forget_preset(&mut self, place: usize) {
         if let Some(preset) = self.presets.forget(place) {
             self.banner = Some(Banner::new(Tone::Plain, format!("The preset \"{}\" is forgotten. Your picks stay as they are.", preset.name)));
@@ -489,7 +590,8 @@ impl App {
     }
 
     fn type_to_search(&mut self, ctx: &egui::Context) {
-        if self.catalog.is_none() || !self.settings.notice_accepted || !self.settings.tour_seen || self.help_open || self.settings_open || self.support_open || self.tab == Tab::Picks {
+        let in_front = self.help_open || self.settings_open || self.support_open || self.share_open || self.whats_new.is_some();
+        if self.catalog.is_none() || !self.settings.notice_accepted || !self.settings.tour_seen || in_front || self.tab == Tab::Picks {
             return;
         }
         let (typed, erased, escaped) = ctx.input(|input| {
@@ -508,7 +610,8 @@ impl App {
 
     fn run_script(&mut self, ctx: &egui::Context) {
         let loaded = self.engine.is_none() || self.catalog.is_some() || self.load_failure.is_some();
-        let updating = self.updater.as_ref().is_some_and(Updater::is_working) || self.start_again;
+        let asking = self.updater.as_ref().is_some_and(|updater| updater.is_working() && !updater.is_fetching());
+        let updating = asking || self.start_again;
         let settled = loaded && self.busy.is_none() && self.pictures.loading() == 0 && !updating;
         if let Some(script) = &mut self.script {
             script.advance(ctx, settled);
@@ -523,11 +626,21 @@ impl eframe::App for App {
         }
     }
 
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        match self.backdrop {
+            theme::Backdrop::SeeThrough => [0.0; 4],
+            _ => theme::background().to_normalized_gamma_f32(),
+        }
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let look = (self.settings.theme, ctx.system_theme());
         if look != self.look {
             self.look = look;
             theme::apply(ctx, self.settings.theme);
+            if self.backdrop == theme::Backdrop::SeeThrough {
+                glass::frost(frame, !theme::is_day());
+            }
         }
         self.listen(ctx);
         self.start_the_new_version(ctx);
@@ -537,9 +650,11 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.pictures.begin_frame();
-        theme::paint_backdrop(&ui.ctx().layer_painter(egui::LayerId::background()), ui.ctx().content_rect());
+        theme::paint_backdrop(&ui.ctx().layer_painter(egui::LayerId::background()), ui.ctx().content_rect(), self.backdrop);
         if self.engine.is_none() {
             self.find_dota(ui);
+            self.footer_top = ui.ctx().content_rect().bottom();
+            self.message(ui.ctx());
         } else {
             self.type_to_search(ui.ctx());
             self.nav(ui);
@@ -551,12 +666,16 @@ impl eframe::App for App {
                 self.notice(ui.ctx());
             } else if !self.settings.tour_seen {
                 self.tour(ui.ctx());
+            } else if self.whats_new.is_some() {
+                self.whats_new_sheet(ui.ctx());
             } else if self.help_open {
                 self.help(ui.ctx());
             } else if self.settings_open {
                 self.settings_sheet(ui.ctx());
             } else if self.support_open {
                 self.support_sheet(ui.ctx());
+            } else if self.share_open {
+                self.share_sheet(ui.ctx());
             }
         }
         self.pictures.end_frame();
@@ -568,16 +687,16 @@ impl eframe::App for App {
 
 impl App {
     fn nav(&mut self, ui: &mut Ui) {
-        const WIDTH: f32 = 92.0;
+        const WIDTH: f32 = 72.0;
         let mut update = false;
         let mut look = None;
-        let frame = egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 2, top: 10, bottom: 10 });
+        let frame = egui::Frame::new().inner_margin(egui::Margin { left: 8, right: 0, top: 8, bottom: 8 });
         egui::Panel::left("nav").exact_size(WIDTH).resizable(false).show_separator_line(false).frame(frame).show(ui, |ui| {
             theme::paint_glass(ui.painter(), ui.max_rect(), theme::GLASS_ROUND);
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.vertical_centered(|ui| {
-                ui.add_space(12.0);
-                let (mark, _) = ui.allocate_exact_size(vec2(34.0, 36.0), Sense::hover());
+                ui.add_space(10.0);
+                let (mark, _) = ui.allocate_exact_size(vec2(26.0, 28.0), Sense::hover());
                 crate::logo::paint(ui.painter(), mark);
                 ui.add_space(10.0);
                 let picks = self.loadout.len();
@@ -604,14 +723,25 @@ impl App {
                 if let Some(updater) = &self.updater
                     && let Some(offer) = updater.offer()
                 {
-                    let (label, waiting) = match (updater.is_installed(), updater.is_fetching()) {
-                        (true, _) => ("Updated", false),
-                        (false, true) => ("Updating…", false),
-                        (false, false) => ("Update", true),
+                    let coming = updater.is_fetching() || updater.is_installed();
+                    let come = updater.progress();
+                    let label = match (updater.is_installed(), coming, come) {
+                        (true, _, _) => "Updated".to_string(),
+                        (false, true, Some(come)) => format!("{}%", (come * 100.0).floor() as u32),
+                        (false, true, None) => "Updating…".to_string(),
+                        (false, false, _) => "Update".to_string(),
                     };
-                    let hint = format!("Version {} of this app is out. One click downloads it and starts the app again. Your picks stay as they are.", offer.version);
-                    let button = ui.add_enabled_ui(waiting, |ui| nav_button(ui, Icon::Update, label, true, 0)).inner;
-                    update = button.on_hover_text(hint).clicked() && waiting;
+                    let button = if coming {
+                        let time = ui.input(|input| input.time);
+                        nav_button_drawn(ui, &label, true, 0, |painter, room, color| views::icons::paint_coming(painter, room, come, color, time))
+                    } else {
+                        nav_button(ui, Icon::Update, &label, true, 0)
+                    };
+                    let hint = match coming {
+                        true => format!("Version {} of this app is on its way. The app starts again by itself when it is done. Your picks stay as they are.", offer.version),
+                        false => format!("Version {} of this app is out. One click downloads it and starts the app again. Your picks stay as they are.", offer.version),
+                    };
+                    update = button.on_hover_text(hint).clicked() && !coming;
                 }
             });
         });
@@ -633,7 +763,7 @@ impl App {
                 if play_button(ui, facts.play_label(), facts.can_play()).clicked() {
                     self.play();
                 }
-                let switch = egui::Button::new(facts.switch_label()).min_size(vec2(0.0, 44.0));
+                let switch = egui::Button::new(facts.switch_label()).min_size(vec2(0.0, 40.0));
                 let hint = match facts.brings_back() {
                     true => "Pick again what you had picked before going back to normal Dota. Play puts it in the game.",
                     false => "Take every change out of the game's files and put your picks away. They are kept, to be brought back.",
@@ -654,9 +784,10 @@ impl App {
 
     fn message(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|input| input.time);
-        let Some(banner) = &mut self.banner else { return };
+        let Some(banner) = &mut self.banner else { return self.coming(ctx) };
         let since = *banner.since.get_or_insert(now);
-        let (mut close, mut undo, mut update) = (false, false, false);
+        let (mut close, mut undo, mut update, mut reported) = (false, false, false, false);
+        let (mut copied, mut report_at) = (None, None);
         if let Some(stays) = banner.stays() {
             close = now - since > stays;
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -664,15 +795,9 @@ impl App {
         let banner = &*banner;
         let room = ctx.content_rect();
         let width = (room.width() - 140.0).clamp(240.0, 460.0);
-        let frame = egui::Frame::new()
-            .fill(theme::panel())
-            .stroke(egui::Stroke::new(1.0, theme::line()))
-            .corner_radius(CornerRadius::same(theme::GLASS_ROUND - 2))
-            .shadow(egui::Shadow { offset: [0, 8], blur: 26, spread: 0, color: Color32::from_black_alpha(if theme::is_day() { 40 } else { 110 }) })
-            .inner_margin(egui::Margin::symmetric(14, 12));
         let above_the_bar = -(room.bottom() - self.footer_top + 10.0);
         egui::Area::new(egui::Id::unique("message")).anchor(egui::Align2::RIGHT_BOTTOM, vec2(-16.0, above_the_bar)).order(egui::Order::Foreground).show(ctx, |ui| {
-            frame.show(ui, |ui| {
+            message_frame().show(ui, |ui| {
                 ui.set_width(width);
                 let color = match banner.tone {
                     Tone::Plain => theme::text(),
@@ -689,15 +814,26 @@ impl App {
                     close |= ui.button(if banner.update { "Later" } else { "Close" }).clicked();
                     update = banner.update && ui.button("Update").on_hover_text("Download the new version and start the app again").clicked();
                     undo = banner.undo.is_some() && ui.button("Undo").on_hover_text("Put those picks back").clicked();
-                    if let Some(details) = &banner.details
-                        && ui.button("Copy details").on_hover_text("Copy what happened, to send to whoever helps you").clicked()
-                    {
-                        ui.ctx().copy_text(details.clone());
+                    if let Some(details) = &banner.details {
+                        if ui.button("Copy details").on_hover_text(COPY_HINT).clicked() {
+                            copied = Some(report::without_the_profile(details));
+                        }
+                        if ui.button("Report").on_hover_text(REPORT_HINT).clicked() {
+                            report_at = Some(report::address(&report::title_of(&banner.text), Some(details)));
+                        }
                     }
                 });
             });
         });
-        if undo {
+        if let Some(text) = copied {
+            self.copy(ctx, &text);
+        }
+        if let Some(address) = report_at {
+            reported = self.open_page(&address);
+        }
+        if reported {
+            self.banner = None;
+        } else if undo {
             if let Some(before) = self.banner.take().and_then(|banner| banner.undo) {
                 self.loadout = before;
                 self.saved = self.loadout.clone();
@@ -708,6 +844,38 @@ impl App {
         } else if close {
             self.banner = None;
         }
+    }
+
+    fn coming(&self, ctx: &egui::Context) {
+        let Some(updater) = self.updater.as_ref().filter(|updater| updater.is_fetching() || updater.is_installed()) else { return };
+        let version = updater.offer().map(|offer| offer.version.as_str()).unwrap_or_default();
+        let come = updater.progress();
+        let what = match (updater.is_installed(), come) {
+            (true, _) => format!("Starting version {version}…"),
+            (false, Some(come)) if come >= 1.0 => format!("Putting version {version} in place…"),
+            (false, _) => format!("Downloading version {version}…"),
+        };
+        let now = ctx.input(|input| input.time);
+        if come.is_none() {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+        let room = ctx.content_rect();
+        let width = (room.width() - 140.0).clamp(240.0, 400.0);
+        let above_the_bar = -(room.bottom() - self.footer_top + 10.0);
+        egui::Area::new(egui::Id::unique("coming")).anchor(egui::Align2::RIGHT_BOTTOM, vec2(-16.0, above_the_bar)).order(egui::Order::Foreground).show(ctx, |ui| {
+            message_frame().show(ui, |ui| {
+                ui.set_width(width);
+                ui.horizontal(|ui| {
+                    let (ring, _) = ui.allocate_exact_size(vec2(52.0, 52.0), Sense::hover());
+                    views::icons::paint_coming(ui.painter(), ring, come, theme::accent_text(), now);
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(what).strong());
+                        ui.label(dim("The app starts again by itself when it is done. Your picks stay as they are.").small());
+                    });
+                });
+            });
+        });
     }
 
     fn content(&mut self, ui: &mut Ui) {
@@ -725,6 +893,13 @@ impl App {
                     self.use_preset(&catalog, place);
                 } else if let Some(place) = answer.forget_preset {
                     self.forget_preset(place);
+                } else if answer.share {
+                    let picks = self.loadout.picks().to_vec();
+                    self.share(ui.ctx(), None, &picks, format!("your {}", picks_in_words(picks.len())));
+                } else if let Some(preset) = answer.share_preset.and_then(|place| self.presets.get(place)).cloned() {
+                    self.share(ui.ctx(), Some(&preset.name), &preset.picks, format!("the preset \"{}\"", preset.name));
+                } else if answer.take_code {
+                    self.share_open = true;
                 }
                 if let Some(open) = answer.open {
                     self.go(open);
@@ -743,6 +918,7 @@ impl App {
     }
 
     fn loading(&mut self, ui: &mut Ui) {
+        let (mut copy_details, mut report) = (false, false);
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.3);
             let Some(failure) = &self.load_failure else {
@@ -757,9 +933,8 @@ impl App {
             let again = ui.add(primary("Try again")).clicked();
             ui.add_space(16.0);
             ui.label(dim(&failure.sentence).small());
-            if ui.button("Copy details").clicked() {
-                ui.ctx().copy_text(failure.details.clone());
-            }
+            copy_details = ui.button("Copy details").on_hover_text(COPY_HINT).clicked();
+            report = ui.button("Report this problem").on_hover_text(REPORT_HINT).clicked();
             if again {
                 self.load_failure = None;
                 if let Some(worker) = &self.worker {
@@ -767,10 +942,34 @@ impl App {
                 }
             }
         });
+        let Some(details) = self.load_failure.as_ref().map(|failure| failure.details.clone()).filter(|_| copy_details || report) else { return };
+        if copy_details {
+            self.copy(ui.ctx(), &report::without_the_profile(&details));
+        }
+        if report {
+            self.open_page(&report::address("The game's files could not be read", Some(&details)));
+        }
+    }
+
+    fn copy(&self, ctx: &egui::Context, text: &str) {
+        match self.options.screenshot {
+            Some(_) => {
+                let _ = std::fs::write(self.data_dir.join("copied.txt"), text);
+            }
+            None => ctx.copy_text(text.to_string()),
+        }
+    }
+
+    fn open_page(&self, address: &str) -> bool {
+        match self.options.screenshot {
+            Some(_) => std::fs::write(self.data_dir.join("opened.txt"), address).is_ok(),
+            None => support::open(address),
+        }
     }
 
     fn hero_page(&mut self, ui: &mut Ui, catalog: &Catalog, hero: &Hero) {
         let hero_id = Some(hero.id.as_str());
+        let mut share_hero = false;
         ui.horizontal(|ui| {
             if ui.button("<  All heroes").clicked() {
                 self.hero = None;
@@ -791,8 +990,15 @@ impl App {
                     self.loadout.clear_owner(hero_id);
                     self.picks_changed = true;
                 }
+                let share = ui.add_enabled(any, egui::Button::new("Share"));
+                share_hero = share.on_hover_text(views::picks::SHARE_HINT).on_disabled_hover_text("Pick something for this hero first").clicked();
             });
         });
+        if share_hero {
+            let picks: Vec<Pick> = self.loadout.of(hero_id).cloned().collect();
+            let what = format!("{}'s {}", hero.name, picks_in_words(picks.len()));
+            self.share(ui.ctx(), Some(&hero.name), &picks, what);
+        }
         ui.add_space(8.0);
         let page = Page {
             hero: Some(hero),
@@ -905,34 +1111,50 @@ fn said(ui: &mut Ui, facts: &Facts) {
     }
 }
 
+fn message_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(theme::panel())
+        .stroke(egui::Stroke::new(1.0, theme::line()))
+        .corner_radius(CornerRadius::same(theme::GLASS_ROUND - 2))
+        .shadow(egui::Shadow { offset: [0, 8], blur: 26, spread: 0, color: Color32::from_black_alpha(if theme::is_day() { 40 } else { 110 }) })
+        .inner_margin(egui::Margin::symmetric(14, 12))
+}
+
 fn primary(text: &str) -> egui::Button<'static> {
     let label = theme::title(text.to_string(), 16.0).color(Color32::WHITE);
-    egui::Button::new(label).fill(theme::accent()).min_size(vec2(150.0, 38.0))
+    egui::Button::new(label).fill(theme::calm()).min_size(vec2(150.0, 38.0))
 }
 
 fn nav_button(ui: &mut Ui, icon: Icon, name: &str, open: bool, count: usize) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(72.0, 56.0), Sense::click());
+    nav_button_drawn(ui, name, open, count, |painter, room, color| views::icons::paint(painter, icon, room, color))
+}
+
+fn nav_button_drawn(ui: &mut Ui, name: &str, open: bool, count: usize, draw: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(56.0, 46.0), Sense::click());
     if ui.is_rect_visible(rect) {
         let lit = ui.ctx().animate_bool_with_time(response.id.with("lit"), response.hovered() || open, 0.12);
         let enabled = ui.is_enabled();
         let color = match (open && enabled, enabled) {
-            (true, _) => theme::accent_text(),
+            (true, _) => theme::text(),
             (false, true) => theme::text_dim().lerp_to_gamma(theme::text(), lit),
             (false, false) => theme::text_dim().gamma_multiply(0.6),
         };
         let painter = ui.painter();
+        let plate = rect.shrink2(vec2(1.0, 1.0));
         if open && enabled {
-            painter.rect_filled(rect.shrink2(vec2(3.0, 1.0)), CornerRadius::same(12), theme::accent().gamma_multiply(if theme::is_day() { 0.16 } else { 0.20 }));
+            painter.rect_filled(plate, CornerRadius::same(10), theme::text().gamma_multiply(if theme::is_day() { 0.07 } else { 0.09 }));
+            let mark = Rect::from_center_size(pos2(rect.left() - 3.0, rect.center().y), vec2(3.0, 16.0));
+            painter.rect_filled(mark, CornerRadius::same(2), theme::calm());
         } else if lit > 0.0 {
-            painter.rect_filled(rect.shrink2(vec2(3.0, 1.0)), CornerRadius::same(12), theme::text().gamma_multiply(0.07 * lit));
+            painter.rect_filled(plate, CornerRadius::same(10), theme::text().gamma_multiply(0.05 * lit));
         }
-        let drawing = Rect::from_center_size(pos2(rect.center().x, rect.top() + 20.0), vec2(23.0, 23.0));
-        views::icons::paint(painter, icon, drawing, color);
-        painter.text(pos2(rect.center().x, rect.bottom() - 13.0), egui::Align2::CENTER_CENTER, name, FontId::proportional(11.0), color);
+        let drawing = Rect::from_center_size(pos2(rect.center().x, rect.top() + 17.0), vec2(18.0, 18.0));
+        draw(painter, drawing, color);
+        painter.text(pos2(rect.center().x, rect.bottom() - 10.0), egui::Align2::CENTER_CENTER, name, FontId::proportional(10.0), color);
         if count > 0 {
-            let number = painter.layout_no_wrap(count.to_string(), theme::heavy(10.0), Color32::WHITE);
-            let plate = Rect::from_center_size(pos2(drawing.right() + 5.0, drawing.top() + 2.0), vec2((number.size().x + 9.0).max(17.0), 17.0));
-            painter.rect_filled(plate, CornerRadius::same(9), theme::accent());
+            let number = painter.layout_no_wrap(count.to_string(), theme::heavy(9.0), Color32::WHITE);
+            let plate = Rect::from_center_size(pos2(drawing.right() + 4.0, drawing.top() + 1.0), vec2((number.size().x + 8.0).max(15.0), 15.0));
+            painter.rect_filled(plate, CornerRadius::same(8), theme::calm());
             painter.galley(plate.center() - number.size() / 2.0, number, Color32::WHITE);
         }
     }
@@ -941,7 +1163,7 @@ fn nav_button(ui: &mut Ui, icon: Icon, name: &str, open: bool, count: usize) -> 
 
 fn play_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(vec2(176.0, 46.0), sense);
+    let (rect, response) = ui.allocate_exact_size(vec2(160.0, 42.0), sense);
     if ui.is_rect_visible(rect) {
         let lit = ui.ctx().animate_bool_with_time(response.id.with("lit"), enabled && response.hovered(), 0.12);
         let painter = ui.painter();
@@ -949,16 +1171,16 @@ fn play_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
         let strength = if enabled { 1.0 } else { 0.45 };
         if enabled {
             for step in 1..=3_u8 {
-                let grown = rect.expand(f32::from(step) * 2.0).translate(vec2(0.0, 3.0));
-                painter.rect_filled(grown, CornerRadius::same(12 + step * 2), theme::accent().gamma_multiply(0.10 + 0.05 * lit));
+                let grown = rect.expand(f32::from(step) * 1.5).translate(vec2(0.0, 2.0));
+                painter.rect_filled(grown, CornerRadius::same(12 + step), Color32::from_black_alpha(if theme::is_day() { 10 } else { 22 } / step));
             }
         }
-        painter.rect_filled(rect, round, theme::accent().gamma_multiply(strength));
+        painter.rect_filled(rect, round, theme::calm().gamma_multiply(strength));
         let top = Rect::from_min_max(rect.min, pos2(rect.right(), rect.center().y));
-        painter.rect_filled(top, CornerRadius { nw: 12, ne: 12, sw: 0, se: 0 }, Color32::from_white_alpha((22.0 + 16.0 * lit) as u8).gamma_multiply(strength));
-        painter.rect_stroke(rect, round, egui::Stroke::new(1.0, Color32::from_white_alpha(46).gamma_multiply(strength)), egui::StrokeKind::Inside);
+        painter.rect_filled(top, CornerRadius { nw: 12, ne: 12, sw: 0, se: 0 }, Color32::from_white_alpha((16.0 + 14.0 * lit) as u8).gamma_multiply(strength));
+        painter.rect_stroke(rect, round, egui::Stroke::new(1.0, Color32::from_white_alpha(40).gamma_multiply(strength)), egui::StrokeKind::Inside);
         let ink = Color32::WHITE.gamma_multiply(if enabled { 1.0 } else { 0.7 });
-        painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, theme::heavy(18.0), ink);
+        painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, theme::heavy(16.5), ink);
     }
     if enabled { response.on_hover_cursor(CursorIcon::PointingHand) } else { response }
 }
@@ -969,6 +1191,51 @@ fn tone_color(tone: Tone) -> Color32 {
         Tone::Good => theme::good(),
         Tone::Warn => theme::warn(),
     }
+}
+
+fn tidies(in_use: bool, tried: bool, busy: bool, may_write: bool) -> bool {
+    !in_use && !tried && !busy && may_write
+}
+
+fn picks_in_words(count: usize) -> String {
+    match count {
+        1 => "1 pick".to_string(),
+        many => format!("{many} picks"),
+    }
+}
+
+fn items_in_words(count: usize) -> String {
+    match count {
+        1 => "one item".to_string(),
+        many => format!("{many} items"),
+    }
+}
+
+fn taken_in_words(picked: usize, left_out: usize, were_away: usize) -> String {
+    let picked = match picked {
+        1 => "The code's pick is picked".to_string(),
+        many => format!("The code's {many} picks are picked"),
+    };
+    let without = match left_out {
+        0 => String::new(),
+        gone => format!(", without {} that your game does not have", items_in_words(gone)),
+    };
+    let rest = match were_away {
+        0 => "Your other picks stay as they were.",
+        1 => "The pick you had put away is gone.",
+        _ => "The picks you had put away are gone.",
+    };
+    format!("{picked}{without}. {rest}")
+}
+
+fn version_before(updated_from: Option<&str>, settings: &Settings, picture_only: bool) -> Option<String> {
+    if let Some(before) = updated_from {
+        return Some(before.to_string());
+    }
+    if picture_only || !settings.notice_accepted {
+        return None;
+    }
+    Some(settings.seen_version.clone().unwrap_or_default())
 }
 
 fn taken_off(before: &Loadout, after: &Loadout) -> Option<usize> {
@@ -1001,5 +1268,35 @@ mod tests {
         assert_eq!(taken_off(&before, &restyled), None);
 
         assert_eq!(taken_off(&Loadout::default(), &before), None, "picks were added");
+    }
+
+    #[test]
+    fn a_half_undone_game_is_put_right_once_and_never_while_dota_runs() {
+        assert!(tidies(false, false, false, true));
+        assert!(!tidies(true, false, false, true), "nothing is written while Dota runs, or while Steam puts an update in place");
+        assert!(!tidies(false, true, false, true), "once, until the game is found otherwise");
+        assert!(!tidies(false, false, true, true), "not in the middle of Play or of going back");
+        assert!(!tidies(false, false, false, false), "a test window leaves the real game alone");
+    }
+
+    #[test]
+    fn what_became_of_the_other_picks_is_said_once_a_codes_picks_are_picked() {
+        assert_eq!(taken_in_words(1, 0, 0), "The code's pick is picked. Your other picks stay as they were.");
+        assert_eq!(taken_in_words(3, 0, 0), "The code's 3 picks are picked. Your other picks stay as they were.");
+        assert_eq!(taken_in_words(3, 1, 0), "The code's 3 picks are picked, without one item that your game does not have. Your other picks stay as they were.");
+        assert_eq!(taken_in_words(3, 2, 5), "The code's 3 picks are picked, without 2 items that your game does not have. The picks you had put away are gone.");
+        assert_eq!(taken_in_words(1, 0, 1), "The code's pick is picked. The pick you had put away is gone.");
+    }
+
+    #[test]
+    fn what_is_new_is_said_since_the_version_the_player_had_before() {
+        let used = Settings { notice_accepted: true, tour_seen: true, ..Settings::default() };
+        assert_eq!(version_before(Some("0.2.2"), &used, false).as_deref(), Some("0.2.2"));
+        assert_eq!(version_before(Some("0.2.2"), &used, true).as_deref(), Some("0.2.2"), "a picture of it can be taken");
+        let seen = Settings { seen_version: Some("0.2.3".to_string()), ..used.clone() };
+        assert_eq!(version_before(None, &seen, false).as_deref(), Some("0.2.3"));
+        assert_eq!(version_before(None, &used, false).as_deref(), Some(""));
+        assert_eq!(version_before(None, &Settings::default(), false), None);
+        assert_eq!(version_before(None, &used, true), None);
     }
 }

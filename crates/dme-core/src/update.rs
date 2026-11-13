@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
+use crate::fsutil;
 
 pub const MANIFEST_URL: &str = "https://github.com/elangrr/Dota2ModEnjoyer/releases/latest/download/update.json";
 
@@ -57,12 +58,7 @@ impl Manifest {
     }
 
     pub fn is_newer_than(&self, version: &str) -> bool {
-        let padded = |version: &str| {
-            let mut read = numbers(version).unwrap_or_default();
-            read.resize(read.len().max(4), 0);
-            read
-        };
-        padded(&self.version) > padded(version)
+        is_newer(&self.version, version)
     }
 
     pub fn check_file(&self, file: &[u8]) -> Result<()> {
@@ -107,6 +103,18 @@ pub fn may_fetch(address: &str, testing: bool) -> bool {
 
 pub fn is_at(address: &str, kind: &str) -> bool {
     address.get(..kind.len()).is_some_and(|start| start.eq_ignore_ascii_case(kind))
+}
+
+pub fn is_newer(version: &str, than: &str) -> bool {
+    let (mut one, mut other) = (numbers(version).unwrap_or_default(), numbers(than).unwrap_or_default());
+    let length = one.len().max(other.len());
+    one.resize(length, 0);
+    other.resize(length, 0);
+    one > other
+}
+
+pub fn is_version(text: &str) -> bool {
+    numbers(text).is_some()
 }
 
 fn numbers(version: &str) -> Option<Vec<u64>> {
@@ -179,10 +187,10 @@ pub fn install(app: &Path, new: &[u8]) -> Result<()> {
     if let Err(error) = make_room(app) {
         return give_up("delete", &outgoing, error);
     }
-    if let Err(error) = fs::rename(app, &outgoing) {
+    if let Err(error) = fsutil::patiently(|| fs::rename(app, &outgoing)) {
         return give_up("move aside", app, error);
     }
-    if let Err(error) = fs::rename(&incoming, app) {
+    if let Err(error) = fsutil::patiently(|| fs::rename(&incoming, app)) {
         let _ = fs::rename(&outgoing, app);
         return give_up("replace", app, error);
     }
@@ -264,9 +272,12 @@ mod tests {
         assert!(offers("v0.2.0", "0.1.9"));
         assert!(!offers("0.1.0", "0.1.0"), "the same version is no news");
         assert!(!offers("0.1", "0.1.0") && !offers("0.1.0", "0.1"));
+        assert!(!offers("0.2.2.0.0", "0.2.2") && !offers("0.2.2", "0.2.2.0.0"), "however many numbers are missing");
         assert!(!offers("0.1.0", "0.2.0"), "an older one is not put in the place of a newer one");
         assert!(offers("0.0.1", "what is this"), "a version that cannot be read is older than any");
         assert_eq!(numbers(" v1.20.3 "), Some(vec![1, 20, 3]));
+        assert!(is_newer("0.2.3", "0.2.2") && !is_newer("0.2.2", "0.2.3") && !is_newer("0.2.3", "0.2.3"));
+        assert!(is_version("0.2.3") && is_version("v1") && !is_version("") && !is_version("0.2.x"));
     }
 
     #[test]

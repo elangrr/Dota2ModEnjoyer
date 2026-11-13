@@ -116,6 +116,10 @@ pub const fn accent() -> Color32 {
     Color32::from_rgb(0xe5, 0x5a, 0x34)
 }
 
+pub const fn calm() -> Color32 {
+    Color32::from_rgb(0xc4, 0x69, 0x4a)
+}
+
 pub const fn well() -> Color32 {
     Color32::from_rgb(0x12, 0x14, 0x18)
 }
@@ -197,12 +201,39 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     });
 }
 
-pub fn paint_backdrop(painter: &egui::Painter, room: Rect) {
-    painter.rect_filled(room, CornerRadius::ZERO, background());
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backdrop {
+    Own,
+    SeeThrough,
+    StandIn,
+}
+
+fn veil() -> Color32 {
+    if is_day() { Color32::from_rgba_unmultiplied(0xee, 0xf0, 0xf4, 60) } else { Color32::from_rgba_unmultiplied(0x0e, 0x10, 0x14, 70) }
+}
+
+pub fn paint_backdrop(painter: &egui::Painter, room: Rect, backdrop: Backdrop) {
+    if backdrop == Backdrop::StandIn {
+        paint_stand_in(painter, room);
+    }
+    painter.rect_filled(room, CornerRadius::ZERO, if backdrop == Backdrop::Own { background() } else { veil() });
     let reach = room.width().max(room.height());
     let (warm, cool) = if is_day() { (0.13, 0.12) } else { (0.20, 0.09) };
-    glow(painter, room.left_top() + vec2(room.width() * 0.10, room.height() * 0.06), reach * 0.42, accent().gamma_multiply(warm));
-    glow(painter, room.right_bottom() - vec2(room.width() * 0.06, room.height() * 0.02), reach * 0.46, Color32::from_rgb(0x78, 0x8c, 0xbe).gamma_multiply(cool));
+    let quieter = if backdrop == Backdrop::Own { 1.0 } else { 0.5 };
+    glow(painter, room.left_top() + vec2(room.width() * 0.10, room.height() * 0.06), reach * 0.42, accent().gamma_multiply(warm * quieter));
+    glow(painter, room.right_bottom() - vec2(room.width() * 0.06, room.height() * 0.02), reach * 0.46, Color32::from_rgb(0x78, 0x8c, 0xbe).gamma_multiply(cool * quieter));
+}
+
+fn paint_stand_in(painter: &egui::Painter, room: Rect) {
+    painter.rect_filled(room, CornerRadius::ZERO, Color32::from_rgb(0x1c, 0x2a, 0x4a));
+    let reach = room.width().max(room.height());
+    let at = |x: f32, y: f32| room.left_top() + vec2(room.width() * x, room.height() * y);
+    glow(painter, at(0.78, 0.18), reach * 0.55, Color32::from_rgb(0x2b, 0x9c, 0xa8));
+    glow(painter, at(0.18, 0.86), reach * 0.60, Color32::from_rgb(0x6c, 0x4a, 0xc4));
+    glow(painter, at(0.92, 0.92), reach * 0.40, Color32::from_rgb(0xd0, 0x86, 0x48));
+    glow(painter, at(0.40, 0.30), reach * 0.45, Color32::from_rgb(0x3a, 0x5c, 0xb0));
+    let windows_veil = if is_day() { Color32::from_rgba_unmultiplied(0xf3, 0xf3, 0xf3, 150) } else { Color32::from_rgba_unmultiplied(0x20, 0x20, 0x24, 150) };
+    painter.rect_filled(room, CornerRadius::ZERO, windows_veil);
 }
 
 fn glow(painter: &egui::Painter, middle: Pos2, reach: f32, color: Color32) {
@@ -235,15 +266,17 @@ pub fn paint_glass(painter: &egui::Painter, rect: Rect, round: u8) {
     let day = is_day();
     for step in 1..=4_u8 {
         let grown = rect.expand(f32::from(step) * 2.0).translate(vec2(0.0, f32::from(step) * 1.5));
-        let shade = Color32::from_black_alpha(if day { 7 } else { 16 } / step);
+        let shade = Color32::from_black_alpha(if day { 6 } else { 14 } / step);
         painter.rect_filled(grown, CornerRadius::same(round.saturating_add(step * 2)), shade);
     }
-    let fill = if day { Color32::from_white_alpha(170) } else { Color32::from_white_alpha(13) };
+    let fill = if day { Color32::from_white_alpha(140) } else { Color32::from_white_alpha(14) };
     painter.rect_filled(rect, corners, fill);
-    let edge = if day { Color32::from_white_alpha(235) } else { Color32::from_white_alpha(28) };
-    painter.rect_stroke(rect, corners, Stroke::new(1.0, edge), StrokeKind::Inside);
+    let upper = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + rect.height().min(160.0) / 2.0));
+    painter.rect_filled(upper, CornerRadius { nw: round, ne: round, sw: 0, se: 0 }, Color32::from_white_alpha(if day { 40 } else { 5 }));
+    let rim = if day { Color32::from_white_alpha(210) } else { Color32::from_white_alpha(24) };
+    painter.rect_stroke(rect, corners, Stroke::new(1.0, rim), StrokeKind::Inside);
     let inset = f32::from(round) * 0.8;
-    let light = if day { Color32::WHITE } else { Color32::from_white_alpha(46) };
+    let light = if day { Color32::WHITE } else { Color32::from_white_alpha(58) };
     painter.line_segment([pos2(rect.left() + inset, rect.top() + 0.5), pos2(rect.right() - inset, rect.top() + 0.5)], Stroke::new(1.0, light));
 }
 
@@ -283,5 +316,7 @@ mod tests {
             }
             assert!(contrast(look.warn, look.card) >= 3.5 && contrast(look.good, look.card) >= 3.5);
         }
+        assert!(contrast(Color32::WHITE, calm()) >= 3.5);
+        assert!(contrast(Color32::WHITE, calm()) > contrast(Color32::WHITE, accent()), "the calm colour reads no worse than the loud one");
     }
 }

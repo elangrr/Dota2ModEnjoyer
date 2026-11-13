@@ -154,7 +154,7 @@ fn load_pictures(shared: &Shared, read: &Sender<(String, Option<egui::ColorImage
             }
         };
         let archive = shared.archive.lock().unwrap().clone();
-        let image = archive.and_then(|archive| read_picture(&archive, &path));
+        let image = archive.and_then(|archive| std::panic::catch_unwind(|| read_picture(&archive, &path)).ok().flatten());
         if read.send((path, image)).is_err() {
             return;
         }

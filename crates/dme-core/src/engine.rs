@@ -16,7 +16,7 @@ use crate::{effects, fsutil, gameinfo, map_effect, process, trees};
 
 pub const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
-const REWRITE_RULES: u32 = 7;
+const REWRITE_RULES: u32 = 8;
 
 const BRANCH_FILE: &str = "gameinfo_branchspecific.gi";
 const VERIFY_HINT: &str =
@@ -52,6 +52,15 @@ pub enum ModState {
     ChangedByOther(String),
 }
 
+pub const UNDECLARED: &str = "dota.signatures does not declare the edited file (a Dota update resets it)";
+pub const LEFTOVER: &str = "dota.signatures has a leftover line";
+
+impl ModState {
+    pub fn is_half_undone(&self) -> bool {
+        matches!(self, ModState::NeedsRepair(why) if why == UNDECLARED || why == LEFTOVER)
+    }
+}
+
 #[derive(Debug)]
 pub struct Status {
     pub version: GameVersion,
@@ -60,6 +69,7 @@ pub struct Status {
     pub picks: Vec<Pick>,
     pub effects_for: EffectsFor,
     pub package_is_current: bool,
+    pub steam_busy: bool,
 }
 
 #[derive(Debug)]
@@ -193,6 +203,7 @@ impl Engine {
 
         self.check_not_running()?;
         self.back_up_originals(&files)?;
+        self.forget_applied()?;
         fsutil::create_dir_all(&self.dota.mod_dir())?;
         fsutil::write_atomic(&self.dota.mod_package(), &package)?;
         fsutil::write_atomic(&self.dota.signatures(), new_signatures.as_bytes())?;
@@ -234,12 +245,7 @@ impl Engine {
             }
         }
         done.package_removed = fsutil::remove_dir_all_if_exists(&self.dota.mod_dir())?;
-        match std::fs::remove_file(self.state_file()) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                return Err(Error::io("delete", &self.state_file(), e));
-            }
-            _ => {}
-        }
+        self.forget_applied()?;
         Ok(done)
     }
 
@@ -251,14 +257,14 @@ impl Engine {
             ModState::ChangedByOther(format!("{BRANCH_FILE} is not the file Valve shipped"))
         } else if files.has_our_lines {
             if !files.extra_line_matches_branch {
-                ModState::NeedsRepair("dota.signatures does not declare the edited file (a Dota update resets it)".into())
+                ModState::NeedsRepair(UNDECLARED.into())
             } else if !package {
                 ModState::NeedsRepair("the mod package is missing".into())
             } else {
                 ModState::On
             }
         } else if files.has_extra_lines {
-            ModState::NeedsRepair("dota.signatures has a leftover line".into())
+            ModState::NeedsRepair(LEFTOVER.into())
         } else if package {
             ModState::NeedsRepair("the mod package is there but the game is not set up to load it".into())
         } else {
@@ -271,6 +277,7 @@ impl Engine {
             package_is_current: saved.game_build == version.build && saved.rewrite_rules == REWRITE_RULES,
             version,
             running: process::is_dota_running(),
+            steam_busy: self.dota.steam_is_busy(),
             state,
             picks: saved.picks,
             effects_for: saved.effects_for,
@@ -327,6 +334,13 @@ impl Engine {
         fsutil::create_dir_all(&self.data_dir)?;
         let json = serde_json::to_vec_pretty(saved).expect("the saved state is plain data");
         fsutil::write_atomic(&self.state_file(), &json)
+    }
+
+    fn forget_applied(&self) -> Result<()> {
+        match std::fs::remove_file(self.state_file()) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Error::io("delete", &self.state_file(), e)),
+            _ => Ok(()),
+        }
     }
 
     fn load(&self) -> Saved {
@@ -661,17 +675,31 @@ mod tests {
         fake.engine.apply(&picks()).unwrap();
 
         std::fs::write(fake.engine.dota.signatures(), &fake.signatures).unwrap();
-        assert!(matches!(state(&fake), ModState::NeedsRepair(_)));
+        assert!(state(&fake).is_half_undone());
         fake.engine.apply(&picks()).unwrap();
         assert_eq!(state(&fake), ModState::On);
 
+        let (signatures, ours) = (read(fake.engine.dota.signatures()), read(fake.engine.dota.gameinfo_branch()));
         std::fs::write(fake.engine.dota.gameinfo_branch(), BRANCH_TEXT).unwrap();
-        assert!(matches!(state(&fake), ModState::NeedsRepair(_)));
+        assert!(state(&fake).is_half_undone());
         fake.engine.apply(&picks()).unwrap();
         assert_eq!(state(&fake), ModState::On);
 
         std::fs::remove_file(fake.engine.dota.mod_package()).unwrap();
-        assert!(matches!(state(&fake), ModState::NeedsRepair(_)));
+        assert!(matches!(state(&fake), ModState::NeedsRepair(_)) && !state(&fake).is_half_undone());
+        assert!(!ModState::On.is_half_undone() && !ModState::Off.is_half_undone());
+
+        fake.engine.apply(&picks()).unwrap();
+        std::fs::write(fake.engine.dota.signatures(), &fake.signatures).unwrap();
+        fake.engine.restore().unwrap();
+        assert_eq!(state(&fake), ModState::Off);
+        assert_eq!((read(fake.engine.dota.signatures()), read(fake.engine.dota.gameinfo_branch())), (fake.signatures.clone(), BRANCH_TEXT.to_string()));
+        fake.engine.apply(&picks()).unwrap();
+        assert_eq!((read(fake.engine.dota.signatures()), read(fake.engine.dota.gameinfo_branch())), (signatures, ours));
+        std::fs::write(fake.engine.dota.gameinfo_branch(), BRANCH_TEXT).unwrap();
+        fake.engine.restore().unwrap();
+        assert_eq!(state(&fake), ModState::Off);
+        assert_eq!((read(fake.engine.dota.signatures()), read(fake.engine.dota.gameinfo_branch())), (fake.signatures.clone(), BRANCH_TEXT.to_string()));
     }
 
     #[test]
@@ -848,6 +876,28 @@ mod tests {
         assert_eq!(state(&fake), ModState::Off);
         assert_eq!(read(dota.signatures()), fake.signatures);
         assert_eq!(read(dota.gameinfo_branch()), BRANCH_TEXT);
+    }
+
+    #[test]
+    fn picks_whose_writing_failed_half_way_are_not_taken_for_those_in_the_game() {
+        let fake = fake_install(&FILES);
+        let dota = &fake.engine.dota;
+        let package = || std::fs::read(dota.mod_package()).unwrap();
+        let fewer = &picks()[..2];
+        fake.engine.apply(fewer).unwrap();
+        let of_fewer = package();
+
+        let writable = std::fs::metadata(dota.signatures()).unwrap().permissions();
+        let mut read_only = writable.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(dota.signatures(), read_only).unwrap();
+        let failed = fake.engine.apply(&picks());
+        std::fs::set_permissions(dota.signatures(), writable).unwrap();
+        assert!(matches!(failed, Err(Error::Io { .. })), "{failed:?}");
+        assert_ne!(package(), of_fewer, "the package of the picks that failed is in the game");
+
+        assert!(matches!(fake.engine.make_ready(fewer, &EffectsFor::Every).unwrap(), Ready::Applied(_)));
+        assert_eq!(package(), of_fewer);
     }
 
     #[test]

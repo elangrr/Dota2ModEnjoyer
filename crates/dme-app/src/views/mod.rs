@@ -38,25 +38,25 @@ pub fn title_bar(ui: &mut Ui, title: &str, note: Option<&str>, search: Option<(&
 }
 
 pub fn theme_switch(ui: &mut Ui) -> Option<Theme> {
-    const HALF: egui::Vec2 = vec2(32.0, 26.0);
+    const HALF: egui::Vec2 = vec2(25.0, 22.0);
     let (rect, _) = ui.allocate_exact_size(vec2(HALF.x * 2.0 + 4.0, HALF.y + 4.0), Sense::hover());
     let day = theme::is_day();
-    ui.painter().rect_filled(rect, CornerRadius::same(15), theme::text().gamma_multiply(if day { 0.08 } else { 0.10 }));
+    ui.painter().rect_filled(rect, CornerRadius::same(13), theme::text().gamma_multiply(if day { 0.08 } else { 0.10 }));
     let mut asked = None;
     for (index, (look, icon, hint)) in [(Theme::Day, icons::Icon::Day, "The day look"), (Theme::Night, icons::Icon::Night, "The night look")].into_iter().enumerate() {
         let half = Rect::from_min_size(rect.min + vec2(2.0 + HALF.x * index as f32, 2.0), HALF);
         let response = ui.interact(half, egui::Id::unique("look switch").with(index), Sense::click());
         let on = (look == Theme::Day) == day;
         if on {
-            ui.painter().rect_filled(half, CornerRadius::same(13), theme::card());
-            ui.painter().rect_stroke(half, CornerRadius::same(13), Stroke::new(1.0, theme::line()), StrokeKind::Inside);
+            ui.painter().rect_filled(half, CornerRadius::same(11), theme::card());
+            ui.painter().rect_stroke(half, CornerRadius::same(11), Stroke::new(1.0, theme::line()), StrokeKind::Inside);
         }
         let color = match (on, response.hovered()) {
-            (true, _) => theme::accent_text(),
+            (true, _) => theme::text(),
             (false, true) => theme::text(),
             (false, false) => theme::text_dim(),
         };
-        icons::paint(ui.painter(), icon, Rect::from_center_size(half.center(), vec2(16.0, 16.0)), color);
+        icons::paint(ui.painter(), icon, Rect::from_center_size(half.center(), vec2(14.0, 14.0)), color);
         if response.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(hint).clicked() && !on {
             asked = Some(look);
         }

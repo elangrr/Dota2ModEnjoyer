@@ -17,6 +17,7 @@ pub mod names;
 pub mod pictures;
 pub mod process;
 pub mod resource;
+pub mod share;
 pub mod signatures;
 pub mod trees;
 pub mod update;

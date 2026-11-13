@@ -13,6 +13,7 @@ const LATEST: f64 = 120.0;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
     Click(Pos2),
+    RightClick(Pos2),
     Rest(Pos2),
     Type(String),
     Scroll(Pos2, f32),
@@ -22,8 +23,9 @@ pub enum Step {
 impl Step {
     fn input(&self) -> Vec<Vec<Event>> {
         match self {
-            Step::Click(at) => {
-                let button = |pressed| Event::PointerButton { pos: *at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            Step::Click(at) | Step::RightClick(at) => {
+                let which = if matches!(self, Step::RightClick(_)) { PointerButton::Secondary } else { PointerButton::Primary };
+                let button = |pressed| Event::PointerButton { pos: *at, button: which, pressed, modifiers: Modifiers::NONE };
                 vec![vec![Event::PointerMoved(*at)], vec![button(true)], vec![button(false)]]
             }
             Step::Rest(at) => vec![vec![Event::PointerMoved(*at)]],
@@ -43,7 +45,7 @@ impl Step {
     }
 
     fn brings_the_pointer(&self) -> bool {
-        matches!(self, Step::Click(_) | Step::Scroll(..))
+        matches!(self, Step::Click(_) | Step::RightClick(_) | Step::Scroll(..))
     }
 }
 
@@ -139,6 +141,9 @@ mod tests {
         assert!(matches!(frames[1][..], [Event::PointerButton { pos, pressed: true, button: PointerButton::Primary, .. }] if pos == at));
         assert!(matches!(frames[2][..], [Event::PointerButton { pos, pressed: false, .. }] if pos == at));
         assert!(Step::Click(at).brings_the_pointer());
+        let right = Step::RightClick(at).input();
+        assert!(matches!(right[1][..], [Event::PointerButton { pos, pressed: true, button: PointerButton::Secondary, .. }] if pos == at));
+        assert!(Step::RightClick(at).brings_the_pointer());
     }
 
     #[test]

@@ -38,8 +38,9 @@ Nothing else under the Dota folder is written. Our own files live in
 |---|---|
 | `picks.json` | What the player picked, and whether the picks are put away (3.12) |
 | `state.json` | What was last put in the game, for which game build (3.12) |
-| `settings.json` | What the app remembers about itself: that the notice was read, a Dota folder pointed out by hand, the mode for a low-end computer (3.18) |
+| `settings.json` | What the app remembers about itself: that the notice was read, a Dota folder pointed out by hand, the mode for a low-end computer (3.18), the version whose news was last shown (4.2), that the window could not be made see-through on this computer (3.13) |
 | `presets.json` | The picks a player kept under a name in the app (3.13) |
+| `crash.txt` | What made the app close, when something went wrong inside it; read and taken away at the next start (3.13) |
 | `backup\<game build>\` | The two game files as Valve shipped them |
 
 One more file is written, and only when the player asks for it: the app's own program file,
@@ -793,7 +794,8 @@ worked in.
 
 An item whose styles the game switches by itself (2.6) is always copied as written, whatever
 style a pick names, with all its styles, their rules and every block still marked for its
-style. The default item then goes through the same states the item does.
+style. The default item then goes through the same states the item does. **(confirmed in
+game)** with Profane Union in Lifestealer's back slot, which takes its rage look during Rage.
 
 **(confirmed in game)** with a style that brings a model, skin and effects of its own (the second
 style of Invoker's Dark Artistry Hair).
@@ -817,6 +819,10 @@ style of Invoker's Dark Artistry Hair).
   turn: all build.
 - Effects of events (3.16): 352 picks, every event for every kind of effect at every level: all
   build, and the game has every file they name.
+- Ability effects with the effects of events (tried since build 6974): 83 rounds, each with
+  the ability effects of one round above and one event for every kind of effect, so that every
+  pick of ability effects meets every kind: all build. Before the check of 3.14 counted what is
+  left, Tinker's Mecha Boots of Travel Mk III with any of the 85 teleports did not.
 - Gems (3.3): each of the 106 items that come with gems, 108 between them: all build.
 - Personas (3.22): 140 picks for 12 heroes, each persona in each of its styles and
   with each item for one of its slots: all build.
@@ -826,7 +832,8 @@ style of Invoker's Dark Artistry Hair).
 - Looks for the map (3.20): four items, one file of 1 to 3 KB each.
 
 A round of `try-all` holds one pick for every slot at once. Picks that are fine one at a time
-and fail together are reported as a failure of their own.
+and fail together are reported as a failure of their own. If any pick fails, `try-all` ends with
+an error, and a release stops there.
 
 ### 3.6 Enable
 
@@ -871,7 +878,16 @@ The tool decides what state the game is in from the files alone:
   and again right before the first write, since working things out takes a moment in which the
   game may have been started.
 - Work everything out in memory and check it before the first write.
-- Never write a game file in place: write a temporary file next to it, then rename.
+- Never write a game file in place: write a temporary file next to it, then rename. The
+  temporary file's name has the number of the process that writes it
+  (`dota.signatures.1234.dme-tmp`), so that two programs writing one file at once never
+  share one.
+- Where Windows refuses a write, a rename or a deletion in a way that another program holding
+  the file causes (access denied, the file in use, a part of it locked: errors 5, 32 and 33),
+  try again for up to 5 seconds. An antivirus looks at a file just written, and holds it
+  meanwhile. What still fails is told in plain words, the error as it is going in the details
+  only: "Windows did not let the app change one of Dota's files. Another program may be using
+  it, such as an antivirus or Steam. Wait a moment, then try again." A full disk is told so too.
 - Never overwrite a backup of an original with an edited file.
 
 ### 3.10 What follows from the method
@@ -1012,7 +1028,10 @@ Two files keep apart what the player wants and what is in the game.
 - `state.json` is written when a package is. It holds the picks in the package, the game build it
   was made from, the number of the rewrite rules it was made by, and which heroes got the effects
   of events. The number goes up whenever sections 3.3, 3.4 or 3.14 to 3.22 change what is written
-  for the same picks; it is 5 now. Going back to normal Dota deletes this file.
+  for the same picks; it is 8 now. The file is deleted before the first of the game's files is
+  written and written again after the last, so that a write that fails on the way leaves no
+  picks that pass for the ones in the game, and the next Play writes them all. Going back to
+  normal Dota deletes it too.
 
 A pick in `picks.json` is a slot, an item and, where they are not the plain ones, a style and
 an effect:
@@ -1058,6 +1077,22 @@ A Dota update shows as a new game build in `steam.inf`, or as `dota.signatures` 
 Valve's. Either way the next Play makes the package again from the new game files, so new and
 changed items are picked up and nothing of the old build is carried over.
 
+An update undoes half of what Play did. Steam writes Valve's new `dota.signatures` and leaves
+`gameinfo_branchspecific.gi` alone where Valve did not change it, so the edited file is no
+longer declared; or the other way round, leaving a line of ours for a file that is Valve's
+again (`ModState::is_half_undone`, `engine::UNDECLARED` and `engine::LEFTOVER`). Steam does
+it by itself, and a player who starts Dota from Steam then plays with files that Valve's own
+do not vouch for. As a match was looked for so, a player was stopped by "Valve Anti-Cheat was
+unable to verify that your machine is secure", until Steam verified the files. So the app,
+whenever it finds the game so, Dota is not running and Steam is done with Dota's files
+(`StateFlags` 4 in Steam's `appmanifest_570.acf` beside the game; a copy of the game without
+that file has no Steam to wait for), puts it back to
+normal by itself (3.7), keeps the picks, and says so: Play puts them back in. It does that
+once, until the game is found otherwise. While the app is open it looks at the files again
+every 9 seconds, for an update that comes meanwhile. While Dota runs so, the bar at the bottom
+says to close it and press Play. A window that only has its picture taken does it only to a
+copy of the game it is pointed to (`--dota`).
+
 The game is started by running `steam.exe -applaunch 570` from the Steam folder (3.1). Steam does
 the starting, with the launch options set in Steam; the tool never runs or touches the game
 itself. **(confirmed in game)** If Dota is already running, nothing is written and nothing is
@@ -1072,9 +1107,19 @@ The app is one window. Down its left side are the logo and the names of its page
 a small drawing of what it is: Heroes, World and My picks at the top; Support, Settings and Help
 at the bottom, which open in front of the page. A bar along the bottom has a badge and one
 sentence saying where things stand, "Back to normal Dota", and Play. The side and the bar are
-panels of glass: sheets that let through what is behind them, which is the look's own plain
-colour with a faint glow of the app's colour in one corner. Nothing is blurred, and nothing
-scrolls under a panel. The app has two looks, Night and Day, and a switch with a sun and a moon at the
+panels of frosted glass: sheets that let through what is behind them, a little lighter at the
+top, with a rim that catches the light. On Windows 11 what is behind the whole window is the
+desktop, blurred by Windows itself (the "acrylic" it draws for its own panels, asked for with
+`DWMWA_SYSTEMBACKDROP_TYPE`), darkened by night and lightened by day, under a faint veil of
+the look's colour that keeps text readable. Elsewhere it is the look's own plain colour. Either
+way a faint glow of the app's colour sits in one corner. A picture the app takes of itself has
+a blurred desktop of the app's own making behind it, since Windows' is not in the picture.
+A computer whose graphics cannot make a window see-through makes the window library give up
+as the window is being made. The app then notes that in `settings.json` (`"no_glass": true`)
+and starts itself again, without: the plain backdrop from then on.
+Nothing in the window scrolls under a panel. Play and the buttons like it are a calm shade of
+the app's colour; the page in view has a quiet sheet and a short mark of that colour beside its
+name. The app has two looks, Night and Day, and a switch with a sun and a moon at the
 bottom of the side bar chooses one (`theme` in `settings.json`). A settings file that says `system`, which 0.2.0 and
 0.2.1 offered, has the app follow Windows until the switch is clicked. Pictures of the game's stay on dark in
 both. Text is set in Inter (`assets/fonts`), titles in its heavier cut. The badge
@@ -1085,18 +1130,23 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
   a hero's own file names with `AttributePrimary`, or only the heroes with picks. A hero's tile
   has a dot in the colour of its attribute. A hero's page has the list of its slots on the left, with a row
   for whole sets at the top, and on the right what can go in the row that is open. The first tile
-  is always the default. Styles of the picked item are chosen above the tiles.
+  is always the default. Styles of the picked item are chosen above the tiles. "Share", beside
+  "Reset hero", copies a share code of the hero's picks (3.23).
 - World is the same page for the world slots. Under the game's own slots, a few words say
   where the effects begin that are for every hero: the emblem (3.19) and the effects of events
   (3.16). Then come the experiments (3.17, 3.20). The page of each of these has a small "?"
   beside its title, which says what a pick there does and when it shows while the pointer rests
-  on it.
+  on it. Where the effects of events and an emblem would go on no hero (3.21), the page of each
+  says so in the open, with a button that gives them to every hero, and the bar at the bottom
+  says "No hero gets your event effects or emblem yet" in the place of "ready" or "in the game".
 - My picks lists everything that is picked, the world's picks first and then each hero's. A
   click on a pick opens its page, and its cross takes it off. Above the list are the presets:
   picks kept under a name in `presets.json`, beside the app's settings. A click on a preset
   picks what it has in the place of what is picked now, which can be undone. Items a Dota
   update took away are left out and counted. The same name again takes the place of what was
-  kept under it.
+  kept under it. "Share" copies a share code of what is picked (3.23), and a right-click on a
+  preset shares it or forgets it. "Use a code" opens a box to paste a code in: it says what the
+  code has, and picks it, which can be undone, or keeps it as a preset.
 - Every page has one search box, and what is typed goes there without the box being clicked
   first, whatever was clicked last. Escape empties it. On the grid of heroes the best fit comes
   first: a hero whose short name was typed in full or whose name starts with what was typed,
@@ -1132,8 +1182,12 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
   and the button beside Play reads "Bring back my picks".
 - The first start shows a notice about the risks, once, and then four sentences on how the
   app is used, once. If Dota is not found, the app asks for its folder.
-- Something that goes wrong is said in one sentence in the corner above the bar, with a "Copy
-  details" button. Taking several picks off at once can be undone from the same place. A
+- Something that goes wrong is said in one sentence in the corner above the bar, with "Copy
+  details" and "Report". "Report" opens a new issue on the project's page on GitHub, with the
+  details written in, for the player to read over and send; the app sends nothing. In what is
+  copied and reported, the path of the player's own folders, which names their Windows account,
+  is written `%USERPROFILE%`. Help has "Report a problem" at its end, for a report with only the
+  version written in. Taking several picks off at once can be undone from the same place. A
   message that asks nothing of the player goes away by itself after 7 seconds, one with an
   Undo after 12; one about something that went wrong, or about an update, stays until closed.
 - Help says what a player cannot see for themselves (3.10), as a list of headings that each
@@ -1141,8 +1195,8 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
 - In a build that looks for newer versions of itself, an Update button shows on the left side for
   as long as one is out, and Help says how updating goes (4).
 - The page of the persona slot says that a persona takes the place of what the hero wears
-  (3.22). Picking it takes the hero's own picks for those slots off, which can be undone;
-  picking one of those takes the persona off.
+  (3.22). Picking it takes the hero's own picks for those slots off; picking one of those
+  takes the persona off.
 - "Support" on the left side opens a page with a button that opens the project's page on GitHub,
   to give it a star, and, in a build that names them (`crates/dme-app/src/support.rs`), where
   the maker takes donations: a page for PayPal, and wallets whose addresses are copied with a
@@ -1156,12 +1210,31 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
 The app reads the game's files on a thread of its own and pictures on three more. Only that first
 thread ever writes to the game's files, and the window is not closed in the middle of a write.
 
+Something going wrong inside the app itself (a panic, a mistake in its code) does not leave the
+window frozen or gone without a word (`crash.rs`):
+
+- On a thread that does the work (the game's files, updates, pictures), the work is given up and
+  the player is told: "Something went wrong inside the app, and it stopped what it was doing.
+  Try again. If it happens again, please report it." The details say where in the code. The app
+  goes on, and a thread for the game's files that is gone is started again.
+- On the window's own thread, the app has to close. What happened is written to `crash.txt` in
+  the data folder, and once the window is gone a box says so and that the picks are kept. The
+  next start says that the app closed last time, with "Report" and "Copy details", once.
+
+One copy of the app runs at a time for one data folder (`one_copy.rs`). Each copy reads the
+picks once and saves all of them at every change, so two copies would each take away what was
+picked in the other. A copy holds a mutex of Windows' named after its data folder
+(`Local\Dota2ModEnjoyer-` and a hash of the folder's path). A second copy waits 2 seconds for
+one that is closing, then brings the first one's window forward and closes. A copy that an
+update started waits up to 15 seconds, while the version it replaces closes. Windows lets the
+mutex go when a copy ends, however it ends.
+
 For testing, the app can work itself and take a picture of its own window, which stays off screen
 meanwhile. Nobody's screen is captured.
 
 ```
-Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weapon | world:courier | picks | help | settings | support]
-                    [--click X,Y] [--rest X,Y] [--type TEXT] [--scroll X,Y,DOWN] [--wait SECONDS] ...
+Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weapon | world:courier | picks | help | settings | support | share]
+                    [--click X,Y] [--right-click X,Y] [--rest X,Y] [--type TEXT] [--scroll X,Y,DOWN] [--wait SECONDS] ...
                     [--dota FOLDER] [--data-dir FOLDER] [--no-start] [--ignore-running]
                     [--update-from MANIFEST] [--pretend-version VERSION] [--no-restart]
 ```
@@ -1169,9 +1242,18 @@ Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weap
 Steps are taken in the order given, each once the window has come to rest. `--rest` leaves the
 pointer at a place, for what shows while it rests there. `--wait` lets time
 go by, for what the app comes to do by itself meanwhile; the picture is taken after two minutes
-at the latest, whatever is still to do. `--no-start` does everything Play does except start
+at the latest, whatever is still to do. A new version of the app that is coming does not hold
+the steps up, so that a picture can show how far it has come; the start of it does. `--no-start` does everything Play does except start
 Dota. `--ignore-running` writes even while Dota runs and only works together with `--dota`: it
 is for a copy of the game. The last three are for trying the app's own updates (4.5).
+
+A window that only has its picture taken leaves the clipboard and the browser alone: what it
+would copy is written to `copied.txt` in its data folder, and an address it would open to
+`opened.txt`. Two settings of the environment try out what cannot be tried otherwise:
+`DME_TRY_NO_GLASS` makes a window that is to be see-through fail as it is being made, and has
+one whose picture is to be taken be see-through; `DME_TRY_ONE_COPY` has a window whose picture
+is to be taken hold its data folder as a player's window does, and a second one close without
+bringing the first forward.
 
 One more option is the app's own and not for testing: `--updated-from VERSION` is what the app
 tells the version it starts in its place after an update (4.2).
@@ -1200,6 +1282,27 @@ effects ride on the hero's default sword. For that default item:
    - The new blocks are added at the end, as written. A default item without `visuals` is given
      one.
 
+An item whose styles the game switches by itself (2.6) has states rather than styles, and no
+style is picked for its effects either: they are those of all its states. On build 6974, 11
+items that give ability effects are such items, among them Profane Union, whose effects for
+Rage are all marked for the state the game puts it in while Lifestealer rages.
+
+- A block that every state has alike is added once, without a mark.
+- A block that puts something in the place of a thing that no state changes otherwise is
+  added without its mark, to apply always. Profane Union's effects for Rage take the place of
+  Rage's own, so they show while the hero rages, as they do on the item.
+- Where the states change one thing in different ways, or one state makes something the others
+  do not, the blocks keep their marks, and the default item gets the item's states, each with
+  its rule and nothing else, so that the game takes it through them as it does the item. Troll
+  Warlord's Bitter Lineage changes an icon with his stance, Scale of Bitter Spoil the colour of
+  an effect, and Sven's Vigil Triumph has three effects of Great Cleave outside God's Strength
+  only. The states bring nothing of the item's look: no name, skin or model.
+- A default item that has states of its own already, from the look picked for its slot, cannot
+  go through other ones as well. There the blocks of the item's first state are added, without
+  their marks. Where it has these very states, the item itself worn there, the blocks keep
+  their marks. On build 6974 the first happens with Vigil Triumph's effects and a sword of
+  Sven's with styles of its own, worn in its first style.
+
 Nothing else of the picked item is taken, neither its model nor what else it shows when worn.
 
 An item fits a hero's slot for ability effects if the hero uses it, it is not a default item, it
@@ -1210,7 +1313,10 @@ effects in the style picked. An item whose effects are all in a later style is p
 first style that has some.
 
 After the rewrite each default item is checked as in 3.2 and, on top of that, has to hold as
-many blocks marked with each slot's number as were added for it.
+many blocks marked with each slot's number as are left of those added for it once everything
+else is done to it. The effects of events come last, and a block of theirs takes the place of
+an ability's effect for the same thing (3.16), as with Tinker's Mecha Boots of Travel Mk III
+and a teleport.
 
 What follows from this:
 
@@ -1488,9 +1594,14 @@ player chooses which heroes get them. Left alone, it is the heroes picked for:
 | Every hero | all of them | `"effects_for": "every"` |
 | These heroes | the ones named | `"effects_for": { "these": [ ... ] }` |
 
-The others get none of those blocks, neither the events' effects nor an emblem. The choice is
-kept with the picks and outlives them. Putting picks away or forgetting them leaves it as it
-is. It is compared, like the picks, to decide whether Play has to write (3.12). `dme
+The others get none of those blocks, neither the events' effects nor an emblem. So a default
+item that several heroes share (2.6), the default pet of ten heroes, gets them only if every one
+of those heroes is to have them, since it shows on all of them. Any hero the game has default
+items for can be chosen, also one with nothing to pick, such as Kez and Largo on build 6974. The
+choice is kept with the picks and outlives them. Putting picks away or forgetting them leaves it as it
+is. Where the effects of events or an emblem are picked and the choice reaches no hero (the
+heroes picked for, with nothing picked for a hero, or an empty list), the app says so, and so
+does `dme apply` or `dme play` (3.13). It is compared, like the picks, to decide whether Play has to write (3.12). `dme
 effects-for` says or changes it; the app has it in its settings.
 
 It cannot be narrowed down to the player's own hero in a match. The files are read when Dota
@@ -1532,6 +1643,38 @@ It is not known whether a model put on a default item this way shows in a match 
 servers. Juggernaut's arcana showed so; a persona is a larger change.
 
 **(to confirm in game)**
+
+### 3.23 Share codes
+
+Picks can be passed on as a share code: one piece of text to copy and paste, for a friend with
+the app or for another computer (`crates/dme-core/src/share.rs`). It holds the game's ids and a
+name, nothing else, so it reads the same whatever language the game is in. Nothing is sent
+anywhere: the player copies it and pastes it.
+
+A code is `DME1-` and then, in the letters of base64 for web addresses (`A-Z a-z 0-9 - _`, no
+`=`), lines of text packed with deflate (raw, as RFC 1951 has it), and after them the CRC-32 of
+the lines in 4 bytes, least significant first. A line is a pick: the hero's short name, a dot,
+the slot, `=`, the item, then `:` and the style where it is not 0, and `+` and the effect where
+there is one. A world slot has no name before the dot.
+
+```
+@Axe
+axe.weapon=9040
+axe.head=8910:2
+.courier=10003:1+15
+```
+
+A first line that starts with `@` names the picks. Three picks of one hero with a name make a
+code of 84 letters, ten of them about 150. A code is found among other words that were pasted
+with it. One that lost a part, or has a letter changed, fails its check and is said to be not
+whole. One that starts with `DME` and a higher number, or has a line this version cannot read,
+is said to be from a newer version. What a code unpacks to may be 1 MB at most.
+
+The app checks a code's picks against the player's own game as it checks a preset's (3.12):
+items the game does not have are left out and counted, and a style that is gone goes back to
+the item's first. Picking what a code has puts each pick in its slot, taking the place of what
+was picked there and of what heroes that share its default item had picked; the other picks
+stay. That can be undone.
 
 ## 4. The app updating itself
 
@@ -1587,13 +1730,20 @@ have the first four, is no manifest.
    minutes, so a release that comes out while the app is open beside Dota is noticed without
    the app being started again.
 2. If the manifest offers a newer version, and is signed where the build demands that, an
-   Update button shows on the left side for as long as the app runs. One sentence in the corner above
-the    footer says so once for each version, with the notes, and with "Update" and "Later". It
-   takes the place of nothing else that is being said there, only of the offer of a version
-   before it.
+   Update button shows on the left side for as long as the app runs. One sentence in the corner
+   above the footer says so once for each version, with the notes, and with "Update" and
+   "Later". It takes the place of nothing else that is being said there, only of the offer of a
+   version before it. While the app asks for the Dota folder, which has neither side bar nor
+   footer, the sentence is in the corner of that page, since the new version may be the one
+   that finds Dota.
 3. Update fetches the file, at most 256 MB of it, and takes it only if its length and its
    SHA-256 are the ones the manifest names. A version that comes out during that is left for
-   the version being fetched to find.
+   the version being fetched to find. Meanwhile the ring of the Update button fills up as far
+   as the file has come, from the top round to the right, by the size the manifest names, and
+   the button says the share ("45%"). Where nothing else is said in the corner, a card there
+   says the same with a larger ring: "Downloading version 0.2.4…", and that the app starts
+   again by itself. The page that asks for the Dota folder has no side bar, and has the card.
+   How far it has come is told at most a hundred times, once for each whole hundredth.
 4. The new file takes the place of the running one. Windows does not let the file of a running
    program be written to or deleted, but it lets it be renamed. So the new version is written,
    whole, to `Dota2ModEnjoyer.exe.new` beside the app; the running file is renamed to
@@ -1601,9 +1751,18 @@ the    footer says so once for each version, with the notes, and with "Update" a
    fails, the old file is put back. At no time is half a file under the app's name.
 5. The app starts its file again, which is the new version now, and closes, though not in the
    middle of writing to the game's files. It tells the new version which version it was, with
-   `--updated-from`, and the new version says once, above the footer: "The app was updated.
-   This is version 0.2.0 now." The new version clears the `.old` file away. It tries for a few
-   seconds, since the old version may still be closing.
+   `--updated-from`. The new version shows, once, what is new since that version, in plain
+   words: "Updated to version 0.2.3", then the changes, with "Got it" under them (where
+   versions were skipped, each with its number). Those words are `CHANGELOG.md`, which the app
+   carries within itself (4.4). A version the changelog says nothing of says instead, above the
+   footer: "The app was updated. This is version 0.2.0 now." The new version clears the `.old`
+   file away. It tries for a few seconds, since the old version may still be closing.
+
+What is new is also shown to a player who put a newer version in place by hand. The app keeps
+in `settings.json` the version whose news was shown last (`seen_version`), or that was started
+first, and shows what came after it, once, after the notice and the tour. Versions up to 0.2.2
+did not keep it: a player who has read the notice and whose settings name no version is shown
+what is new in this version. The first start shows nothing of the kind.
 
 A window of an older version that was left open does not stand in the way. Its file, the
 `.old` of an earlier update, cannot be deleted while it runs. The next update renames it
@@ -1661,6 +1820,12 @@ and the address the manifest will have in `MANIFEST_URL`, then build and hand th
 From then on, for each release, raise `version`, build, run `dme dev release`, and put the app's
 file and the manifest where their addresses say.
 
+Every release says what is new in it, in `CHANGELOG.md`: a heading with the version's number,
+`## 0.2.3`, and a list of the changes under it, the newest version first, in words a player
+understands. The app shows them after an update (4.2), and the release's page on GitHub lists
+them. A test fails while the version in `Cargo.toml` is newer than the newest one the file
+tells of, and `publish\release.ps1` stops on a version the file says nothing of.
+
 ### 4.5 Trying it
 
 ```
@@ -1672,7 +1837,9 @@ trial. The manifest and the file may then be at a plain `http` address, or be fi
 computer. A manifest that cannot be fetched or read the first time is said, not passed over.
 The app asks again every 10 seconds, not every 5 minutes. No signature is demanded in a
 trial, since its manifest is one's own, on one's own computer. `--pretend-version` is the version the app is to take itself for.
-`--no-restart` puts the new version in place and does not start it.
+`--no-restart` puts the new version in place and does not start it. A new version that is a file
+on this computer comes at once; how far it has come is told all the same, in 20 steps over 5
+seconds, so that the ring can be seen filling up as over the internet.
 
 A build made while the environment variable `DME_UPDATE_TRIAL` holds
 the address of a manifest has that address built in, and is a trial whenever it is started

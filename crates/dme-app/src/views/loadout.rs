@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use dme_core::apply::Pick;
+use dme_core::apply::{EffectsFor, Pick};
 use dme_core::catalog::{Entry, Gap, Group, Hero, Rarity, Set, Slot};
 use dme_core::loadout::Loadout;
 use eframe::egui::text::LayoutJob;
@@ -215,6 +215,18 @@ impl<'a> Page<'a> {
             ui.label(dim(note));
             ui.add_space(6.0);
         }
+        let for_heroes = self.hero.is_none() && (slot.is_for_an_event() || slot.is_for_an_emblem());
+        if for_heroes && let Some(why) = reaching_nobody(self.loadout) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(why).color(theme::warn()).size(theme::SMALL));
+                let every = ui.button("Give it to every hero").on_hover_text("Every hero gets the effects of events and the emblem. Settings can change it again.");
+                if every.clicked() {
+                    self.loadout.set_effects_for(EffectsFor::Every);
+                    changed = true;
+                }
+            });
+            ui.add_space(6.0);
+        }
         rarity::chips(ui, self.rarities, &slot.items.iter().filter_map(|entry| entry.rarity).collect(), self.asked);
 
         if let (Some(pick), Some(entry)) = (&current, current_entry) {
@@ -317,7 +329,7 @@ fn pieces_of(set: &Set, slots: &[Slot]) -> Vec<String> {
     set.pieces.iter().filter_map(piece).collect()
 }
 
-fn make_way(loadout: &mut Loadout, slot: &Slot) {
+pub(crate) fn make_way(loadout: &mut Loadout, slot: &Slot) {
     for other in &slot.shared_with {
         loadout.clear(Some(&other.id), &slot.id);
     }
@@ -431,6 +443,14 @@ fn note_of(slot: &Slot) -> Option<&'static str> {
         Some(MAP_NOTE)
     } else {
         None
+    }
+}
+
+fn reaching_nobody(loadout: &Loadout) -> Option<&'static str> {
+    match loadout.effects_for() {
+        _ if loadout.effects_for().reaches_anyone(loadout.picks()) => None,
+        EffectsFor::These(_) => Some("No hero gets this yet. It goes on the heroes you choose in Settings, and you have chosen none."),
+        _ => Some("No hero gets this yet. It goes on the heroes you picked something for, and nothing is picked for a hero."),
     }
 }
 
@@ -566,6 +586,24 @@ mod tests {
 
     fn entry(id: &str) -> Entry {
         Entry { id: id.to_string(), name: id.to_string(), picture: None, styles: Vec::new(), rarity: None, worn_in: None, gaps: Vec::new() }
+    }
+
+    #[test]
+    fn a_page_for_the_effects_of_events_says_when_they_would_go_on_no_hero() {
+        let mut loadout = Loadout::default();
+        assert!(reaching_nobody(&loadout).is_some_and(|why| why.contains("picked something for")));
+        loadout.set(Pick::world("emblem", "638"));
+        assert!(reaching_nobody(&loadout).is_some());
+        loadout.set(Pick::hero(AXE, "weapon", "5"));
+        assert_eq!(reaching_nobody(&loadout), None, "Axe gets them");
+
+        let mut chosen = Loadout::default();
+        chosen.set_effects_for(EffectsFor::These(Vec::new()));
+        assert!(reaching_nobody(&chosen).is_some_and(|why| why.contains("Settings")));
+        chosen.set_effects_for(EffectsFor::These(vec![AXE.to_string()]));
+        assert_eq!(reaching_nobody(&chosen), None);
+        chosen.set_effects_for(EffectsFor::Every);
+        assert_eq!(reaching_nobody(&chosen), None);
     }
 
     #[test]

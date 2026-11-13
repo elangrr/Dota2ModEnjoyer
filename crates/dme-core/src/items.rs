@@ -9,7 +9,7 @@ const HERO_PREFIX: &str = "npc_dota_hero_";
 const EFFECTS_PREFIX: &str = "ability_effects_";
 const EFFECTS_ATTRIBUTE: &str = "can_equip_as_ability_effects";
 pub const EFFECTS_MARK: &str = "apply_when_equipped_in_ability_effects_slot";
-const AUTO_STYLE_RULE: &str = "auto_style_rule";
+pub const AUTO_STYLE_RULE: &str = "auto_style_rule";
 const ATTACHED_EFFECTS: &str = "attribute_controlled_attached_particles";
 const SOCKET_PREFIX: &str = "static socket ";
 pub const SOCKETS: RangeInclusive<u32> = 1..=5;
@@ -145,7 +145,14 @@ impl<'a> Item<'a> {
         self.effects_for(number).into_iter().filter(belongs).collect()
     }
 
+    pub fn effects_picked(&self, number: u32, style: u32) -> Vec<kv::Pair<'a>> {
+        if self.switches_styles_itself() { self.effects_for(number) } else { self.effects_in_style(number, style) }
+    }
+
     pub fn effects_styles(&self, number: u32) -> Vec<Style<'a>> {
+        if self.switches_styles_itself() {
+            return Vec::new();
+        }
         let of_a_style = |pair: &kv::Pair<'a>| pair.value.as_block().and_then(|block| block.str("style")).and_then(number_of);
         let named: Vec<u32> = self.effects_for(number).iter().filter_map(of_a_style).collect();
         if !named.iter().any(|&style| style > 0) {

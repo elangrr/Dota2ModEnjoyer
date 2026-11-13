@@ -508,10 +508,11 @@ dependencies = [
 
 [[package]]
 name = "dme-app"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "dme-core",
  "eframe",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "tempfile",
@@ -520,21 +521,23 @@ dependencies = [
 
 [[package]]
 name = "dme-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
  "dme-core",
+ "tempfile",
 ]
 
 [[package]]
 name = "dme-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "crc32fast",
  "ed25519-compact",
  "md-5",
  "memchr",
+ "miniz_oxide 0.9.1",
  "png",
  "serde",
  "serde_json",

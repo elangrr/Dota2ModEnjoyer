@@ -260,7 +260,7 @@ pub fn clean_up() {
     });
 }
 
-fn spawn(name: &str, work: impl FnOnce() + Send + 'static) {
+pub(crate) fn spawn(name: &str, work: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new().name(name.to_string()).spawn(work).expect("a thread can be started");
 }
 
@@ -284,7 +284,7 @@ fn failure(version: &str, address: &str, error: &str) -> Failure {
     }
 }
 
-fn fetch(address: &str, limit: usize, testing: bool) -> Result<Vec<u8>, String> {
+pub(crate) fn fetch(address: &str, limit: usize, testing: bool) -> Result<Vec<u8>, String> {
     fetch_counting(address, limit, testing, None)
 }
 

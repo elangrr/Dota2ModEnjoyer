@@ -26,7 +26,7 @@ const TOUR: [(&str, &str); 4] = [
 const LOW_END_HINT: &str = "Play starts Dota with its lightest video settings: no shadows, simple water and lighting, no fog, grass or other extras. \
      An experiment. Dota may keep these settings afterwards; you can change them back in Dota's video options.";
 
-const HELP: [(&str, &str); 16] = [
+const HELP: [(&str, &str); 17] = [
     (
         "Finding things",
         "Just type. On the hero grid that finds heroes and, from the third letter on, items and sets wherever they are. The chips above the heroes show only those of one attribute, or those with picks. Rest the pointer on an item or a set for a larger look at it and its styles.",
@@ -34,6 +34,10 @@ const HELP: [(&str, &str); 16] = [
     (
         "My picks and presets",
         "\"My picks\", on the left, lists everything you picked. A click on a pick opens its page, and its cross takes it off. To keep what is picked as a preset, type a name there and press \"Save as preset\". A click on a preset picks it again, in the place of what is picked now.",
+    ),
+    (
+        "The draft helper",
+        "\"Draft\", on the left, says which heroes to pick. Put the heroes of both teams in as they are picked: click a place, type a few letters of the name, press Enter. The places are in the order of a ranked draft: two heroes for each team, then two more, then the last. The first two are taken to be the supports, the next two the carry and the offlaner, the last the mid. Each place shows its role as a small drawing in its corner; a click on it opens the roles to choose another. The list is for the place that is lit: it shows the heroes of that role that win more often there, in your rank. A click on a hero in the list puts it in that place and goes on to the next, the same as typing its name. Your own place, the one with the role you play, says \"You\". In the list, what a hero adds is green and what it takes is red. Once both teams are full, the page says which draft is better, with each team's chance in percent. The numbers are STRATZ's, added up from millions of matches and made new every week. The app does not look at your game: you put the heroes in yourself, and nothing is read from Dota.",
     ),
     (
         "A pick does not show in Dota",

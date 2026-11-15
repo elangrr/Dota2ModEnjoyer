@@ -7,6 +7,7 @@ pub enum Icon {
     Heroes,
     World,
     Picks,
+    Draft,
     Support,
     Settings,
     Help,
@@ -86,6 +87,12 @@ pub fn paint(painter: &egui::Painter, icon: Icon, room: Rect, color: Color32) {
                 painter.add(line(&[[9.5, row], [20.0, row]]));
                 painter.add(line(&[[3.5, row], [4.8, row + 1.3], [7.0, row - 1.1]]));
             }
+        }
+        Icon::Draft => {
+            painter.add(line(&[[19.5, 4.5], [5.0, 19.0]]));
+            painter.add(line(&[[6.0, 13.0], [11.0, 18.0]]));
+            painter.add(line(&[[4.5, 4.5], [19.0, 19.0]]));
+            painter.add(line(&[[18.0, 13.0], [13.0, 18.0]]));
         }
         Icon::Support => {
             let (lobe, dip) = (4.3, 0.56);

@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/29081e9b765b43bb631bda9018d4adaf7fa006e70beb6b76d788bdb020237a4d"><img src="https://img.shields.io/badge/VirusTotal-3%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 3 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
+  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/f8db5ee3a498c34d5e1234dce1c3c0756ba426194c94a9e0795f19b2a46c7111"><img src="https://img.shields.io/badge/VirusTotal-3%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 3 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
   &nbsp;
   <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
@@ -53,6 +53,19 @@ Just type to search, for heroes, items and sets. **My picks** lists everything y
 There you can save your picks as a preset, and **Share** copies a short code that a friend
 pastes under **Use a code** to get the same look.
 
+## Draft
+
+**Draft** says which heroes to pick in a match. Choose your rank and role, then put the heroes
+in as they are picked. The list shows the heroes of your role that win more often against the
+enemy and beside your team, with a line on why. With both teams full, it gives each team its
+chance in percent.
+
+The page works with Dota closed and never reads your game. Its numbers are added up from
+millions of public matches by [STRATZ](https://stratz.com). The app downloads them from this
+project's GitHub page when you open the page, and they are made new every week.
+
+![The Draft page, with the heroes for the last pick in mid](assets/screens/draft.jpg)
+
 ## Updates
 
 The app updates itself. When a new version is out, an **Update** button shows on the left. One
@@ -83,8 +96,8 @@ copies the same text.
 
 ## Questions
 
-**Does it collect any data?** No. Its one request to the internet asks GitHub whether a new
-version is out.
+**Does it collect any data?** No. It only asks GitHub whether a new version is out and, when
+you open Draft, for the numbers of that page.
 
 **Can I get banned?** Nobody can promise that you cannot. The app never touches the running game
 and gives no advantage in a match.
@@ -113,6 +126,7 @@ link opens the full result for that file. A release that Microsoft's scanner fla
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.3.0 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/f8db5ee3a498c34d5e1234dce1c3c0756ba426194c94a9e0795f19b2a46c7111) | [1 of 70 scanners flag it](https://www.virustotal.com/gui/file/c3a4571d7c328b5ff3cff45aa66cf416016db42498c8e98fc2b8314d06a2fe98) |
 | 0.2.3 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/29081e9b765b43bb631bda9018d4adaf7fa006e70beb6b76d788bdb020237a4d) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/7702421d7dd1590ba45f96078a82f42a0f1c6f1148d93eafe47db78686ad12c0) |
 | 0.2.2 | [0 of 66 scanners flag it](https://www.virustotal.com/gui/file/4bcc6789a106aad87dae596f72e6c4e83ebb725feaa6477076e9bd48c0513ed4) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/c0a1879c6fb6d66e477678ab6fc1a535a2e9e046263088e59266be36290108c7) |
 | 0.2.1 | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/49f0b1372cf47ea129d2c8eb793f7e4cdc34a390af9954e91d82f4cd00232cde) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/09fda3379fdef4d66bdf03399b351a86160124a48a672bf62cd4a5176dadfea6) |

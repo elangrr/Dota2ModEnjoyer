@@ -38,6 +38,7 @@ struct Palette {
     accent_text: Color32,
     good: Color32,
     warn: Color32,
+    bad: Color32,
 }
 
 const NIGHT: Palette = Palette {
@@ -52,6 +53,7 @@ const NIGHT: Palette = Palette {
     accent_text: Color32::from_rgb(0xf6, 0x8a, 0x66),
     good: Color32::from_rgb(0x5c, 0xc2, 0x8a),
     warn: Color32::from_rgb(0xe6, 0xa8, 0x3c),
+    bad: Color32::from_rgb(0xf0, 0x62, 0x6e),
 };
 
 const DAY: Palette = Palette {
@@ -66,6 +68,7 @@ const DAY: Palette = Palette {
     accent_text: Color32::from_rgb(0xc8, 0x42, 0x1c),
     good: Color32::from_rgb(0x17, 0x80, 0x4c),
     warn: Color32::from_rgb(0xa5, 0x65, 0x08),
+    bad: Color32::from_rgb(0xc2, 0x2f, 0x3f),
 };
 
 static IS_DAY: AtomicBool = AtomicBool::new(false);
@@ -110,6 +113,9 @@ pub fn good() -> Color32 {
 }
 pub fn warn() -> Color32 {
     palette().warn
+}
+pub fn bad() -> Color32 {
+    palette().bad
 }
 
 pub const fn accent() -> Color32 {

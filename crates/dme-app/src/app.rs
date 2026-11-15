@@ -6,6 +6,7 @@ use std::time::Duration;
 use dme_core::apply::{self, Pick};
 use dme_core::catalog::{Catalog, Hero};
 use dme_core::dota::DotaInstall;
+use dme_core::draft::Numbers;
 use dme_core::engine::{self, Engine, ModState, Ready};
 use dme_core::items;
 use dme_core::loadout::Loadout;
@@ -17,6 +18,7 @@ use crate::Options;
 use crate::changelog;
 use crate::crash;
 use crate::glass;
+use crate::numbers::{self, Fetcher};
 use crate::pictures::Pictures;
 use crate::presets::Presets;
 use crate::report;
@@ -50,6 +52,7 @@ enum Tab {
     Heroes,
     World,
     Picks,
+    Draft,
 }
 
 struct Banner {
@@ -117,6 +120,8 @@ pub struct App {
     hero_row: Row,
     world_row: Row,
     item_search: String,
+    draft: views::draft::Draft,
+    numbers: Fetcher<Numbers>,
     rarities_asked: BTreeSet<usize>,
     help_open: bool,
     settings_open: bool,
@@ -153,6 +158,7 @@ impl App {
         let script = options.screenshot.clone().map(|shot| Script::new(options.steps.clone(), shot));
         update::clean_up();
         let updater = Updater::start(&options, ctx);
+        let numbers = numbers::draft_numbers(&options, &data_dir);
         let before = version_before(options.updated_from.as_deref(), &settings, options.screenshot.is_some());
         let whats_new = before.map(|before| changelog::since(&before, VERSION)).filter(|news| !news.is_empty());
         let updated = options.updated_from.as_deref().is_some_and(|before| before != VERSION);
@@ -199,6 +205,8 @@ impl App {
             hero_row: Row::Sets,
             world_row: Row::Sets,
             item_search: String::new(),
+            draft: views::draft::Draft::default(),
+            numbers,
             rarities_asked: BTreeSet::new(),
             help_open: false,
             settings_open: false,
@@ -320,6 +328,7 @@ impl App {
                 News::Installed => self.start_again = true,
             }
         }
+        self.numbers.poll();
     }
 
     fn update(&mut self, ctx: &egui::Context) {
@@ -402,6 +411,7 @@ impl App {
                 self.hero = id;
             }
             Some("picks") => self.tab = Tab::Picks,
+            Some("draft") => self.tab = Tab::Draft,
             Some("help") => self.help_open = true,
             Some("settings") => self.settings_open = true,
             Some("support") => self.support_open = true,
@@ -598,7 +608,11 @@ impl App {
             let typed = input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if !text.trim().is_empty()));
             (typed, input.key_pressed(egui::Key::Backspace), input.key_pressed(egui::Key::Escape))
         });
-        let search = if self.tab == Tab::Heroes && self.hero.is_none() { &mut self.hero_search } else { &mut self.item_search };
+        let search = match self.tab {
+            Tab::Heroes if self.hero.is_none() => &mut self.hero_search,
+            Tab::Draft => &mut self.draft.search,
+            _ => &mut self.item_search,
+        };
         if escaped {
             search.clear();
         }
@@ -612,7 +626,7 @@ impl App {
         let loaded = self.engine.is_none() || self.catalog.is_some() || self.load_failure.is_some();
         let asking = self.updater.as_ref().is_some_and(|updater| updater.is_working() && !updater.is_fetching());
         let updating = asking || self.start_again;
-        let settled = loaded && self.busy.is_none() && self.pictures.loading() == 0 && !updating;
+        let settled = loaded && self.busy.is_none() && self.pictures.loading() == 0 && !updating && !self.numbers.is_fetching();
         if let Some(script) = &mut self.script {
             script.advance(ctx, settled);
         }
@@ -700,7 +714,7 @@ impl App {
                 crate::logo::paint(ui.painter(), mark);
                 ui.add_space(10.0);
                 let picks = self.loadout.len();
-                for (tab, icon, name, count) in [(Tab::Heroes, Icon::Heroes, "Heroes", 0), (Tab::World, Icon::World, "World", 0), (Tab::Picks, Icon::Picks, "My picks", picks)] {
+                for (tab, icon, name, count) in [(Tab::Heroes, Icon::Heroes, "Heroes", 0), (Tab::World, Icon::World, "World", 0), (Tab::Picks, Icon::Picks, "My picks", picks), (Tab::Draft, Icon::Draft, "Draft", 0)] {
                     if nav_button(ui, icon, name, self.tab == tab, count).clicked() && self.tab != tab {
                         self.tab = tab;
                         self.item_search.clear();
@@ -884,6 +898,7 @@ impl App {
         };
         match self.tab {
             Tab::World => self.world_page(ui, &catalog),
+            Tab::Draft => self.draft_page(ui, &catalog),
             Tab::Picks => {
                 let answer = views::picks::show(ui, &catalog, &mut self.loadout, &mut self.pictures, self.presets.all(), &mut self.preset_name);
                 self.picks_changed |= answer.changed;
@@ -1036,6 +1051,46 @@ impl App {
             asked: &mut self.rarities_asked,
         };
         self.picks_changed |= views::loadout::show(ui, page);
+    }
+
+    fn draft_page(&mut self, ui: &mut Ui, catalog: &Catalog) {
+        self.numbers.wanted(ui.ctx());
+        let numbers = self.numbers.get().cloned();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs());
+        let view = views::draft::View {
+            catalog,
+            pictures: &mut self.pictures,
+            draft: &mut self.draft,
+            numbers: numbers.as_deref(),
+            fetching: self.numbers.is_fetching(),
+            failure: self.numbers.failure(),
+            rank: self.settings.draft_rank,
+            role: self.settings.draft_role,
+            now,
+        };
+        let answer = views::draft::show(ui, view);
+        if answer.rank.is_some() || answer.role.is_some() {
+            self.settings.draft_rank = answer.rank.unwrap_or(self.settings.draft_rank);
+            self.settings.draft_role = answer.role.unwrap_or(self.settings.draft_role);
+            self.save_settings();
+        }
+        if answer.try_again {
+            self.numbers.fetch(ui.ctx());
+        }
+        if answer.copy_details
+            && let Some(failure) = self.numbers.failure()
+        {
+            self.copy(ui.ctx(), &failure.details);
+        }
+        if answer.open_source {
+            self.open_source();
+        }
+    }
+
+    fn open_source(&mut self) {
+        if !self.open_page(views::draft::SOURCE_PAGE) {
+            self.banner = Some(Banner::new(Tone::Plain, format!("The page could not be opened. It is at {}", views::draft::SOURCE_PAGE)));
+        }
     }
 
     fn find_dota(&mut self, ui: &mut Ui) {

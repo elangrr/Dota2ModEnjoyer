@@ -30,6 +30,8 @@ Read from inside the game's archive:
 | `scripts/npc/heroes/npc_dota_hero_*.txt` | Each hero's slots, their names, the hero's short names (2.10) and its slots for ability effects (2.9) |
 | `materials/models/props_tree/*.vmat_c` | The looks of trees, to copy into the package (3.17) |
 | `materials/dev/deferred_post_process*.vmat_c` | What the map is drawn through, to copy into the package (3.20) |
+| `panorama/images/rank_tier_icons/handicap/*icon_psd.vtex_c` | The game's drawings for the five roles, shown on the Draft page (5.3) |
+| `panorama/images/rank_tier_icons/rank1_psd.vtex_c` to `rank8_psd.vtex_c` | The game's medals for the eight ranks, shown on the Draft page (5.3) |
 
 Nothing else under the Dota folder is written. Our own files live in
 `%LOCALAPPDATA%\Dota2ModEnjoyer`:
@@ -38,9 +40,10 @@ Nothing else under the Dota folder is written. Our own files live in
 |---|---|
 | `picks.json` | What the player picked, and whether the picks are put away (3.12) |
 | `state.json` | What was last put in the game, for which game build (3.12) |
-| `settings.json` | What the app remembers about itself: that the notice was read, a Dota folder pointed out by hand, the mode for a low-end computer (3.18), the version whose news was last shown (4.2), that the window could not be made see-through on this computer (3.13) |
+| `settings.json` | What the app remembers about itself: that the notice was read, a Dota folder pointed out by hand, the mode for a low-end computer (3.18), the version whose news was last shown (4.2), that the window could not be made see-through on this computer (3.13), the rank and role chosen on the Draft page (5.3) |
 | `presets.json` | The picks a player kept under a name in the app (3.13) |
 | `crash.txt` | What made the app close, when something went wrong inside it; read and taken away at the next start (3.13) |
+| `draft.json` | The numbers of the draft helper as they were last fetched (5.4) |
 | `backup\<game build>\` | The two game files as Valve shipped them |
 
 One more file is written, and only when the player asks for it: the app's own program file,
@@ -1201,6 +1204,7 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
   to give it a star, and, in a build that names them (`crates/dme-app/src/support.rs`), where
   the maker takes donations: a page for PayPal, and wallets whose addresses are copied with a
   click. The app opens `https` addresses only, and asks for nothing by itself.
+- "Draft" on the left side opens the draft helper (5). `--open draft` shows it in a picture.
 - "Settings" on the left side opens the settings page, with: which heroes get the effects of events
   and an emblem (3.21), as every hero, the heroes picked for, or heroes chosen from a list;
   Low-end PC mode (3.18); "Update automatically" (4.2), off by default; where Dota is and where
@@ -1233,10 +1237,11 @@ For testing, the app can work itself and take a picture of its own window, which
 meanwhile. Nobody's screen is captured.
 
 ```
-Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weapon | world:courier | picks | help | settings | support | share]
+Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weapon | world:courier | picks | draft | help | settings | support | share]
                     [--click X,Y] [--right-click X,Y] [--rest X,Y] [--type TEXT] [--scroll X,Y,DOWN] [--wait SECONDS] ...
                     [--dota FOLDER] [--data-dir FOLDER] [--no-start] [--ignore-running]
                     [--update-from MANIFEST] [--pretend-version VERSION] [--no-restart]
+                    [--numbers-from FILE]
 ```
 
 Steps are taken in the order given, each once the window has come to rest. `--rest` leaves the
@@ -1245,7 +1250,9 @@ go by, for what the app comes to do by itself meanwhile; the picture is taken af
 at the latest, whatever is still to do. A new version of the app that is coming does not hold
 the steps up, so that a picture can show how far it has come; the start of it does. `--no-start` does everything Play does except start
 Dota. `--ignore-running` writes even while Dota runs and only works together with `--dota`: it
-is for a copy of the game. The last three are for trying the app's own updates (4.5).
+is for a copy of the game. `--update-from`, `--pretend-version` and `--no-restart` are for
+trying the app's own updates (4.5). `--numbers-from` says where the Draft page fetches its
+numbers (5.4).
 
 A window that only has its picture taken leaves the clipboard and the browser alone: what it
 would copy is written to `copied.txt` in its data folder, and an address it would open to
@@ -1679,7 +1686,8 @@ stay. That can be undone.
 ## 4. The app updating itself
 
 The app can put a newer version of itself in the place of its own program file. Nothing of
-the game's has a part in this, and it is the only thing the app ever fetches from the network.
+the game's has a part in this. It is one of the two things the app ever fetches from the
+network. The other is the file of numbers of the draft helper (5.4).
 
 A build is told two things, both in `crates/dme-core/src/update.rs`:
 
@@ -1869,3 +1877,147 @@ file; a file that is not the one its manifest describes; a manifest that is not 
 end, off screen: the app started while nothing newer was out, a release was put out while it was
 open, the app offered it within its 10 seconds, the click on Update put the new file in place,
 the new version started, said that the app was updated, and cleared the `.old` file away.
+
+## 5. The draft helper
+
+The Draft page says which heroes to pick in a match. The player puts the heroes of both teams
+in by hand as they are picked, and the page lists the heroes that win more often against those
+enemies and beside that team. Nothing of this reads the game. The app does not look at Dota's
+window, its memory or its files to learn what was picked, and the page works the same with Dota
+closed.
+
+### 5.1 The numbers
+
+The page works from one file of numbers, `draft.json`. It is made once a week by
+`publish/make_numbers.py` from the statistics of STRATZ (stratz.com), which are added up from
+public matches. The app never asks STRATZ anything. It fetches the file from this project's
+repository on GitHub, at the address `NUMBERS_URL` in `crates/dme-core/src/draft.rs`.
+
+```json
+{
+  "format": 1,
+  "made": 1794489536,
+  "source": "STRATZ",
+  "patch": "7.41f",
+  "weeks": 4,
+  "heroes": ["npc_dota_hero_antimage", "npc_dota_hero_axe"],
+  "ranks": [
+    { "played": [[9000, 0], [800, 0], [0, 7000], [0, 300], [0, 0]],
+      "won": [[4600, 0], [390, 0], [0, 3500], [0, 140], [0, 0]] }
+  ],
+  "pairs": [
+    { "against": [[0, -51], [51, 0]],
+      "with": [[0, 12], [12, 0]] }
+  ]
+}
+```
+
+| Key | Holds |
+|---|---|
+| `format` | 1. The app refuses a file of another format and goes on with the numbers it has |
+| `made` | When the file was made, in seconds since 1970 |
+| `source`, `patch`, `weeks` | Whose numbers these are, the patch of Dota the matches were played on, and how many weeks of matches are added up |
+| `heroes` | The heroes, by the names the game's files know them by. Everything below names a hero by its place in this list |
+| `ranks` | The eight ranks, from Herald to Immortal |
+| `played`, `won` | In a rank, for each of the five roles (carry, mid, offlane, soft support, hard support), each hero's ranked matches in that role, and how many of those it won |
+| `pairs` | Four pairs of ranks, in this order. Herald with Guardian, Crusader with Archon, Legend with Ancient, Divine with Immortal |
+| `against` | In a pair of ranks, for each hero, a number for each other hero. It says by how much the hero wins more often against the other than expected, in tenths of a percent |
+| `with` | The same for the two heroes on one team |
+
+"Expected" is what the two heroes' own shares of wins give if the heroes have nothing to do
+with each other. For a hero that wins `a` of its matches against one that wins `b` that is
+`a(1-b) / (a(1-b) + b(1-a))`, and for the two on one team it is `ab / (ab + (1-a)(1-b))`. What a
+pair shows beyond that is multiplied by `n / (n + 400)`, where `n` is how many matches the pair
+has, so that luck in a few matches is not taken for a counter. It is cut off at 30 percent
+either way. STRATZ counts a pair once from each of its two heroes, and the table has the
+middle of the two counts.
+
+How often a hero wins is counted for each rank by itself. What two heroes do to each other is
+counted for two ranks together, because STRATZ has it no finer, so the two ranks of a pair
+share `against` and `with`. Every rank has enough matches for its own counts. Herald, which
+has the fewest, had 2.3 million ranked matches of a hero in four weeks.
+
+The maker adds up the whole weeks since the newest patch came out, four at most and two at
+least. It asks STRATZ about twenty-five questions, each for all heroes at once, with a token that
+it reads from the environment variable `STRATZ_TOKEN`. The token is never written anywhere.
+`python publish/make_numbers.py --check` tries the sums on made-up numbers.
+
+### 5.2 What is suggested
+
+The page asks for a rank, a role or none, the heroes of one team and the heroes of
+the other. Every other hero gets points, which are percent of matches.
+
+1. The hero's own share of wins less 50, in the role that was asked for or in all roles
+   together. It is multiplied by `n / (n + 400)`, where `n` is the hero's matches there.
+2. Plus the hero's number in `against` for each enemy, in the pair the rank is in.
+3. Plus the hero's number in `with` for each hero of the team, in that pair.
+
+The heroes are listed by their points, the most first. With a role, only heroes that have at
+least a tenth of their matches in that role are listed. A hero that is picked is not listed. A
+picked hero the file does not know, such as one that came out this week, changes nothing, and
+a hero that the game on this computer does not have is not shown.
+
+A whole draft is weighed the same way. For each team, the points of its five heroes are added
+up, which are each hero's own share of wins less 50 in its role, the number in `against` for
+every hero against every enemy, and the number in `with` for every two heroes of a team, each
+pair once. A hero with fewer than 100 matches in its role counts by all its matches together.
+The player's team's sum less the enemy's is how far ahead the team is, `d`. Its chance to win
+is `100 / (1 + e^(-d/25))` percent, which is 50 for two drafts that are level, close to `50 + d`
+for small differences, and never 0 or 100.
+
+### 5.3 The page
+
+The page has two lists to choose from, "My rank" and "My role", which are kept in
+`settings.json`. Each is behind a box that shows what is chosen. A rank has the game's medal for it beside
+its name, and a role has the game's drawing for it.
+Under them are five places for each team. The places are in the order of a ranked draft, in which each team picks
+two heroes, then two more, then its last, and they stand in those three groups.
+
+A click on a free place makes it the one to fill, and the enemy's first place is that when the
+page opens. Typing shows the heroes whose names fit. A click on one, or Enter for the first,
+puts it in the place and goes on to the next free one. That is the other place of the same
+phase and team, then the other team's places of that phase, then the next phase, where the
+enemy's places come first. A click on a hero that is put in takes it off.
+
+Every place has a role, shown as the game's own drawing for that role in a corner of the
+place. A click on the drawing opens the five roles, each with its drawing and its name, to
+choose from. The first two places of a
+team start as soft support and hard support, the next two as carry and offlane, and the last as mid, which is how
+ranked teams mostly pick. Choosing another role for a place gives the place of that team that
+had it the role this one had, so a team has each role once. The place of the player's team
+with the role the player chose is the player's own. Its drawing is on the app's colour, and
+the place says "You" where there is room.
+
+Under the teams is the list. It is for the place that is being filled, whichever team's. It
+has the heroes of that place's role (5.2), with that place's team as the team and the other
+as the enemy, so for a place of the enemy it shows what does best for them. Each line has the
+hero, its points, and what speaks for and against it in words, with the picked heroes that
+add or take the most. What a hero adds is green and what it takes is red, in the words and
+in the points, and so is the share of its matches a hero wins, green above half and red
+below. A click on a line does what typing the hero's name does. It puts the
+hero in the place that is being filled and goes on to the next free one. The cross at its end takes the hero out of the list until "New
+draft", for a hero that is banned or that the player does not play.
+
+Once all ten places have a hero, the page says which draft is better (5.2), small, at the
+right end of the line of the two lists, over the teams. A bar is shared by the two teams by
+their chances, with each team's percent on its part, and a few words stand before it where
+there is room. Two drafts within one percent of each other are called even. The list says whose
+numbers it shows, of which patch and how old they are, and those words open stratz.com.
+
+### 5.4 Fetching and keeping
+
+Nothing is fetched before the Draft page is opened. The app then fetches the file the way it
+fetches updates (4.3), from an `https` address, and takes no more than 4 MB. It keeps the file
+as `draft.json` beside its settings and reads it from there at the next start. A kept file
+that is less than a day old is not fetched again, and the app looks once in a run.
+
+A file that does not come, or that is not of the shape above, changes nothing. The numbers
+that are kept stay in use. Where there are none, the page says that they could not be fetched
+and has "Try again".
+
+For testing, `--numbers-from` says where to fetch the file from, which may be a file on the
+computer. A window that is only there to have its picture taken fetches only then. A build
+made while the environment variable `DME_NUMBERS_TRIAL` holds such a place fetches from
+there in the place of the built-in address, with no option, the way `DME_UPDATE_TRIAL` does
+it for updates (4.5). That is for a build somebody is to try before the file is put out.
+`publish/release.ps1` builds with neither of the two set.

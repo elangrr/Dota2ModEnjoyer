@@ -1,6 +1,7 @@
 pub mod apply;
 pub mod catalog;
 pub mod dota;
+pub mod draft;
 pub mod effects;
 pub mod engine;
 pub mod error;

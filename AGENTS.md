@@ -72,10 +72,12 @@ whether a request is one of the above, ask the person before writing code.
 | `gameinfo.rs`, `signatures.rs` | The two game files that are edited |
 | `dota.rs`, `process.rs`, `launch.rs` | Finding Dota, whether it runs, starting it through Steam |
 | `update.rs` | The app updating itself: manifest, checks, putting the new file in place (SPEC 4) |
+| `draft.rs` | The draft helper: reading its file of numbers, and which heroes to pick against and beside which (SPEC 5) |
 | `crates/dme-app/src/` | The window, made with `egui`/`eframe` |
 | `app.rs`, `app/sheets.rs`, `views/` | The app's state, the side bar, the bar at the bottom, the messages; what opens in front of the window (notice, tour, what is new, help, settings, support) with its texts; and the pages: hero grid and search, slots and tiles, all picks and presets, rarity chips, settings, the drawings beside the pages' names |
 | `worker.rs` | The one thread that reads and writes game files |
 | `update.rs`, `changelog.rs` | Asking for updates on threads of its own, fetching with WinHTTP and telling how far it has come, starting again; what is new in each version, from `CHANGELOG.md` |
+| `numbers.rs`, `views/draft.rs` | Fetching and keeping the numbers of the draft helper; the Draft page |
 | `script.rs`, `main.rs` | Working the window from the command line for testing; the options |
 | `status.rs`, `settings.rs`, `presets.rs`, `theme.rs`, `glass.rs`, `pictures.rs`, `logo.rs`, `support.rs` | The status sentence and badge, settings, presets, the two looks (colours, fonts, glass), the blurred desktop behind the window on Windows 11, picture cache, the logo as the app draws it, where to star and donate |
 | `crash.rs`, `one_copy.rs`, `report.rs` | What happens when something goes wrong inside the app; one copy at a time for one data folder; a report of a problem as a new issue on GitHub |

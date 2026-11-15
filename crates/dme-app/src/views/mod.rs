@@ -1,3 +1,4 @@
+pub mod draft;
 pub mod heroes;
 pub mod icons;
 pub mod loadout;

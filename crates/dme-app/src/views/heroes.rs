@@ -170,7 +170,7 @@ fn heading(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-fn found<'c>(heroes: &'c [Hero], wanted: &str) -> Vec<&'c Hero> {
+pub(super) fn found<'c>(heroes: &'c [Hero], wanted: &str) -> Vec<&'c Hero> {
     let mut fitting: Vec<(u8, &Hero)> = heroes.iter().filter_map(|hero| Some((hero.fits(wanted)?, hero))).collect();
     fitting.sort_by_key(|(fit, _)| *fit);
     fitting.into_iter().map(|(_, hero)| hero).collect()

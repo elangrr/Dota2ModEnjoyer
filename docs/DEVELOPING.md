@@ -76,6 +76,37 @@ has a test window hold its data folder like a player's, so that a second one sta
 closes. The app has no `--help`: an option it does not know is left alone, and without
 `--screenshot` the window opens on your screen with your own picks.
 
+## The draft helper's numbers
+
+The Draft page works from one file, `draft.json`, which [SPEC.md](SPEC.md), section 5,
+describes. This makes it in a folder, from the statistics of [STRATZ](https://stratz.com):
+
+```
+set STRATZ_TOKEN=<your token>
+python publish/make_numbers.py numbers
+```
+
+A token is free. STRATZ gives one to whoever logs in with Steam at stratz.com/api, and asks
+for a link back to it wherever its numbers are shown. The script asks about twenty-five
+questions, which takes a few minutes, and needs nothing but Python. `python publish/make_numbers.py --check` tries its sums.
+
+To see the page with a file of your own, without publishing anything:
+
+```
+Dota2ModEnjoyer.exe --data-dir scratch --numbers-from numbers/draft.json --open draft
+```
+
+A build made while the environment variable `DME_NUMBERS_TRIAL` names such a `draft.json`
+fetches it from there with no option at all. That is handy for a build somebody else is to
+try by starting it the usual way. A released build is made without it.
+
+The released app's file is made anew once a week and put on the branch `data` of this
+repository, which holds that one file.
+
+A build of the app fetches `draft.json` from the address `NUMBERS_URL` in
+`crates/dme-core/src/draft.rs`. If you hand out builds of your own, point that at a file you
+publish yourself.
+
 ## Releases of the app
 
 The app updates itself (see Updates in the [README](../README.md)). A build looks at this

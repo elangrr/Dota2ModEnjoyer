@@ -5,6 +5,7 @@ mod changelog;
 mod crash;
 mod glass;
 mod logo;
+mod numbers;
 mod one_copy;
 mod pictures;
 mod presets;
@@ -37,6 +38,7 @@ pub struct Options {
     pub update_from: Option<String>,
     pub pretend_version: Option<String>,
     pub no_restart: bool,
+    pub numbers_from: Option<String>,
     pub updated_from: Option<String>,
 }
 
@@ -52,6 +54,7 @@ impl Options {
                 "--update-from" => options.update_from = arguments.next(),
                 "--pretend-version" => options.pretend_version = arguments.next(),
                 "--updated-from" => options.updated_from = arguments.next(),
+                "--numbers-from" => options.numbers_from = arguments.next(),
                 "--dota" => options.dota = arguments.next().map(PathBuf::from),
                 "--data-dir" => options.data_dir = arguments.next().map(PathBuf::from),
                 "--screenshot" => options.screenshot = arguments.next().map(PathBuf::from),
@@ -92,7 +95,7 @@ fn read_numbers<const N: usize>(text: &str, between: char) -> Option<[f32; N]> {
 }
 
 const LIKED_SIZE: [f32; 2] = [1280.0, 820.0];
-const LEAST_SIZE: [f32; 2] = [760.0, 480.0];
+const LEAST_SIZE: [f32; 2] = [760.0, 560.0];
 const SCREEN_MARGIN: f32 = 8.0;
 
 fn opening_size(room: Option<[f32; 2]>) -> [f32; 2] {

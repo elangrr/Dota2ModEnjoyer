@@ -2,6 +2,12 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.3.0
+
+- A new Draft page says which heroes to pick in a match. Choose your rank and role, put in the heroes as they are picked, and it lists the heroes that win more often against the enemy and beside your team, with a line on why.
+- With both teams full, the Draft page gives each team its chance to win in percent.
+- The numbers come from millions of public matches, added up by STRATZ. The app downloads them from GitHub when you open the page, and they are made new every week.
+
 ## 0.2.3
 
 - A calmer, frosted glass look. On Windows 11 your desktop shows softly through the app, blurred. The buttons have a quieter colour, and the side bar and its icons are smaller. A computer that cannot draw it gets the plain look instead.

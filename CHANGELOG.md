@@ -2,6 +2,11 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.3.2
+
+- Heroes should no longer lose pieces in online matches, such as a hero without hair, Dragon Knight without his sword or Venomancer without anything on. A picked piece now loads the way the hero's own piece does.
+- Press Play once after updating, so that your picks are put in the game the new way.
+
 ## 0.3.1
 
 - The Draft page can now suggest heroes for winning the lane. Switch from "Team composition" to "Lane winning" at the top.

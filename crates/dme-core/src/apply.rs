@@ -8,6 +8,7 @@ use crate::effects;
 use crate::error::{Error, Result};
 use crate::items::{self, AttachedEffect, Item, ItemsGame};
 use crate::kv::{Block, Pair, Value};
+use crate::resource;
 
 pub const LOOKS: &[&str] = &[
     "model_player",
@@ -171,7 +172,16 @@ pub struct Change {
 pub struct Patched {
     pub bytes: Vec<u8>,
     pub changes: Vec<Change>,
+    pub placed: Vec<Placed>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub at: String,
+    pub model: String,
+}
+
+const MODEL_KEYS: &[&str] = &["model_player", "model_player1", "model_player2", "model_player3"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Skipped {
@@ -486,7 +496,86 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
 
     let bytes = splice(vanilla, edits)?;
     check(game, &bytes, &expected)?;
-    Ok(Patched { bytes, changes })
+    Ok(Patched { bytes, changes, placed: Vec::new() })
+}
+
+pub fn place_models(before: &ItemsGame<'_>, patched: &mut Patched, exists: &dyn Fn(&str) -> bool) -> Result<()> {
+    let shared = shared_models(before);
+    let mut edits: Vec<(Range<usize>, Vec<u8>)> = Vec::new();
+    let mut placed: Vec<Placed> = Vec::new();
+    let mut places: Vec<(String, &str)> = Vec::new();
+    {
+        let after = ItemsGame::parse(&patched.bytes)?;
+        let named_otherwise = named_otherwise(&after);
+        for own in before.items().iter().filter(|item| item.is_default() && !item.heroes.is_empty()) {
+            let Some(rewritten) = after.item(own.id) else { continue };
+            for &key in MODEL_KEYS {
+                let (Some(at), Some(model)) = (own.block.str(key).and_then(as_text), rewritten.block.str(key).and_then(as_text)) else {
+                    continue;
+                };
+                let (at_path, model_path) = (resource::normal(at), resource::normal(model));
+                let swapped = named_otherwise.contains(&at_path) || named_otherwise.contains(&model_path);
+                if at_path == model_path || shared.contains(&at_path) || swapped || !exists(model) {
+                    continue;
+                }
+                let Some(pair) = rewritten.block.pairs().find(|pair| is(pair.key, key)) else { continue };
+                if placed.iter().any(|known| resource::normal(&known.at) == at_path) {
+                    return Err(Error::Refused(format!("two picks would put their models where the game looks for {at}")));
+                }
+                edits.push((pair.start..pair.end, string_pair(key, at.as_bytes())));
+                placed.push(Placed { at: at.to_string(), model: model.to_string() });
+                places.push((own.id.to_string(), key));
+            }
+        }
+    }
+    if placed.is_empty() {
+        return Ok(());
+    }
+    let bytes = splice(&patched.bytes, edits)?;
+    let wrong = |detail: String| Error::format("the edited item database", detail);
+    let after = ItemsGame::parse(&bytes)?;
+    if after.items().len() != before.items().len() || after.sets().len() != before.sets().len() {
+        return Err(wrong("the number of items or sets changed as models were put in place".to_string()));
+    }
+    for (placed, (id, key)) in placed.iter().zip(&places) {
+        if after.item(id).and_then(|item| item.block.str(key)) != Some(placed.at.as_bytes()) {
+            return Err(wrong(format!("item {id} does not name {} after its model was put in place", placed.at)));
+        }
+    }
+    patched.bytes = bytes;
+    patched.placed = placed;
+    Ok(())
+}
+
+fn named_otherwise(game: &ItemsGame<'_>) -> HashSet<String> {
+    let mut named = HashSet::new();
+    for item in game.items().iter().filter(|item| item.is_default()) {
+        for block in item.block.pairs().filter(|pair| !listed(MODEL_KEYS, pair.key)).filter_map(|pair| pair.value.as_block()) {
+            block.for_each_string(&mut |_, value| {
+                if let Some(text) = as_text(value) {
+                    named.insert(resource::normal(text));
+                }
+            });
+        }
+    }
+    named
+}
+
+fn shared_models(game: &ItemsGame<'_>) -> HashSet<String> {
+    let (mut seen, mut shared) = (HashSet::new(), HashSet::new());
+    for item in game.items().iter().filter(|item| item.is_default()) {
+        for model in MODEL_KEYS.iter().filter_map(|key| item.block.str(key).and_then(as_text)) {
+            let model = resource::normal(model);
+            if !seen.insert(model.clone()) {
+                shared.insert(model);
+            }
+        }
+    }
+    shared
+}
+
+fn as_text(bytes: &[u8]) -> Option<&str> {
+    std::str::from_utf8(bytes).ok()
 }
 
 struct Plan<'g, 'a> {
@@ -710,7 +799,8 @@ fn without_looks<'a>(src: &'a [u8], default: &Item<'a>) -> Rewritten<'a> {
 }
 
 fn with_looks<'a>(src: &'a [u8], default: Block<'a>, item: &Item<'a>, style: u32, slot: &str) -> Result<Rewritten<'a>> {
-    let baked = if style == 0 { None } else { Some(bake_style(src, item, style)?) };
+    let first_names_a_model = !item.switches_styles_itself() && item.styles().first().is_some_and(|first| first.block.str("model_player").is_some());
+    let baked = if style == 0 && !first_names_a_model { None } else { Some(bake_style(src, item, style)?) };
 
     let mut copied: Vec<Part<'a>> = Vec::new();
     for pair in item.block.pairs().filter(|pair| !listed(NOT_COPIED, pair.key)) {

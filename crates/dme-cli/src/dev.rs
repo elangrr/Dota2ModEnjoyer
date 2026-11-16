@@ -793,6 +793,7 @@ struct Outcome {
     seconds: f32,
     changes: Vec<Change>,
     failures: Vec<String>,
+    placed: usize,
 }
 
 fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>>]) -> Outcome {
@@ -804,13 +805,24 @@ fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>
         for _ in 0..workers {
             scope.spawn(|| {
                 while let Some(round) = rounds.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    let (mut changes, mut failures) = (Vec::new(), Vec::new());
-                    match apply::patch(game, bytes, &round.concat()) {
-                        Ok(patched) => changes = patched.changes,
+                    let (mut changes, mut failures, mut placed) = (Vec::new(), Vec::new(), 0);
+                    let patch = |picks: &[Pick]| {
+                        let mut patched = apply::patch(game, bytes, picks)?;
+                        apply::place_models(game, &mut patched, &|_| true)?;
+                        Ok::<_, dme_core::Error>(patched)
+                    };
+                    match patch(&round.concat()) {
+                        Ok(patched) => {
+                            placed = patched.placed.len();
+                            changes = patched.changes;
+                        }
                         Err(together) => {
                             for candidate in round {
-                                match apply::patch(game, bytes, candidate) {
-                                    Ok(patched) => changes.extend(patched.changes),
+                                match patch(candidate) {
+                                    Ok(patched) => {
+                                        placed += patched.placed.len();
+                                        changes.extend(patched.changes);
+                                    }
                                     Err(error) => {
                                         let written: Vec<String> = candidate.iter().map(crate::written).collect();
                                         failures.push(format!("{}: {error}", written.join(" ")));
@@ -825,6 +837,7 @@ fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>
                     let mut outcome = outcome.lock().unwrap();
                     outcome.changes.extend(changes);
                     outcome.failures.extend(failures);
+                    outcome.placed += placed;
                 }
             });
         }
@@ -839,10 +852,11 @@ fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>
 impl Outcome {
     fn report(&self, dota: &DotaInstall, archive: &Archive) -> usize {
         println!(
-            "{} rounds in {:.1} s: {} default items rewritten, {} picks FAILED",
+            "{} rounds in {:.1} s: {} default items rewritten, {} models put where the default's own is, {} picks FAILED",
             self.rounds,
             self.seconds,
             self.changes.len(),
+            self.placed,
             self.failures.len()
         );
         for line in self.failures.iter().take(25) {

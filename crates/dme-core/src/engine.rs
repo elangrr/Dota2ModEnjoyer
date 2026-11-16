@@ -16,7 +16,7 @@ use crate::{effects, fsutil, gameinfo, map_effect, process, trees};
 
 pub const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
-const REWRITE_RULES: u32 = 8;
+const REWRITE_RULES: u32 = 9;
 
 const BRANCH_FILE: &str = "gameinfo_branchspecific.gi";
 const VERIFY_HINT: &str =
@@ -145,10 +145,10 @@ impl Engine {
         let for_items: Vec<Pick> = picks.iter().filter(|pick| !is_a_file(pick)).cloned().collect();
         let hero_files = for_items.iter().any(effects::is_emblem_pick).then(|| HeroFiles::read(&archive));
         let live = |hero: &str, slot: &str| hero_files.as_ref().is_none_or(|files| files.has_slot(hero, slot));
-        let apply::Patched { bytes, mut changes } = apply::patch_for(&game, &vanilla, &for_items, &live, effects_for)?;
+        let mut patched = apply::patch_for(&game, &vanilla, &for_items, &live, effects_for)?;
 
-        let mut missing = missing_files(&self.dota, &archive, &changes);
-        let moved = moved_files(&archive, &changes)?;
+        let mut missing = missing_files(&self.dota, &archive, &patched.changes);
+        let moved = moved_files(&archive, &patched.changes)?;
         let is_there = |file: &String| moved.iter().any(|(path, _)| *path == format!("{}_c", resource::normal(file)));
         missing.models.retain(|file| !is_there(file));
         missing.others.retain(|file| !is_there(file));
@@ -158,7 +158,22 @@ impl Engine {
                 missing.models.join(", ")
             )));
         }
+        let compiled = |model: &str| format!("{}_c", resource::normal(model));
+        let moved_data = |path: &str| moved.iter().find(|(known, _)| known == path).map(|(_, data)| data.clone());
+        apply::place_models(&game, &mut patched, &|model| archive.contains(&compiled(model)) || moved_data(&compiled(model)).is_some())?;
+        let mut placed_files: Vec<NewFile> = Vec::new();
+        for placed in &patched.placed {
+            let from = compiled(&placed.model);
+            let data = match archive.read(&from)? {
+                Some(data) => data,
+                None => moved_data(&from).ok_or_else(|| Error::format("the game's archive", format!("{from} is missing")))?,
+            };
+            placed_files.push((compiled(&placed.at), data));
+        }
+        let apply::Patched { bytes, mut changes, .. } = patched;
         let mut own_files: Vec<NewFile> = moved;
+        own_files.retain(|(path, _)| !placed_files.iter().any(|(placed, _)| placed == path));
+        own_files.extend(placed_files);
         let mut slots_taken: Vec<&str> = Vec::new();
         for (place, pick) in picks.iter().enumerate().filter(|(_, pick)| is_a_file(pick)) {
             if slots_taken.iter().any(|taken| taken.eq_ignore_ascii_case(&pick.slot)) {
@@ -498,12 +513,12 @@ mod tests {
         assert!(applied.missing_files.is_empty());
 
         let package = Archive::open(&dota.mod_package()).unwrap();
-        assert_eq!(package.len(), 1);
+        assert_eq!(package.len(), 3);
         assert!(package.verify_checksums().unwrap().all_ok());
         let inside = package.read(ITEMS_GAME).unwrap().unwrap();
         assert_eq!(applied.package_len, std::fs::metadata(dota.mod_package()).unwrap().len() as usize);
         let game = ItemsGame::parse(&inside).unwrap();
-        assert_eq!(game.item("2").unwrap().model, Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+        assert_eq!(game.item("2").unwrap().model, Some("models/heroes/axe/axe_weapon.vmdl"));
 
         let branch = read(dota.gameinfo_branch());
         assert!(branch.contains("Game\tmod_enjoyer"));
@@ -544,7 +559,7 @@ mod tests {
         assert_eq!(told, [("weapon", "Axe of the Vanguard"), ("trees", "Autumn trees"), ("head", "Helm of the \\\"Vanguard\\\""), ("misc", "Bracers of the Vanguard")]);
 
         let package = Archive::open(&dota.mod_package()).unwrap();
-        assert_eq!(package.len(), 8);
+        assert_eq!(package.len(), 10, "with the two picked models where the default items' own are");
         assert!(package.verify_checksums().unwrap().all_ok());
         for own in ["tree_oak_leaves_00", "tree_oak_leaves_05", "tree_pine_frond_00", "dire_tree007c"] {
             assert!(package.contains(&format!("materials/models/props_tree/{own}.vmat_c")), "{own}");
@@ -552,7 +567,7 @@ mod tests {
         assert!(!package.contains("materials/models/props_tree/tree_oak_autumn_leaves_00.vmat_c"));
         let inside = package.read(ITEMS_GAME).unwrap().unwrap();
         let game = ItemsGame::parse(&inside).unwrap();
-        assert_eq!(game.item("2").unwrap().model, Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+        assert_eq!(game.item("2").unwrap().model, Some("models/heroes/axe/axe_weapon.vmdl"));
 
         assert_eq!(fake.engine.status().unwrap().picks, both);
         assert!(matches!(fake.engine.make_ready(&both, &EffectsFor::Every).unwrap(), Ready::Already));
@@ -754,6 +769,25 @@ mod tests {
     }
 
     #[test]
+    fn the_picked_models_go_in_the_package_where_the_default_items_own_are() {
+        let files: Vec<(&str, &[u8])> =
+            vec![(FILES[0], b"the vanguard axe"), (FILES[1], b"the vanguard helm"), (FILES[2], b"the vanguard bracers"), (FILES[3], b"the effect")];
+        let fake = fake_install_of(SAMPLE, &files);
+        let applied = fake.engine.apply(&picks()).unwrap();
+        assert_eq!(applied.changes[0].model.as_deref(), Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+
+        let package = Archive::open(&fake.engine.dota.mod_package()).unwrap();
+        assert_eq!(package.read("models/heroes/axe/axe_weapon.vmdl_c").unwrap().unwrap(), b"the vanguard axe");
+        assert_eq!(package.read("models/heroes/axe/axe_ponytail.vmdl_c").unwrap().unwrap(), b"the vanguard helm");
+        assert_eq!(package.len(), 3);
+        let inside = package.read(ITEMS_GAME).unwrap().unwrap();
+        let game = ItemsGame::parse(&inside).unwrap();
+        assert_eq!(game.item("2").unwrap().model, Some("models/heroes/axe/axe_weapon.vmdl"));
+        assert_eq!(game.item("4").unwrap().model, Some("models/heroes/axe/axe_ponytail.vmdl"));
+        assert_eq!(game.item("8653").unwrap().model, Some("models/items/axe/vanguard_misc/vanguard_misc.vmdl"));
+    }
+
+    #[test]
     fn a_missing_effect_is_reported_and_does_not_stop_the_apply() {
         let fake = fake_install(&FILES[..3]);
         let applied = fake.engine.apply(&picks()).unwrap();
@@ -770,7 +804,7 @@ mod tests {
         assert!(applied.missing_files.is_empty(), "{:?}", applied.missing_files);
 
         let package = Archive::open(&fake.engine.dota.mod_package()).unwrap();
-        assert_eq!(package.len(), 2, "the item database and the effect");
+        assert_eq!(package.len(), 4, "the item database, the effect and two picked models");
         assert_eq!(package.read("particles/econ/items/axe/vanguard/weapon.vpcf_c").unwrap().unwrap(), b"the effect");
     }
 
@@ -793,9 +827,11 @@ mod tests {
         assert_eq!(applied.changes.len(), 3);
         assert!(applied.missing_files.is_empty(), "{:?}", applied.missing_files);
 
-        let inside = Archive::open(&fake.engine.dota.mod_package()).unwrap().read(ITEMS_GAME).unwrap().unwrap();
+        let package = Archive::open(&fake.engine.dota.mod_package()).unwrap();
+        assert!(package.contains("models/heroes/axe/axe_ponytail.vmdl_c"));
+        let inside = package.read(ITEMS_GAME).unwrap().unwrap();
         let game = ItemsGame::parse(&inside).unwrap();
-        assert_eq!(game.item("4").unwrap().model, Some("models/items/axe/crested/crested_gold.vmdl"));
+        assert_eq!(game.item("4").unwrap().model, Some("models/heroes/axe/axe_ponytail.vmdl"));
         assert_eq!(game.item("595").unwrap().block.str("particle_folder").unwrap(), b"particles/econ/courier/courier_drodo");
 
         let later = Engine {

@@ -706,15 +706,18 @@ emblem (3.19), for other trees (3.17), for another look of the map (3.20) and fo
 4. Everything outside the rewritten blocks is copied byte for byte.
 5. Check the result: it parses, it has the same number of items and sets, and each rewritten item
    is still the default of its slot, with its own name, prefab and heroes, names the picked
-   item's model, and holds as many gems as it was given (3.3).
+   item's model, and holds as many gems as it was given (3.3). Step 7 then has a default item
+   of a hero name its own model again, and checks that too.
 6. Look for every model, effect and map the rewritten items name. If the game lacks an item's
    `model_player`, stop, because the item could not be shown. Other missing files are reported
    and do not stop anything; Valve's own data names a few files the game never shipped. A
    file that another stands in for (2.13) is not missing.
-7. Write the result to `game\mod_enjoyer\pak01_dir.vpk`. It is the only file in the package,
-   unless other trees or another look for the map are picked (3.17, 3.20), or a file that the
-   picks name is one folder away from where it is named (2.13): a copy of that file goes in
-   under the name it is asked for by.
+7. Put the picked models where the default items' own are (3.24): their files go in the
+   package under the defaults' names.
+8. Write the result to `game\mod_enjoyer\pak01_dir.vpk`, with those models, and with other
+   trees or another look for the map where they are picked (3.17, 3.20), and with a copy of a
+   file that the picks name and that is one folder away from where it is named (2.13), under
+   the name it is asked for by.
 
 Two heroes cannot both have a pick for a slot whose default item they share (2.6), because the one
 item can show one thing. Such picks are refused with a sentence that names both heroes.
@@ -751,7 +754,8 @@ any that are not, and is worth running after a Dota update.
 So the default item is still the default item of its slot, with the same id, name and prefab, but
 it now names the picked item's model, effects, icon and display name. If the picked item has no
 value for a look (for example no `visuals`), the default item ends up without one too, exactly as
-when a player equips that item.
+when a player equips that item. (Where a default item of a hero has a model of its own, 3.24 then
+has it name that model again, with the picked model's file put under its name.)
 
 One thing among an item's `static_attributes` is a look all the same: the gems the item comes
 with (2.12), which sit in its sockets and give abilities another icon, another animation or
@@ -791,7 +795,10 @@ styles would show:
 - the style's `model_player` takes the place of the item's, or is added;
 - the icon that the style's `alternate_icon` points to becomes the item's `image_inventory`.
 
-Style 0 needs none of this, and the item is copied as written. A style can also carry
+Style 0 needs none of this, and the item is copied as written, unless the style names a model
+of its own: then it is worked in the same way, so that its model can be put where the default's
+own is (3.24). That the game would otherwise load a first style's model by its name is a guess,
+not seen. A style can also carry
 `body_groups`, `asset` or `entity_scale_flying` (20 styles in all on build 6973); those are not
 worked in.
 
@@ -1031,7 +1038,7 @@ Two files keep apart what the player wants and what is in the game.
 - `state.json` is written when a package is. It holds the picks in the package, the game build it
   was made from, the number of the rewrite rules it was made by, and which heroes got the effects
   of events. The number goes up whenever sections 3.3, 3.4 or 3.14 to 3.22 change what is written
-  for the same picks; it is 8 now. The file is deleted before the first of the game's files is
+  for the same picks; it is 9 now. The file is deleted before the first of the game's files is
   written and written again after the last, so that a write that fails on the way leaves no
   picks that pass for the ones in the game, and the next Play writes them all. Going back to
   normal Dota deletes it too.
@@ -1682,6 +1689,56 @@ items the game does not have are left out and counted, and a style that is gone 
 the item's first. Picking what a code has puts each pick in its slot, taking the place of what
 was picked there and of what heroes that share its default item had picked; the other picks
 stay. That can be undone.
+
+### 3.24 The picked model where the default's own is
+
+A player reported heroes with pieces missing in matches: one without hair, Dragon Knight without
+his sword, Venomancer with nothing on, and crashes. In an online match the game loads the models
+of what each hero wears as Valve's server has it do, and for a slot on its default that is the
+default item's own model. A default item rewritten by 3.3 names the picked item's model instead,
+which the game then has to load by itself, and that is the likely way to lose a piece or to see
+"ERROR" after a change of the video settings. So, after 3.3, the picked model goes where the
+game looks for the default's own:
+
+1. Each rewritten default item of a hero that names a model of its own (`model_player`, and
+   `model_player1` to `3` where it has them) names that model again, in the place of the
+   picked one.
+2. The picked model's compiled file goes in the package under the default model's name:
+   `models/heroes/dragon_knight/weapon.vmdl_c` holds the bytes of the picked sword's
+   `.vmdl_c`. A compiled model names its materials and the rest by their full paths (2.13), so
+   it finds them where it is put.
+3. Everything else of the rewrite stays: the picked item's effects, name, icon, portrait and
+   the skin of a style (3.4). The model of a style is the one that is put in place: 3.4 works
+   in the first style too where it names a model of its own (146 items on build 6975, 11 of
+   them another model than the item's), since the game would otherwise load it by its name.
+
+The result is read back: it has as many items and sets, and each default item names its own
+model where one was put.
+
+Left as 3.3 has it:
+
+- a default item without a model of its own: the picked model stays named. On build 6975 that
+  is 57 hero slots (Lion's head, Earthshaker's head, Morphling's...) whose look is part of the
+  hero's body; what is picked for them is not known to show online;
+- a model that more than one default item names, or one item under two keys (Troll Warlord's
+  four default weapons share one), since a file put there would show on each of them;
+- a model that a default item names other than as its own, such as the `asset` of a swap of
+  models: Faceless Void's arcana head swaps his own bracers, belt and shoulders for ones that
+  go with it, and a picked bracer put where his own is would be swapped too. 30 such swaps
+  are in items that can be picked, on build 6975;
+- a picked model that a default item names that way: the same arcana refits certain bracers
+  and shoulders by their own names, and would not find one put under the default's name. 450
+  such swaps are in items that can be picked;
+- a model the game does not have, which stays named and does not show, as before;
+- world slots, and the models a style switches to by itself (2.6).
+
+Other items that use a default's model with another skin, such as the 108 Diretide Shimmer
+items, show the picked model on whoever wears one, on this computer only.
+
+`dme dev try-all` puts the models in place in every round as Play does; on build 6975 that is
+10,062 of the 14,205 single picks. Three sets of 16 pieces made the package 0.7 MB bigger
+than the item database alone. Idea taken from ArdysaModsTools (its public GPL code), which ships its sets
+this way; the code is this project's own. **(to confirm in a match)**
 
 ## 4. The app updating itself
 

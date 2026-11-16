@@ -1541,3 +1541,107 @@ fn places_read_naturally() {
     assert_eq!(Pick::hero(AXE, "weapon", "9040").place(), "axe's weapon slot");
     assert_eq!(Pick::world("courier", "10003").place(), "the courier slot");
 }
+
+fn placed(picks: &[Pick]) -> Patched {
+    let mut patched = patched(picks);
+    place_models(&game(), &mut patched, &|_| true).unwrap();
+    patched
+}
+
+fn placed_pair(at: &str, model: &str) -> Placed {
+    Placed { at: at.to_string(), model: model.to_string() }
+}
+
+#[test]
+fn a_picked_model_goes_where_the_default_items_own_is() {
+    let result = placed(&vanguard());
+    assert_eq!(
+        result.placed,
+        [
+            placed_pair("models/heroes/axe/axe_weapon.vmdl", "models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"),
+            placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/vanguard_head/vanguard_head.vmdl"),
+        ]
+    );
+    let game = ItemsGame::parse(&result.bytes).unwrap();
+    let weapon = game.item("2").unwrap();
+    assert_eq!(weapon.model, Some("models/heroes/axe/axe_weapon.vmdl"), "the default names its own model again");
+    assert_eq!(weapon.block.str("item_name").unwrap(), b"#DOTA_Item_Axe_of_the_Vanguard", "and keeps the rest of the picked item's looks");
+    assert!(weapon.block.block("visuals").unwrap().block("asset_modifier0").is_some());
+    assert_eq!(game.item("4").unwrap().model, Some("models/heroes/axe/axe_ponytail.vmdl"));
+    assert_eq!(game.item("8653").unwrap().model, Some("models/items/axe/vanguard_misc/vanguard_misc.vmdl"));
+    assert_eq!(result.changes[0].model.as_deref(), Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+}
+
+#[test]
+fn a_styles_own_model_is_the_one_put_in_place() {
+    let result = placed(&[Pick::hero(AXE, "head", "9500").styled(1)]);
+    assert_eq!(result.placed, [placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/crested/crested_gold.vmdl")]);
+    let game = ItemsGame::parse(&result.bytes).unwrap();
+    assert_eq!(game.item("4").unwrap().model, Some("models/heroes/axe/axe_ponytail.vmdl"));
+}
+
+#[test]
+fn a_model_the_game_lacks_stays_named_as_it_was() {
+    let mut result = patched(&vanguard());
+    place_models(&game(), &mut result, &|model| !model.contains("vanguard_weapon")).unwrap();
+    assert_eq!(result.placed.len(), 1);
+    let game = ItemsGame::parse(&result.bytes).unwrap();
+    assert_eq!(game.item("2").unwrap().model, Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+}
+
+#[test]
+fn a_model_that_two_default_items_name_is_left_alone() {
+    let text = SAMPLE.replace("models/heroes/bane/bane_head.vmdl", "models/heroes/axe/axe_ponytail.vmdl");
+    let game = ItemsGame::parse(text.as_bytes()).unwrap();
+    let mut result = patch(&game, text.as_bytes(), &vanguard()).unwrap();
+    place_models(&game, &mut result, &|_| true).unwrap();
+    assert_eq!(result.placed, [placed_pair("models/heroes/axe/axe_weapon.vmdl", "models/items/axe/vanguard_weapon/vanguard_weapon.vmdl")]);
+    let after = ItemsGame::parse(&result.bytes).unwrap();
+    assert_eq!(after.item("4").unwrap().model, Some("models/items/axe/vanguard_head/vanguard_head.vmdl"));
+}
+
+#[test]
+fn a_model_that_a_picked_item_swaps_is_left_alone() {
+    let swap = "\"visuals\"\r\n\t\t\t{\r\n\t\t\t\t\"asset_modifier\"\r\n\t\t\t\t{\r\n\t\t\t\t\t\"type\"\t\t\"model\"\r\n\t\t\t\t\t\"asset\"\t\t\"models/heroes/axe/axe_weapon.vmdl\"\r\n\t\t\t\t\t\"modifier\"\t\t\"models/items/axe/helm_weapon.vmdl\"\r\n\t\t\t\t}\r\n\t\t\t}\r\n\t\t\t\"price_info\"";
+    let text = SAMPLE.replacen("\"price_info\"", swap, 1);
+    let game = ItemsGame::parse(text.as_bytes()).unwrap();
+    let mut result = patch(&game, text.as_bytes(), &vanguard()).unwrap();
+    place_models(&game, &mut result, &|_| true).unwrap();
+    assert_eq!(result.placed, [placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/vanguard_head/vanguard_head.vmdl")]);
+    let after = ItemsGame::parse(&result.bytes).unwrap();
+    assert_eq!(after.item("2").unwrap().model, Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+}
+
+#[test]
+fn a_picked_model_that_another_pick_swaps_keeps_its_name() {
+    let swap = "\"visuals\"\r\n\t\t\t{\r\n\t\t\t\t\"asset_modifier\"\r\n\t\t\t\t{\r\n\t\t\t\t\t\"type\"\t\t\"model\"\r\n\t\t\t\t\t\"asset\"\t\t\"models/items/axe/vanguard_weapon/vanguard_weapon.vmdl\"\r\n\t\t\t\t\t\"modifier\"\t\t\"models/items/axe/vanguard_weapon/refit.vmdl\"\r\n\t\t\t\t}\r\n\t\t\t}\r\n\t\t\t\"price_info\"";
+    let text = SAMPLE.replacen("\"price_info\"", swap, 1);
+    let game = ItemsGame::parse(text.as_bytes()).unwrap();
+    let mut result = patch(&game, text.as_bytes(), &vanguard()).unwrap();
+    place_models(&game, &mut result, &|_| true).unwrap();
+    assert_eq!(result.placed, [placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/vanguard_head/vanguard_head.vmdl")]);
+    let after = ItemsGame::parse(&result.bytes).unwrap();
+    assert_eq!(after.item("2").unwrap().model, Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+}
+
+#[test]
+fn a_first_style_with_a_model_of_its_own_is_worked_in_and_put_in_place() {
+    let text = SAMPLE.replace("\"name\"\t\t\"#Style_Plain\"", "\"name\"\t\t\"#Style_Plain\"\r\n\t\t\t\t\t\t\"model_player\"\t\t\"models/items/axe/crested/crested_plain.vmdl\"");
+    let game = ItemsGame::parse(text.as_bytes()).unwrap();
+    let mut result = patch(&game, text.as_bytes(), &[Pick::hero(AXE, "head", "9500")]).unwrap();
+    assert_eq!(result.changes[0].model.as_deref(), Some("models/items/axe/crested/crested_plain.vmdl"));
+    place_models(&game, &mut result, &|_| true).unwrap();
+    assert_eq!(result.placed, [placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/crested/crested_plain.vmdl")]);
+    let after = ItemsGame::parse(&result.bytes).unwrap();
+    let head = after.item("4").unwrap();
+    assert!(head.styles().is_empty(), "the styles are worked in, so the game does not load the style's model by its name");
+    assert_eq!(head.model, Some("models/heroes/axe/axe_ponytail.vmdl"));
+}
+
+#[test]
+fn without_picks_nothing_is_put_in_place() {
+    let mut result = patched(&[]);
+    place_models(&game(), &mut result, &|_| true).unwrap();
+    assert!(result.placed.is_empty());
+    assert_eq!(result.bytes, SAMPLE.as_bytes());
+}

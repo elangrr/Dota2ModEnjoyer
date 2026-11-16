@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use dme_core::catalog::{Catalog, Hero};
-use dme_core::draft::{Numbers, Rank, Role, Suggestion};
+use dme_core::draft::{Numbers, Rank, Role, Style, Suggestion};
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{self, Align, Align2, Color32, CornerRadius, CursorIcon, FontId, Layout, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
@@ -19,7 +19,10 @@ const NOTE: &str = "Put the heroes in as they are picked: click a place, type a 
      The list is for the place that is lit: it shows which heroes of that role win more often there, against the other team and beside their own, in matches of your rank. \
      A click on a hero in the list puts it in that place and goes on to the next, the same as typing its name. Its cross hides a hero that is banned, or that you do not play. \
      \"My role\" marks your own place with \"You\". \
-     Once both teams are full, the page says which draft is better, at the top right. \
+     The switch at the top says what the list is for. Team composition weighs a hero against the whole enemy team and beside your whole team, by the matches it wins. \
+     Lane winning weighs it by the lanes it wins, against the enemies of its lane alone: the mids meet each other, the carry and the hard support meet the offlaner and the soft support. \
+     For a carry or an offlaner the enemy's support in the lane counts half, the enemy's core in full. The hero it shares its lane with counts half, and a lane that ends even counts as half won. \
+     Once both teams are full, the page says which draft is better, at the top right, by the whole match. \
      The app does not see your game: nothing is read from Dota.";
 
 const SEATS: usize = 5;
@@ -151,6 +154,17 @@ impl Draft {
         (beside, self.heroes(!self.seat.enemy))
     }
 
+    fn in_the_lane(&self) -> (Vec<&str>, Vec<(&str, Role)>) {
+        let (seat, role) = (self.seat, self.role(self.seat));
+        let partner = self.seated(seat.enemy).into_iter().filter(|(_, other)| Some(*other) == role.lane_partner()).map(|(hero, _)| hero).collect();
+        let opponents = self.seated(!seat.enemy).into_iter().filter(|(_, other)| role.lane_opponents().contains(other)).collect();
+        (partner, opponents)
+    }
+
+    fn picked(&self) -> Vec<&str> {
+        self.team.iter().chain(&self.enemies).flatten().map(String::as_str).collect()
+    }
+
     fn empty(&mut self, seat: Seat) {
         self.side_mut(seat.enemy)[seat.place] = None;
         self.seat = seat;
@@ -170,6 +184,7 @@ pub struct View<'a> {
     pub failure: Option<&'a Failure>,
     pub rank: Rank,
     pub role: Option<Role>,
+    pub style: Style,
     pub now: u64,
 }
 
@@ -177,18 +192,21 @@ pub struct View<'a> {
 pub struct Answer {
     pub rank: Option<Rank>,
     pub role: Option<Option<Role>>,
+    pub style: Option<Style>,
     pub try_again: bool,
     pub copy_details: bool,
     pub open_source: bool,
 }
 
 pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
-    let View { catalog, pictures, draft, numbers, fetching, failure, rank, role, now } = view;
+    let View { catalog, pictures, draft, numbers, fetching, failure, rank, role, style, now } = view;
     let mut answer = Answer::default();
     let mut start_over = false;
     let any = !draft.is_empty();
     title_bar(ui, "Draft", Some(NOTE), Some((&mut draft.search, "Type a hero's name")), |ui| {
         start_over = ui.add_enabled(any, egui::Button::new("New draft")).on_hover_text("Take every hero off, for the next match").clicked();
+        ui.add_space(4.0);
+        answer.style = style_switch(ui, style);
     });
     if start_over {
         draft.start_over();
@@ -202,8 +220,14 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
     let wanted = draft.search.trim().to_lowercase();
     if !wanted.is_empty() {
         fitting(ui, catalog, pictures, draft, &wanted);
-    } else if let Some(numbers) = numbers {
-        suggestions(ui, catalog, pictures, draft, numbers, rank, role, now, &mut answer);
+    } else if let Some(numbers) = numbers.filter(|numbers| style == Style::Team || numbers.has_lanes()) {
+        suggestions(ui, catalog, pictures, draft, numbers, Choices { rank, role, style, now }, &mut answer);
+    } else if numbers.is_some() {
+        match lanes_waiting(ui, fetching, failure) {
+            Some(Asked::Again) => answer.try_again = true,
+            Some(Asked::CopyDetails) => answer.copy_details = true,
+            None => {}
+        }
     } else {
         match waiting(ui, fetching, failure, "numbers", "You can still put the heroes in.") {
             Some(Asked::Again) => answer.try_again = true,
@@ -212,6 +236,73 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
         }
     }
     answer
+}
+
+struct Choices {
+    rank: Rank,
+    role: Option<Role>,
+    style: Style,
+    now: u64,
+}
+
+fn style_switch(ui: &mut Ui, style: Style) -> Option<Style> {
+    const HIGH: f32 = 30.0;
+    let short = ui.available_width() < 640.0;
+    let font = FontId::proportional(theme::SMALL + 0.5);
+    let words = Style::ALL.map(|each| match (each, short) {
+        (Style::Team, true) => "Team",
+        (Style::Lane, true) => "Lane",
+        (each, false) => each.name(),
+    });
+    let halves = words.map(|words| ui.painter().layout_no_wrap(words.to_string(), font.clone(), theme::text()).size().x + 24.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(halves.iter().sum::<f32>() + 4.0, HIGH), Sense::hover());
+    let mut asked = None;
+    let mut left = rect.left() + 2.0;
+    for (index, each) in Style::ALL.into_iter().enumerate() {
+        let half = Rect::from_min_size(pos2(left, rect.top() + 2.0), vec2(halves[index], HIGH - 4.0));
+        left += halves[index];
+        let response = ui.interact(half, egui::Id::unique("draft style").with(index), Sense::click());
+        let on = each == style;
+        if index == 0 && ui.is_rect_visible(rect) {
+            let round = CornerRadius::same(theme::ROUND);
+            ui.painter().rect_filled(rect, round, theme::card());
+            ui.painter().rect_stroke(rect, round, Stroke::new(1.0, theme::line()), StrokeKind::Inside);
+        }
+        if on {
+            ui.painter().rect_filled(half, CornerRadius::same(7), theme::accent().gamma_multiply(if theme::is_day() { 0.18 } else { 0.26 }));
+        } else if response.hovered() {
+            ui.painter().rect_filled(half, CornerRadius::same(7), theme::text().gamma_multiply(0.08));
+        }
+        let ink = if on { theme::accent_text() } else { theme::text() };
+        ui.painter().text(half.center(), Align2::CENTER_CENTER, words[index], font.clone(), ink);
+        let hint = match each {
+            Style::Team => "Team composition: heroes that win more matches against the whole enemy team and beside your whole team",
+            Style::Lane => "Lane winning: heroes that win their lane more often against the enemies in it, and beside the hero they share it with",
+        };
+        if response.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(hint).clicked() && !on {
+            asked = Some(each);
+        }
+    }
+    asked
+}
+
+fn lanes_waiting(ui: &mut Ui, fetching: bool, failure: Option<&Failure>) -> Option<Asked> {
+    let what = "numbers of lanes";
+    if fetching || failure.is_some() {
+        return waiting(ui, fetching, failure, what, "Until they are here, choose Team composition at the top.");
+    }
+    let mut asked = None;
+    ui.vertical_centered(|ui| {
+        ui.add_space((ui.available_height() * 0.2).min(60.0));
+        ui.label(theme::title("The numbers of lanes are not here yet", 18.0));
+        ui.add_space(2.0);
+        ui.label(dim("They are made once a week and come with the next numbers. Until then, choose Team composition at the top."));
+        ui.add_space(8.0);
+        if ui.button("Fetch again").clicked() {
+            asked = Some(Asked::Again);
+        }
+    });
+    asked
 }
 
 fn choices(ui: &mut Ui, pictures: &mut Pictures, rank: Rank, role: Option<Role>, chance: Option<f32>, answer: &mut Answer) {
@@ -559,12 +650,20 @@ fn fitting(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut 
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn suggestions(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Draft, numbers: &Numbers, rank: Rank, role: Option<Role>, now: u64, answer: &mut Answer) {
+fn suggestions(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Draft, numbers: &Numbers, choices: Choices, answer: &mut Answer) {
+    let Choices { rank, role, style, now } = choices;
     let seat = draft.seat;
     let seat_role = draft.role(seat);
-    let (beside, against) = draft.around_the_seat();
-    let all = numbers.suggest(rank, Some(seat_role), &beside, &against);
+    let all = match style {
+        Style::Team => {
+            let (beside, against) = draft.around_the_seat();
+            numbers.suggest(rank, Some(seat_role), &beside, &against)
+        }
+        Style::Lane => {
+            let (partner, opponents) = draft.in_the_lane();
+            numbers.suggest_in_lane(rank, seat_role, &partner, &opponents, &draft.picked())
+        }
+    };
     let there = draft.at(seat);
     let shown: Vec<(&Suggestion, &Hero)> = all.iter().filter(|suggestion| !draft.hidden.contains(&suggestion.hero) && Some(suggestion.hero.as_str()) != there).filter_map(|suggestion| Some((suggestion, catalog.hero(&suggestion.hero)?))).collect();
 
@@ -572,7 +671,13 @@ fn suggestions(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &
     ui.horizontal(|ui| {
         ui.label(theme::title(list_title(seat, seat_role, draft.own_seat(role) == Some(seat)), 16.0));
         if roomy {
-            ui.label(dim(if seat.enemy { "what does best for them, first" } else { "the best first" }).small());
+            let hint = match (style, seat.enemy) {
+                (Style::Team, true) => "what does best for them, first",
+                (Style::Team, false) => "the best first",
+                (Style::Lane, true) => "what wins their lane, first",
+                (Style::Lane, false) => "what wins the lane, first",
+            };
+            ui.label(dim(hint).small());
         }
         if !draft.hidden.is_empty() {
             ui.add_space(6.0);
@@ -599,7 +704,7 @@ fn suggestions(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &
     egui::ScrollArea::vertical().id_salt("suggestions").auto_shrink(false).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 5.0;
         for (suggestion, hero) in &shown {
-            match row(ui, pictures, suggestion, hero, seat_role, &name_of) {
+            match row(ui, pictures, suggestion, hero, (seat_role, style), &name_of) {
                 Some(Clicked::Row) => picks = Some(suggestion.hero.clone()),
                 Some(Clicked::Cross) => hides = Some(suggestion.hero.clone()),
                 None => {}
@@ -633,7 +738,7 @@ enum Clicked {
     Cross,
 }
 
-fn row(ui: &mut Ui, pictures: &mut Pictures, suggestion: &Suggestion, hero: &Hero, role: Role, name_of: &dyn Fn(&str) -> String) -> Option<Clicked> {
+fn row(ui: &mut Ui, pictures: &mut Pictures, suggestion: &Suggestion, hero: &Hero, (role, style): (Role, Style), name_of: &dyn Fn(&str) -> String) -> Option<Clicked> {
     const PORTRAIT: egui::Vec2 = vec2(78.0, 44.0);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width() - 14.0, ROW), Sense::click());
     let cross = Rect::from_center_size(pos2(rect.right() - 22.0, rect.center().y), vec2(28.0, 28.0));
@@ -662,7 +767,7 @@ fn row(ui: &mut Ui, pictures: &mut Pictures, suggestion: &Suggestion, hero: &Her
         name.wrap.max_rows = 1;
         name.wrap.overflow_character = Some('…');
         painter.galley(pos2(left, rect.top() + 9.0), painter.layout_job(name), theme::text());
-        let mut words = painted(&in_words(suggestion, Some(role), name_of, NAMED_IN_A_ROW), FontId::proportional(theme::SMALL), theme::text_dim(), room);
+        let mut words = painted(&in_words(suggestion, Some(role), style, name_of, NAMED_IN_A_ROW), FontId::proportional(theme::SMALL), theme::text_dim(), room);
         words.wrap.max_rows = 1;
         words.wrap.overflow_character = Some('…');
         painter.galley(pos2(left, rect.top() + 32.0), painter.layout_job(words), theme::text_dim());
@@ -673,13 +778,13 @@ fn row(ui: &mut Ui, pictures: &mut Pictures, suggestion: &Suggestion, hero: &Her
     let response = response.on_hover_ui(|ui| {
         ui.set_max_width(420.0);
         ui.label(theme::title(&hero.name, 16.0));
-        ui.label(painted(&in_words(suggestion, Some(role), name_of, usize::MAX), FontId::proportional(theme::BODY), theme::text(), 420.0));
+        ui.label(painted(&in_words(suggestion, Some(role), style, name_of, usize::MAX), FontId::proportional(theme::BODY), theme::text(), 420.0));
         ui.label(dim("Click to put it in the place that is lit.").small());
     });
     response.on_hover_cursor(CursorIcon::PointingHand).clicked().then_some(Clicked::Row)
 }
 
-fn in_words(suggestion: &Suggestion, role: Option<Role>, name_of: &dyn Fn(&str) -> String, most: usize) -> String {
+fn in_words(suggestion: &Suggestion, role: Option<Role>, style: Style, name_of: &dyn Fn(&str) -> String, most: usize) -> String {
     let least = if most == usize::MAX { 0.0 } else { WORTH_NAMING };
     let named = |beside: bool, good: bool| -> Option<String> {
         let heroes: Vec<String> = suggestion
@@ -691,12 +796,16 @@ fn in_words(suggestion: &Suggestion, role: Option<Role>, name_of: &dyn Fn(&str) 
             .collect();
         (!heroes.is_empty()).then(|| heroes.join(", "))
     };
+    let (starts, what) = match style {
+        Style::Team => (["Good against", "Weak against", "Goes well with", "Not good with"], "matches"),
+        Style::Lane => (["Strong in lane against", "Weak in lane against", "Lanes well with", "Lanes badly with"], "lanes"),
+    };
     let mut sentences = Vec::new();
-    for (beside, good, start) in [(false, true, "Good against"), (false, false, "Weak against"), (true, true, "Goes well with"), (true, false, "Not good with")] {
+    for ((beside, good), start) in [(false, true), (false, false), (true, true), (true, false)].into_iter().zip(starts) {
         sentences.extend(named(beside, good).map(|heroes| format!("{start} {heroes}.")));
     }
     let role = role.map(|role| format!(" {}", role.as_played())).unwrap_or_default();
-    sentences.push(format!("Wins {:.1}% of its matches{role}.", suggestion.win_rate));
+    sentences.push(format!("Wins {:.1}% of its {what}{role}.", suggestion.win_rate));
     sentences.join(" ")
 }
 
@@ -891,6 +1000,37 @@ mod tests {
     }
 
     #[test]
+    fn in_a_lane_the_list_looks_at_the_heroes_of_that_lane_alone() {
+        let mut draft = Draft::default();
+        for hero in ["lion", "cm", "ogre", "jakiro", "pa", "axe"] {
+            draft.seat_hero(hero);
+        }
+        assert_eq!(draft.picked(), ["ogre", "jakiro", "lion", "cm", "pa", "axe"]);
+        assert_eq!((draft.seat, draft.role(draft.seat)), (TEAM(2), Role::Carry));
+        assert_eq!(draft.in_the_lane(), (vec!["jakiro"], vec![("lion", Role::SoftSupport), ("axe", Role::Offlane)]));
+        draft.seat = TEAM(3);
+        assert_eq!(draft.in_the_lane(), (vec!["ogre"], vec![("cm", Role::HardSupport), ("pa", Role::Carry)]));
+        draft.seat = TEAM(4);
+        assert_eq!(draft.in_the_lane(), (vec![], vec![]));
+        draft.set_role(ENEMY(3), Role::Mid);
+        assert_eq!(draft.in_the_lane(), (vec![], vec![("axe", Role::Mid)]));
+        draft.seat = ENEMY(4);
+        assert_eq!(draft.role(draft.seat), Role::Offlane);
+        assert_eq!(draft.in_the_lane(), (vec!["lion"], vec![("jakiro", Role::HardSupport)]));
+    }
+
+    #[test]
+    fn in_a_lane_a_suggestion_speaks_of_lanes() {
+        let reason = |hero: &str, beside: bool, points: f32| Reason { hero: hero.to_string(), beside, points };
+        let suggestion = Suggestion { hero: "viper".to_string(), points: 4.0, win_rate: 55.04, matches: 9000, reasons: vec![reason("axe", false, 3.0), reason("lion", false, -1.0), reason("cm", true, 1.5)] };
+        let name_of = |id: &str| id.to_uppercase();
+        assert_eq!(
+            in_words(&suggestion, Some(Role::Carry), Style::Lane, &name_of, 2),
+            "Strong in lane against AXE +3.0. Weak in lane against LION -1.0. Lanes well with CM +1.5. Wins 55.0% of its lanes as carry."
+        );
+    }
+
+    #[test]
     fn a_suggestion_says_what_speaks_for_it_and_against_it() {
         let reason = |hero: &str, beside: bool, points: f32| Reason { hero: hero.to_string(), beside, points };
         let reasons = vec![reason("axe", false, 3.0), reason("cm", true, 2.5), reason("pudge", false, -2.0), reason("lina", false, 1.2), reason("zeus", false, 0.6), reason("sven", true, -0.2)];
@@ -898,17 +1038,17 @@ mod tests {
         let name_of = |id: &str| id.to_uppercase();
 
         assert_eq!(
-            in_words(&suggestion, Some(Role::Mid), &name_of, 2),
+            in_words(&suggestion, Some(Role::Mid), Style::Team, &name_of, 2),
             "Good against AXE +3.0, LINA +1.2. Weak against PUDGE -2.0. Goes well with CM +2.5. Wins 52.3% of its matches in mid.",
             "two of each at most, and nothing that hardly matters"
         );
         assert_eq!(
-            in_words(&suggestion, None, &name_of, usize::MAX),
+            in_words(&suggestion, None, Style::Team, &name_of, usize::MAX),
             "Good against AXE +3.0, LINA +1.2, ZEUS +0.6. Weak against PUDGE -2.0. Goes well with CM +2.5. Not good with SVEN -0.2. Wins 52.3% of its matches.",
             "everything, where there is room"
         );
         let alone = Suggestion { reasons: Vec::new(), ..suggestion };
-        assert_eq!(in_words(&alone, Some(Role::Carry), &name_of, 2), "Wins 52.3% of its matches as carry.");
+        assert_eq!(in_words(&alone, Some(Role::Carry), Style::Team, &name_of, 2), "Wins 52.3% of its matches as carry.");
     }
 
     #[test]

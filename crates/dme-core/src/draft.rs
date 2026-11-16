@@ -16,6 +16,31 @@ const PLAYED_SHARE: f64 = 0.10;
 const DOUBT: f64 = 400.0;
 const ENOUGH_IN_A_ROLE: u64 = 100;
 const PERCENT_TO_A_STEP: f64 = 25.0;
+const PARTNER_WEIGHT: f32 = 0.5;
+const SUPPORT_WEIGHT: f32 = 0.5;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Style {
+    #[default]
+    Team,
+    Lane,
+}
+
+impl Style {
+    pub const ALL: [Style; 2] = [Style::Team, Style::Lane];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Style::Team => "Team composition",
+            Style::Lane => "Lane winning",
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Style::default()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,6 +121,30 @@ impl Role {
     fn place(self) -> usize {
         self as usize
     }
+
+    pub fn lane_opponents(self) -> &'static [Role] {
+        match self {
+            Role::Carry | Role::HardSupport => &[Role::Offlane, Role::SoftSupport],
+            Role::Mid => &[Role::Mid],
+            Role::Offlane | Role::SoftSupport => &[Role::Carry, Role::HardSupport],
+        }
+    }
+
+    pub fn lane_weight(self, enemy: Role) -> f32 {
+        let core = matches!(self, Role::Carry | Role::Offlane);
+        let support = matches!(enemy, Role::SoftSupport | Role::HardSupport);
+        if core && support { SUPPORT_WEIGHT } else { 1.0 }
+    }
+
+    pub fn lane_partner(self) -> Option<Role> {
+        match self {
+            Role::Carry => Some(Role::HardSupport),
+            Role::HardSupport => Some(Role::Carry),
+            Role::Offlane => Some(Role::SoftSupport),
+            Role::SoftSupport => Some(Role::Offlane),
+            Role::Mid => None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -115,6 +164,8 @@ struct File {
     heroes: Vec<String>,
     ranks: Vec<Played>,
     pairs: Vec<Pairs>,
+    #[serde(default)]
+    lanes: Vec<Lanes>,
 }
 
 #[derive(Deserialize)]
@@ -129,6 +180,15 @@ struct Pairs {
     with: Vec<Vec<i16>>,
 }
 
+#[derive(Deserialize)]
+struct Lanes {
+    played: Vec<Vec<u64>>,
+    won: Vec<Vec<u64>>,
+    drawn: Vec<Vec<u64>>,
+    against: Vec<Vec<Vec<i16>>>,
+    with: Vec<Vec<Vec<i16>>>,
+}
+
 #[derive(Debug)]
 pub struct Numbers {
     pub made: u64,
@@ -139,6 +199,13 @@ pub struct Numbers {
     places: HashMap<String, usize>,
     ranks: Vec<Played>,
     pairs: Vec<Pairs>,
+    lanes: Vec<Lanes>,
+}
+
+impl std::fmt::Debug for Lanes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "the lanes of a pair of ranks")
+    }
 }
 
 impl std::fmt::Debug for Played {
@@ -193,12 +260,26 @@ impl Numbers {
         if !fits {
             return Err(wrong("a table does not fit the list of heroes"));
         }
+        if !file.lanes.is_empty() {
+            if file.lanes.len() != Rank::ALL.len() / 2 {
+                return Err(wrong("the lanes are not of four pairs of ranks"));
+            }
+            let by_role_and_hero = |tables: &[Vec<Vec<i16>>]| tables.len() == Role::ALL.len() && tables.iter().all(|table| by_hero(table));
+            let lanes_fit = file.lanes.iter().all(|lanes| by_role(&lanes.played) && by_role(&lanes.won) && by_role(&lanes.drawn) && by_role_and_hero(&lanes.against) && by_role_and_hero(&lanes.with));
+            if !lanes_fit {
+                return Err(wrong("a table of the lanes does not fit the list of heroes"));
+            }
+        }
         let places = file.heroes.iter().enumerate().map(|(place, hero)| (hero.clone(), place)).collect();
-        Ok(Numbers { made: file.made, source: file.source, patch: file.patch, weeks: file.weeks, heroes: file.heroes, places, ranks: file.ranks, pairs: file.pairs })
+        Ok(Numbers { made: file.made, source: file.source, patch: file.patch, weeks: file.weeks, heroes: file.heroes, places, ranks: file.ranks, pairs: file.pairs, lanes: file.lanes })
     }
 
     pub fn knows(&self, hero: &str) -> bool {
         self.places.contains_key(hero)
+    }
+
+    pub fn has_lanes(&self) -> bool {
+        !self.lanes.is_empty()
     }
 
     pub fn age_in_days(&self, now: u64) -> u64 {
@@ -220,16 +301,61 @@ impl Numbers {
                     let table = if beside { &paired.with } else { &paired.against };
                     Reason { hero: self.heroes[other].clone(), beside, points: f32::from(table[hero][other]) / 10.0 }
                 };
-                let mut reasons: Vec<Reason> = enemies.iter().map(|&enemy| reason(enemy, false)).chain(team.iter().map(|&friend| reason(friend, true))).collect();
-                let points = own as f32 + reasons.iter().map(|reason| reason.points).sum::<f32>();
-                reasons.retain(|reason| reason.points != 0.0);
-                reasons.sort_by(|a, b| b.points.abs().total_cmp(&a.points.abs()));
-                Some(Suggestion { hero: self.heroes[hero].clone(), points, win_rate: (share * 100.0) as f32, matches, reasons })
+                let reasons = enemies.iter().map(|&enemy| reason(enemy, false)).chain(team.iter().map(|&friend| reason(friend, true))).collect();
+                Some(Suggestion::of(self.heroes[hero].clone(), own, share, matches, reasons))
             })
             .collect();
-        suggestions.sort_by(|a, b| b.points.total_cmp(&a.points));
+        best_first(&mut suggestions);
         suggestions
     }
+
+    pub fn suggest_in_lane(&self, rank: Rank, role: Role, partner: &[&str], opponents: &[(&str, Role)], picked: &[&str]) -> Vec<Suggestion> {
+        let Some(lanes) = self.lanes.get(rank.pair()) else { return Vec::new() };
+        let ranked = &self.ranks[rank.place()];
+        let at = role.place();
+        let placed = |heroes: &[&str]| -> Vec<usize> { heroes.iter().filter_map(|hero| self.places.get(*hero).copied()).collect() };
+        let (partner, picked) = (placed(partner), placed(picked));
+        let opponents: Vec<(usize, f32)> = opponents.iter().filter_map(|(hero, enemy)| Some((*self.places.get(*hero)?, role.lane_weight(*enemy)))).collect();
+        let share = |hero: usize| -> Option<(f64, u64)> {
+            let (met, won, drawn) = (lanes.played[at][hero], lanes.won[at][hero], lanes.drawn[at][hero]);
+            (met > 0 && won + drawn <= met).then(|| ((won as f64 + drawn as f64 / 2.0) / met as f64, met))
+        };
+        let counted = (0..self.heroes.len()).filter(|hero| share(*hero).is_some());
+        let (all, won, drawn) = counted.fold((0, 0, 0), |(all, won, drawn), hero| (all + lanes.played[at][hero], won + lanes.won[at][hero], drawn + lanes.drawn[at][hero]));
+        if all == 0 {
+            return Vec::new();
+        }
+        let usual = (won as f64 + drawn as f64 / 2.0) / all as f64;
+
+        let mut suggestions: Vec<Suggestion> = (0..self.heroes.len())
+            .filter(|hero| !picked.contains(hero) && ranked.record(*hero, Some(role)).is_some())
+            .filter_map(|hero| {
+                let (share, met) = share(hero)?;
+                let own = (share - usual) * 100.0 * met as f64 / (met as f64 + DOUBT);
+                let reason = |other: usize, beside: bool, weight: f32| {
+                    let table = if beside { &lanes.with[at] } else { &lanes.against[at] };
+                    Reason { hero: self.heroes[other].clone(), beside, points: f32::from(table[hero][other]) / 10.0 * weight }
+                };
+                let reasons = opponents.iter().map(|&(enemy, weight)| reason(enemy, false, weight)).chain(partner.iter().map(|&friend| reason(friend, true, PARTNER_WEIGHT))).collect();
+                Some(Suggestion::of(self.heroes[hero].clone(), own, share, met, reasons))
+            })
+            .collect();
+        best_first(&mut suggestions);
+        suggestions
+    }
+}
+
+impl Suggestion {
+    fn of(hero: String, own: f64, share: f64, matches: u64, mut reasons: Vec<Reason>) -> Suggestion {
+        let points = own as f32 + reasons.iter().map(|reason| reason.points).sum::<f32>();
+        reasons.retain(|reason| reason.points != 0.0);
+        reasons.sort_by(|a, b| b.points.abs().total_cmp(&a.points.abs()));
+        Suggestion { hero, points, win_rate: (share * 100.0) as f32, matches, reasons }
+    }
+}
+
+fn best_first(suggestions: &mut [Suggestion]) {
+    suggestions.sort_by(|a, b| b.points.total_cmp(&a.points));
 }
 
 impl Numbers {
@@ -460,6 +586,88 @@ mod tests {
         let chance = |rank: Rank| numbers.chance(rank, &[(LINA, Role::Mid)], &[(AXE, Role::Offlane)]);
         assert_eq!(chance(Rank::Legend), chance(Rank::Ancient));
         assert!(chance(Rank::Legend) > chance(Rank::Archon));
+    }
+
+    fn file_with_lanes() -> serde_json::Value {
+        let mut file = file();
+        let none = json!([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+        let lanes = json!({
+            "played": [[0, 0, 1000, 1000], [0, 1000, 1000, 0], [1000, 0, 1000, 0], [0, 1000, 1000, 0], [0, 0, 1000, 0]],
+            "won": [[0, 0, 500, 600], [0, 400, 500, 0], [400, 0, 500, 0], [0, 500, 500, 0], [0, 0, 500, 0]],
+            "drawn": [[0, 0, 0, 0], [0, 200, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            "against": [none, none, none, none, none],
+            "with": [none, none, none, none, none],
+        });
+        file["lanes"] = json!([lanes, lanes, lanes, lanes]);
+        file
+    }
+
+    #[test]
+    fn a_file_without_lanes_is_read_and_says_nothing_of_them() {
+        let numbers = read(&file()).unwrap();
+        assert!(!numbers.has_lanes());
+        assert!(numbers.suggest_in_lane(Rank::Legend, Role::Carry, &[], &[], &[]).is_empty());
+        assert!(numbers.suggest(Rank::Legend, Some(Role::Carry), &[], &[]).len() == 2, "the rest of the page is as before");
+        assert!(read(&file_with_lanes()).unwrap().has_lanes());
+
+        let refused = |change: &dyn Fn(&mut serde_json::Value)| {
+            let mut file = file_with_lanes();
+            change(&mut file);
+            read(&file).unwrap_err().to_string()
+        };
+        assert!(refused(&|file| file["lanes"].as_array_mut().unwrap().truncate(3)).contains("four pairs"));
+        assert!(refused(&|file| file["lanes"][1]["drawn"].as_array_mut().unwrap().truncate(4)).contains("lanes does not fit"));
+        assert!(refused(&|file| file["lanes"][2]["against"][4][3] = json!([0, 0])).contains("lanes does not fit"));
+        assert!(refused(&|file| file["lanes"][0]["with"].as_array_mut().unwrap().truncate(4)).contains("lanes does not fit"));
+    }
+
+    #[test]
+    fn in_a_lane_a_hero_is_weighed_by_how_its_lanes_go() {
+        let mut file = file_with_lanes();
+        let numbers = read(&file).unwrap();
+        let carries = numbers.suggest_in_lane(Rank::Legend, Role::Carry, &[], &[], &[]);
+        assert_eq!(names(&carries), [SVEN, PUDGE], "only the heroes played in the role");
+        assert_eq!(carries[0].win_rate, 60.0);
+        assert!((carries[0].points - 5.0 * 1000.0 / 1400.0).abs() < 0.001, "{}", carries[0].points);
+        assert!((carries[1].points + carries[0].points).abs() < 0.001, "Pudge loses as much against the usual");
+        let mids = numbers.suggest_in_lane(Rank::Legend, Role::Mid, &[], &[], &[]);
+        assert_eq!((names(&mids), mids[0].win_rate, mids[0].points), (vec![LINA, PUDGE], 50.0, 0.0));
+
+        file["lanes"][2]["against"][0][2][0] = json!(80);
+        file["lanes"][2]["with"][0][3][1] = json!(30);
+        let numbers = read(&file).unwrap();
+        let carries = numbers.suggest_in_lane(Rank::Ancient, Role::Carry, &[LINA], &[(AXE, Role::Offlane)], &[LINA, AXE]);
+        assert_eq!(names(&carries), [SVEN, PUDGE]);
+        assert_eq!(carries[0].reasons, [Reason { hero: LINA.to_string(), beside: true, points: 1.5 }]);
+        assert_eq!(carries[1].reasons, [Reason { hero: AXE.to_string(), beside: false, points: 8.0 }]);
+        assert!((carries[1].points - (8.0 - 5.0 * 1000.0 / 1400.0)).abs() < 0.001);
+        assert_eq!(names(&numbers.suggest_in_lane(Rank::Ancient, Role::Carry, &[], &[(AXE, Role::Offlane)], &[AXE])), [PUDGE, SVEN]);
+        let half = &numbers.suggest_in_lane(Rank::Ancient, Role::Carry, &[], &[(AXE, Role::SoftSupport)], &[AXE])[1];
+        assert_eq!(half.reasons, [Reason { hero: AXE.to_string(), beside: false, points: 4.0 }]);
+        assert_eq!(Role::HardSupport.lane_weight(Role::SoftSupport), 1.0);
+        assert_eq!(names(&numbers.suggest_in_lane(Rank::Herald, Role::Carry, &[], &[(AXE, Role::Offlane)], &[AXE, SVEN])), [PUDGE]);
+        assert!(numbers.suggest_in_lane(Rank::Herald, Role::Carry, &[], &[(AXE, Role::Offlane)], &[])[1].reasons.is_empty(), "nothing in that pair");
+    }
+
+    #[test]
+    fn each_role_meets_the_roles_of_its_lane() {
+        assert_eq!(Role::Mid.lane_opponents(), [Role::Mid]);
+        assert_eq!(Role::Carry.lane_opponents(), [Role::Offlane, Role::SoftSupport]);
+        assert_eq!(Role::Offlane.lane_opponents(), [Role::Carry, Role::HardSupport]);
+        assert_eq!(Role::Mid.lane_partner(), None);
+        assert_eq!((Role::Carry.lane_weight(Role::Offlane), Role::Carry.lane_weight(Role::SoftSupport)), (1.0, 0.5));
+        assert_eq!((Role::Offlane.lane_weight(Role::Carry), Role::Offlane.lane_weight(Role::HardSupport)), (1.0, 0.5));
+        assert_eq!((Role::Mid.lane_weight(Role::Mid), Role::SoftSupport.lane_weight(Role::HardSupport)), (1.0, 1.0));
+        for role in Role::ALL {
+            if let Some(partner) = role.lane_partner() {
+                assert_eq!(partner.lane_partner(), Some(role));
+                assert_eq!(partner.lane_opponents(), role.lane_opponents());
+                assert!(role.lane_opponents().iter().all(|enemy| enemy.lane_opponents().contains(&role)), "what {role:?} meets meets it");
+            }
+        }
+        assert_eq!(Style::default(), Style::Team);
+        assert!(Style::Team.is_default() && !Style::Lane.is_default());
+        assert_eq!(serde_json::to_string(&Style::ALL).unwrap(), r#"["team","lane"]"#);
     }
 
     #[test]

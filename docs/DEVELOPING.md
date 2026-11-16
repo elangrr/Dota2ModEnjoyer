@@ -87,7 +87,7 @@ python publish/make_numbers.py numbers
 ```
 
 A token is free. STRATZ gives one to whoever logs in with Steam at stratz.com/api, and asks
-for a link back to it wherever its numbers are shown. The script asks about twenty-five
+for a link back to it wherever its numbers are shown. The script asks about sixty
 questions, which takes a few minutes, and needs nothing but Python. `python publish/make_numbers.py --check` tries its sums.
 
 To see the page with a file of your own, without publishing anything:

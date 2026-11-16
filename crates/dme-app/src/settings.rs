@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use dme_core::draft::{Rank, Role};
+use dme_core::draft::{Rank, Role, Style};
 use dme_core::fsutil;
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +26,8 @@ pub struct Settings {
     pub draft_rank: Rank,
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Option::is_none")]
     pub draft_role: Option<Role>,
+    #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Style::is_default")]
+    pub draft_style: Style,
 }
 
 fn or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -75,6 +77,7 @@ mod tests {
             no_glass: true,
             draft_rank: Rank::Immortal,
             draft_role: Some(Role::Mid),
+            draft_style: Style::Lane,
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);
@@ -90,10 +93,10 @@ mod tests {
     fn a_setting_in_words_this_version_does_not_know_leaves_the_others_as_they_are() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, br#"{"notice_accepted":true,"tour_seen":true,"draft_rank":"legend_ancient","draft_role":"jungler"}"#).unwrap();
+        std::fs::write(&path, br#"{"notice_accepted":true,"tour_seen":true,"draft_rank":"legend_ancient","draft_role":"jungler","draft_style":"jungle"}"#).unwrap();
         let settings = Settings::load(&path);
         assert!(settings.notice_accepted && settings.tour_seen, "what was read before is not lost");
-        assert_eq!((settings.draft_rank, settings.draft_role), (Rank::default(), None));
+        assert_eq!((settings.draft_rank, settings.draft_role, settings.draft_style), (Rank::default(), None, Style::Team));
         std::fs::write(&path, br#"{"notice_accepted":true,"draft_rank":"divine","draft_role":"offlane"}"#).unwrap();
         assert_eq!((Settings::load(&path).draft_rank, Settings::load(&path).draft_role), (Rank::Divine, Some(Role::Offlane)));
     }

@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/f8db5ee3a498c34d5e1234dce1c3c0756ba426194c94a9e0795f19b2a46c7111"><img src="https://img.shields.io/badge/VirusTotal-3%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 3 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
+  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/5817342e8a8d41ab8453b670a86cd20b872aab0e64121810db78437f6be0d2bf"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
   &nbsp;
   <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
@@ -59,6 +59,12 @@ pastes under **Use a code** to get the same look.
 in as they are picked. The list shows the heroes of your role that win more often against the
 enemy and beside your team, with a line on why. With both teams full, it gives each team its
 chance in percent.
+
+The switch at the top changes what the list is for. **Team composition** looks at the whole
+match. **Lane winning** looks only at the heroes in your lane, such as the enemy's mid for a
+mid, or the enemy's offlaner and soft support for a carry, and suggests heroes that win that
+lane more often. For a carry or an offlaner, the enemy core in the lane counts more than the
+support.
 
 The page works with Dota closed and never reads your game. Its numbers are added up from
 millions of public matches by [STRATZ](https://stratz.com). The app downloads them from this
@@ -126,6 +132,7 @@ link opens the full result for that file. A release that Microsoft's scanner fla
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.3.1 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/5817342e8a8d41ab8453b670a86cd20b872aab0e64121810db78437f6be0d2bf) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/33c350cac7ba91fa8578b2904faf427581d14413692b2a5d98a0adcdcf36b2e5) |
 | 0.3.0 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/f8db5ee3a498c34d5e1234dce1c3c0756ba426194c94a9e0795f19b2a46c7111) | [1 of 70 scanners flag it](https://www.virustotal.com/gui/file/c3a4571d7c328b5ff3cff45aa66cf416016db42498c8e98fc2b8314d06a2fe98) |
 | 0.2.3 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/29081e9b765b43bb631bda9018d4adaf7fa006e70beb6b76d788bdb020237a4d) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/7702421d7dd1590ba45f96078a82f42a0f1c6f1148d93eafe47db78686ad12c0) |
 | 0.2.2 | [0 of 66 scanners flag it](https://www.virustotal.com/gui/file/4bcc6789a106aad87dae596f72e6c4e83ebb725feaa6477076e9bd48c0513ed4) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/c0a1879c6fb6d66e477678ab6fc1a535a2e9e046263088e59266be36290108c7) |

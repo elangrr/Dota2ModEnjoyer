@@ -1,7 +1,8 @@
 """Makes the file of numbers the app's Draft page works from.
 
 draft.json: how well each hero does in each of the five roles, for each of the eight ranks,
-and how well it does against and beside each other hero, for each pair of ranks.
+how well it does against and beside each other hero, for each pair of ranks, and how its lanes
+go in each role, against the heroes it meets there and beside the one it shares them with.
 
     python publish/make_numbers.py <folder to write the file in>
     python publish/make_numbers.py --check        # tries the sums below on made-up numbers
@@ -11,7 +12,7 @@ Steam login there gives. The token is read from the environment variable STRATZ_
 that is not set, from the file .dme/stratz.key in the home folder. It goes nowhere but to
 STRATZ, and never into the file that is written.
 
-About twenty-five questions are asked, each for all heroes at once, which takes a few minutes.
+About sixty questions are asked, each for all heroes at once, which takes a few minutes.
 The file is described in docs/SPEC.md, section 5; the app refuses one that is not of that
 shape.
 """
@@ -49,6 +50,9 @@ DOUBT = 400
 MOST = 300
 # A file with fewer heroes than this is not written: something went wrong.
 LEAST_HEROES = 100
+# The most bytes the app takes (NUMBERS_LIMIT in crates/dme-core/src/draft.rs). A larger file
+# is not written: every app that is out would refuse it.
+LIMIT = 4 * 1024 * 1024
 
 
 def token():
@@ -215,6 +219,7 @@ def make(asker, now):
 
     if heroes is None or len(heroes) < LEAST_HEROES:
         sys.exit("STRATZ named too few heroes: nothing was written")
+    lanes = [lanes_of_a_pair(asker, pair, weeks, heroes) for pair, _ in PAIRS]
     numbers = {
         "format": 1,
         "made": now,
@@ -224,8 +229,105 @@ def make(asker, now):
         "heroes": [names[hero] for hero in heroes],
         "ranks": ranks,
         "pairs": pairs,
+        "lanes": lanes,
     }
     return numbers
+
+
+def lane_sums(row):
+    """[meetings, won, drawn] of a row of STRATZ's lane outcomes. STRATZ counts a lane that was
+    won by far (a stomp) apart from one that was won, and the same for lost."""
+    won = row["winCount"] + row["stompWinCount"]
+    drawn = row["drawCount"]
+    lost = row["lossCount"] + row["stompLossCount"]
+    return [won + drawn + lost, won, drawn]
+
+
+def lane_rate(sums):
+    """The share of lanes won, a draw counting half."""
+    meetings, won, drawn = sums
+    return (won + drawn / 2) / meetings if meetings else 0.5
+
+
+def lane_table(heroes, meetings):
+    """What a lane table of one role says. `meetings[(a, b)]` is [meetings, won, drawn] of a in
+    that role against (or beside) b in its lane. Returns each hero's lanes added up, and for
+    each two heroes by how much more often the first came out of its lanes ahead with the second
+    there than expected, in tenths of a percent, pulled towards nothing the fewer times they met.
+
+    Expected is the first hero's own share of lanes won, plus what the second does to the lanes
+    of that role as a rule: the share by which the heroes that met it did worse or better than
+    in all their lanes, each by how often it met them. So a hero that every carry loses its lane
+    against is not a reason against one carry more than another, and a pair that met seldom is
+    pulled towards that rule, not towards an even lane. A lane is not the same from both of its
+    sides, so nothing is mirrored."""
+    own = {hero: [0, 0, 0] for hero in heroes}
+    for (hero, _), sums in meetings.items():
+        if hero in own:
+            own[hero] = [mine + more for mine, more in zip(own[hero], sums)]
+    base = {hero: lane_rate(own[hero]) for hero in heroes}
+    # What each hero does to the lanes of the heroes that met it, weighted by the meetings.
+    effect_sums = {hero: [0.0, 0] for hero in heroes}
+    for (hero, other), sums in meetings.items():
+        if hero in own and other in effect_sums and hero != other and sums[0]:
+            effect_sums[other][0] += sums[0] * (lane_rate(sums) - base[hero])
+            effect_sums[other][1] += sums[0]
+    effect = {hero: total / count if count else 0.0 for hero, (total, count) in effect_sums.items()}
+    rows = []
+    for hero in heroes:
+        row = []
+        for other in heroes:
+            sums = meetings.get((hero, other))
+            if hero == other or not sums or not sums[0]:
+                row.append(0)
+                continue
+            expected = min(1.0, max(0.0, base[hero] + effect[other]))
+            row.append(said_of_a_pair(sums[0], sums[1] + sums[2] / 2, expected))
+        rows.append(row)
+    return own, rows
+
+
+# The most rows STRATZ gives in one answer about lanes. An answer that long may have been cut.
+LANE_ROWS_CUT = 16000
+
+
+def lanes_of_a_pair(asker, pair, weeks, heroes):
+    """How lanes go in a pair of ranks, for each of the five roles: each hero's own lanes, and
+    each hero against the heroes it met in its lane and beside the one it shared its lane with."""
+    against = [{} for _ in ROLES]
+    beside = [{} for _ in ROLES]
+    fields = "heroId1 heroId2 matchCount winCount stompWinCount drawCount lossCount stompLossCount"
+    for week in weeks:
+        for is_with, sums_of in ((False, against), (True, beside)):
+            parts = " ".join(
+                "r%d: laneOutcome(isWith:%s, week:%d, bracketBasicIds:[%s], positionIds:[%s]) { %s }" % (place, "true" if is_with else "false", week, pair, role, fields)
+                for place, role in enumerate(ROLES)
+            )
+            answer = asker.ask("{ heroStats { %s } }" % parts)["heroStats"]
+            # The role is the one that was asked for: STRATZ's answer names another.
+            for place in range(len(ROLES)):
+                rows = answer["r%d" % place] or []
+                if len(rows) >= LANE_ROWS_CUT:
+                    # Perhaps cut short: that role is asked for again, a hero at a time.
+                    print(f"  {len(rows)} rows for {ROLES[place]} in {pair}: asked again hero by hero")
+                    rows = []
+                    for hero in heroes:
+                        one = "laneOutcome(heroId:%d, isWith:%s, week:%d, bracketBasicIds:[%s], positionIds:[%s]) { %s }" % (hero, "true" if is_with else "false", week, pair, ROLES[place], fields)
+                        rows += [row for row in asker.ask("{ heroStats { %s } }" % one)["heroStats"]["laneOutcome"] or [] if row["heroId1"] == hero]
+                for row in rows:
+                    key = (row["heroId1"], row["heroId2"])
+                    sums_of[place][key] = [mine + more for mine, more in zip(sums_of[place].get(key, [0, 0, 0]), lane_sums(row))]
+    tables = {"played": [], "won": [], "drawn": [], "against": [], "with": []}
+    for place in range(len(ROLES)):
+        own, rows_against = lane_table(heroes, against[place])
+        _, rows_beside = lane_table(heroes, beside[place])
+        for key, column in (("played", 0), ("won", 1), ("drawn", 2)):
+            tables[key].append([own[hero][column] for hero in heroes])
+        tables["against"].append(rows_against)
+        tables["with"].append(rows_beside)
+    won = [lane_rate([sum(tables[key][place]) for key in ("played", "won", "drawn")]) for place in range(len(ROLES))]
+    print(f"  lanes of {pair}, won by role: " + ", ".join(f"{share:.1%}" for share in won))
+    return tables
 
 
 def check():
@@ -250,6 +352,25 @@ def check():
     assert against[0][0] == 0 and beside == [[0, 0, 0]] * 3
 
     day = 24 * 3600
+    # Lanes: a stomp is a win, a draw is half of one, and a lane is not mirrored.
+    assert lane_sums({"winCount": 3, "stompWinCount": 2, "drawCount": 4, "lossCount": 1, "stompLossCount": 1}) == [11, 5, 4]
+    assert lane_rate([10, 4, 2]) == 0.5 and lane_rate([0, 0, 0]) == 0.5
+    # Heroes 1 and 2 each win half of their lanes. 1 does well against 3 and badly against 4,
+    # and 2 the other way round. Both lose 7 of 10 against 5, which is what 5 does to everybody.
+    meetings = {
+        (1, 3): [1000, 600, 0], (1, 4): [1000, 400, 0], (2, 3): [1000, 400, 0], (2, 4): [1000, 600, 0],
+        (1, 5): [1000, 300, 0], (2, 5): [1000, 300, 0], (3, 1): [500, 250, 0],
+    }
+    own, rows = lane_table([1, 2, 3, 4, 5], meetings)
+    assert own[1] == [3000, 1300, 0] and own[5] == [0, 0, 0]
+    assert rows[0][2] == 71 and rows[0][3] == -71 and rows[1][2] == -71 and rows[1][3] == 71, "10% either way, believed by 1000 of 1400"
+    assert rows[0][4] == 0 and rows[1][4] == 0, "losing to 5 as everybody does is nothing against one hero"
+    assert rows[2][0] == 0, "the other side of a lane says what it says, not the opposite"
+    assert rows[4] == [0] * 5 and rows[0][0] == 0
+    # A pair that met seldom is pulled towards what the other hero does as a rule.
+    _, rows = lane_table([1, 2, 5], {(1, 5): [10000, 3000, 0], (1, 2): [10000, 5000, 0], (2, 5): [40, 16, 0], (2, 1): [10000, 5000, 0]})
+    assert -5 < rows[1][2] < 5, "2 did as badly against 5 as 1 does: no reason against it"
+
     weeks = [10 * WEEK, 9 * WEEK, 8 * WEEK, 7 * WEEK, 6 * WEEK, 5 * WEEK]
     now = 11 * WEEK + day
     assert weeks_to_add_up(weeks, 0, now) == weeks[:4], "no more than four"
@@ -263,6 +384,8 @@ def check():
 def write(folder, name, what):
     """Writes a file, and says how large it is."""
     text = json.dumps(what, separators=(",", ":")) + "\n"
+    if len(text.encode("utf-8")) > LIMIT:
+        sys.exit(f"{name} would have {len(text):,} bytes, more than the app takes: nothing was written")
     path = os.path.join(folder, name)
     with open(path, "w", encoding="utf-8", newline="\n") as file:
         file.write(text)

@@ -6,7 +6,7 @@ use std::time::Duration;
 use dme_core::apply::{self, Pick};
 use dme_core::catalog::{Catalog, Hero};
 use dme_core::dota::DotaInstall;
-use dme_core::draft::Numbers;
+use dme_core::draft::{Numbers, Style};
 use dme_core::engine::{self, Engine, ModState, Ready};
 use dme_core::items;
 use dme_core::loadout::Loadout;
@@ -122,6 +122,7 @@ pub struct App {
     item_search: String,
     draft: views::draft::Draft,
     numbers: Fetcher<Numbers>,
+    lanes_asked: bool,
     rarities_asked: BTreeSet<usize>,
     help_open: bool,
     settings_open: bool,
@@ -207,6 +208,7 @@ impl App {
             item_search: String::new(),
             draft: views::draft::Draft::default(),
             numbers,
+            lanes_asked: false,
             rarities_asked: BTreeSet::new(),
             help_open: false,
             settings_open: false,
@@ -1056,6 +1058,10 @@ impl App {
     fn draft_page(&mut self, ui: &mut Ui, catalog: &Catalog) {
         self.numbers.wanted(ui.ctx());
         let numbers = self.numbers.get().cloned();
+        let lanes_missing = numbers.as_ref().is_some_and(|numbers| !numbers.has_lanes());
+        if self.settings.draft_style == Style::Lane && lanes_missing && !self.numbers.is_fetching() && !std::mem::replace(&mut self.lanes_asked, true) {
+            self.numbers.fetch(ui.ctx());
+        }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs());
         let view = views::draft::View {
             catalog,
@@ -1066,12 +1072,14 @@ impl App {
             failure: self.numbers.failure(),
             rank: self.settings.draft_rank,
             role: self.settings.draft_role,
+            style: self.settings.draft_style,
             now,
         };
         let answer = views::draft::show(ui, view);
-        if answer.rank.is_some() || answer.role.is_some() {
+        if answer.rank.is_some() || answer.role.is_some() || answer.style.is_some() {
             self.settings.draft_rank = answer.rank.unwrap_or(self.settings.draft_rank);
             self.settings.draft_role = answer.role.unwrap_or(self.settings.draft_role);
+            self.settings.draft_style = answer.style.unwrap_or(self.settings.draft_style);
             self.save_settings();
         }
         if answer.try_again {

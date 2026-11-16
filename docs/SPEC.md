@@ -1923,6 +1923,23 @@ repository on GitHub, at the address `NUMBERS_URL` in `crates/dme-core/src/draft
 | `pairs` | Four pairs of ranks, in this order. Herald with Guardian, Crusader with Archon, Legend with Ancient, Divine with Immortal |
 | `against` | In a pair of ranks, for each hero, a number for each other hero. It says by how much the hero wins more often against the other than expected, in tenths of a percent |
 | `with` | The same for the two heroes on one team |
+| `lanes` | How lanes go, for each of the four pairs of ranks. Files made before 0.3.1 have none, and versions before it leave it alone |
+| `played`, `won`, `drawn` | In `lanes`, for each of the five roles, how often each hero met a hero of the other team in its lane in that role, and how many of those lanes it won and how many ended even |
+| `against`, `with` (in `lanes`) | For each of the five roles, for each hero, a number for each other hero: by how much more often the hero came out of its lane ahead against that hero, or beside it on its own team, than expected, in tenths of a percent |
+
+A lane is counted once for every hero of the other team met in it, so a carry who met an
+offlaner and a soft support counts it twice, once against each. A lane is won, lost or even
+as STRATZ judges it, and a lane STRATZ calls a stomp is a win or a loss like any other. Coming
+out ahead counts a lane that ended even as half won.
+
+"Expected", for a lane, is the hero's own share of lanes won in that role, plus what the other
+hero does to the lanes of that role as a rule. That is the share by which the heroes that met
+it did better or worse than in all their lanes, each counted as often as it met them. A hero
+that wins its lane against every carry is then no reason for one carry over another, and the
+numbers say what a pair does beyond that, as the match's numbers do. What a pair shows beyond
+it is believed by `n / (n + 400)`, so that a pair that met seldom is taken to go as the rule
+has it, and cut off at 30 percent, as above. It is not mirrored: a carry against an offlaner
+and that offlaner against the carry are two numbers, one from each side of the lane.
 
 "Expected" is what the two heroes' own shares of wins give if the heroes have nothing to do
 with each other. For a hero that wins `a` of its matches against one that wins `b` that is
@@ -1938,9 +1955,15 @@ share `against` and `with`. Every rank has enough matches for its own counts. He
 has the fewest, had 2.3 million ranked matches of a hero in four weeks.
 
 The maker adds up the whole weeks since the newest patch came out, four at most and two at
-least. It asks STRATZ about twenty-five questions, each for all heroes at once, with a token that
+least. It asks STRATZ about sixty questions, each for all heroes at once, with a token that
 it reads from the environment variable `STRATZ_TOKEN`. The token is never written anywhere.
-`python publish/make_numbers.py --check` tries the sums on made-up numbers.
+`python publish/make_numbers.py --check` tries the sums on made-up numbers. The maker writes
+no file larger than the 4 MB the app takes (5.4). With the lanes the file is about 2.1 MB.
+
+STRATZ's lanes come from its `laneOutcome`, asked for each role of the first hero by
+`positionIds`. Its answer names every row's position and rank as the first ones there are,
+whatever was asked, so the maker goes by what it asked. An answer of 16000 rows may have been
+cut short, and the maker then asks for that role again, a hero at a time.
 
 ### 5.2 What is suggested
 
@@ -1965,10 +1988,32 @@ The player's team's sum less the enemy's is how far ahead the team is, `d`. Its 
 is `100 / (1 + e^(-d/25))` percent, which is 50 for two drafts that are level, close to `50 + d`
 for small differences, and never 0 or 100.
 
+That is "Team composition". "Lane winning" weighs the heroes of a role by their lanes alone,
+from `lanes` in the pair the rank is in:
+
+1. How much more often the hero comes out of its lanes ahead in that role than the role does
+   as a whole, multiplied by `n / (n + 400)`, where `n` is how often it met a hero there. The
+   whole role is the heroes' lanes added up: safe lanes are won more often than off lanes, so
+   a carry is weighed against carries.
+2. Plus the hero's number in the lanes' `against` for each hero of the other team in its lane.
+   The carry and the hard support share the safe lane and meet the offlaner and the soft
+   support, and the other way round; the mids meet each other. Which heroes those are is told
+   by the roles of the places (5.3). For a carry or an offlaner the enemy's support there
+   counts half and the enemy's core in full, because a core's lane is mostly against the
+   other core. For a mid or a support every enemy of the lane counts in full.
+3. Plus half of its number in the lanes' `with` for the hero of its own team it shares the
+   lane with: the carry and the hard support, the offlaner and the soft support. The mid has
+   none. The lane is mostly the hero's own doing.
+
+Only heroes that are played in the role, as above, and that have lanes in it are listed. A
+whole draft is weighed by the whole match in both.
+
 ### 5.3 The page
 
 The page has two lists to choose from, "My rank" and "My role", which are kept in
-`settings.json`. Each is behind a box that shows what is chosen. A rank has the game's medal for it beside
+`settings.json`. In the line of its name is a switch of two halves, "Team composition" and
+"Lane winning" ("Team" and "Lane" in a narrow window), which says what the list weighs heroes
+by (5.2). It is kept in `settings.json` too, and Team composition is where it starts. Each is behind a box that shows what is chosen. A rank has the game's medal for it beside
 its name, and a role has the game's drawing for it.
 Under them are five places for each team. The places are in the order of a ranked draft, in which each team picks
 two heroes, then two more, then its last, and they stand in those three groups.
@@ -2014,6 +2059,10 @@ that is less than a day old is not fetched again, and the app looks once in a ru
 A file that does not come, or that is not of the shape above, changes nothing. The numbers
 that are kept stay in use. Where there are none, the page says that they could not be fetched
 and has "Try again".
+
+Numbers made before 0.3.1 have no lanes. With Lane winning chosen and such numbers kept, the
+app fetches the file again once in a run, however new the kept one is. Where the file still
+has none, the list makes way for a few words that say so, and "Fetch again".
 
 For testing, `--numbers-from` says where to fetch the file from, which may be a file on the
 computer. A window that is only there to have its picture taken fetches only then. A build

@@ -2,6 +2,11 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.3.1
+
+- The Draft page can now suggest heroes for winning the lane. Switch from "Team composition" to "Lane winning" at the top.
+- Lane winning looks only at the enemies in that lane: the mid at the enemy's mid, the carry at the enemy's offlaner and soft support, the offlaner at the enemy's carry and hard support. The hero you share the lane with counts a little too.
+
 ## 0.3.0
 
 - A new Draft page says which heroes to pick in a match. Choose your rank and role, put in the heroes as they are picked, and it lists the heroes that win more often against the enemy and beside your team, with a line on why.

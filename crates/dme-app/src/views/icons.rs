@@ -8,6 +8,7 @@ pub enum Icon {
     World,
     Picks,
     Draft,
+    Builds,
     Support,
     Settings,
     Help,
@@ -93,6 +94,10 @@ pub fn paint(painter: &egui::Painter, icon: Icon, room: Rect, color: Color32) {
             painter.add(line(&[[6.0, 13.0], [11.0, 18.0]]));
             painter.add(line(&[[4.5, 4.5], [19.0, 19.0]]));
             painter.add(line(&[[18.0, 13.0], [13.0, 18.0]]));
+        }
+        Icon::Builds => {
+            painter.add(line(&[[5.0, 19.5], [13.5, 11.0]]));
+            painter.add(closed(vec![[11.0, 8.0], [15.5, 3.5], [20.5, 8.5], [16.0, 13.0]]));
         }
         Icon::Support => {
             let (lobe, dip) = (4.3, 0.56);

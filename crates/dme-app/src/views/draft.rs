@@ -22,7 +22,7 @@ const NOTE: &str = "Put the heroes in as they are picked: click a place, type a 
      The switch at the top says what the list is for. Team composition weighs a hero against the whole enemy team and beside your whole team, by the matches it wins. \
      Lane winning weighs it by the lanes it wins, against the enemies of its lane alone: the mids meet each other, the carry and the hard support meet the offlaner and the soft support. \
      For a carry or an offlaner the enemy's support in the lane counts half, the enemy's core in full. The hero it shares its lane with counts half, and a lane that ends even counts as half won. \
-     Once both teams are full, the page says which draft is better, at the top right, by the whole match. \
+     Once both teams are full, the page says which draft is better, at the top right, by the whole match, and \"Go to build\" under the teams opens the build of your own hero. \
      The app does not see your game: nothing is read from Dota.";
 
 const SEATS: usize = 5;
@@ -97,6 +97,15 @@ impl Draft {
     fn own_seat(&self, role: Option<Role>) -> Option<Seat> {
         let place = self.team_roles.iter().position(|had| Some(*had) == role)?;
         Some(Seat { enemy: false, place })
+    }
+
+    pub fn own_hero(&self, role: Option<Role>) -> Option<(&str, Role)> {
+        Some((self.at(self.own_seat(role)?)?, role?))
+    }
+
+    pub fn against(&self, hero: &str) -> Vec<String> {
+        let of_the_enemy = self.enemies.iter().flatten().any(|picked| picked == hero);
+        self.heroes(!of_the_enemy).into_iter().map(str::to_string).collect()
     }
 
     fn heroes(&self, enemy: bool) -> Vec<&str> {
@@ -196,6 +205,7 @@ pub struct Answer {
     pub try_again: bool,
     pub copy_details: bool,
     pub open_source: bool,
+    pub to_build: Option<(String, Role)>,
 }
 
 pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
@@ -216,6 +226,14 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
     choices(ui, pictures, rank, role, chance, &mut answer);
     seats(ui, catalog, pictures, draft, role);
     ui.add_space(8.0);
+    if draft.is_full() {
+        let own = draft.own_hero(role);
+        let name = own.map(|(id, _)| catalog.any_hero(id).map_or(id, |hero| hero.name.as_str()));
+        if to_build(ui, name) {
+            answer.to_build = own.map(|(hero, role)| (hero.to_string(), role));
+        }
+        ui.add_space(8.0);
+    }
 
     let wanted = draft.search.trim().to_lowercase();
     if !wanted.is_empty() {
@@ -443,7 +461,7 @@ fn seats(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Dr
                             if place > 0 {
                                 ui.add_space(if place == places[0] { PHASE_GAP } else { GAP });
                             }
-                            let hero = draft.at(seat).and_then(|id| catalog.hero(id));
+                            let hero = draft.at(seat).and_then(|id| catalog.any_hero(id));
                             let look = SeatLook { size, filling: draft.seat == seat, yours: own == Some(seat), phase: PHASE_NAMES[phase], role: draft.role(seat) };
                             let did = seat_button(ui, pictures, &look, hero, draft.at(seat));
                             if did.clicked {
@@ -607,6 +625,23 @@ fn verdict(ui: &mut Ui, chance: f32) {
     }
 }
 
+fn to_build(ui: &mut Ui, own: Option<&str>) -> bool {
+    let mut go = false;
+    ui.horizontal(|ui| {
+        let words = own.map_or_else(|| "Go to build".to_string(), |name| format!("Go to build  ·  {name}"));
+        let button = egui::Button::new(theme::title(words, 17.0).color(Color32::WHITE)).fill(theme::accent()).min_size(vec2(230.0, 44.0));
+        let asked = ui.add_enabled(own.is_some(), button);
+        match own {
+            Some(name) => go = asked.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("What the players of {name} buy and skill, in your role and your rank.")).clicked(),
+            None => {
+                ui.add_space(4.0);
+                ui.label(dim("Choose \"My role\" above to see your own hero's build.").small());
+            }
+        }
+    });
+    go
+}
+
 fn verdict_words(chance: f32) -> (&'static str, Color32) {
     if chance >= 50.0 + EVEN_WITHIN {
         ("Your draft is better", theme::good())
@@ -618,7 +653,7 @@ fn verdict_words(chance: f32) -> (&'static str, Color32) {
 }
 
 fn fitting(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Draft, wanted: &str) {
-    let fitting: Vec<&Hero> = heroes::found(&catalog.heroes, wanted).into_iter().filter(|hero| !draft.is_picked(&hero.id)).collect();
+    let fitting: Vec<&Hero> = heroes::found(catalog.all_heroes(), wanted).into_iter().filter(|hero| !draft.is_picked(&hero.id)).collect();
     let whose = if draft.seat.enemy { "the enemy" } else { "your team" };
     let free = draft.at(draft.seat).is_none();
     ui.horizontal(|ui| {
@@ -665,7 +700,7 @@ fn suggestions(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &
         }
     };
     let there = draft.at(seat);
-    let shown: Vec<(&Suggestion, &Hero)> = all.iter().filter(|suggestion| !draft.hidden.contains(&suggestion.hero) && Some(suggestion.hero.as_str()) != there).filter_map(|suggestion| Some((suggestion, catalog.hero(&suggestion.hero)?))).collect();
+    let shown: Vec<(&Suggestion, &Hero)> = all.iter().filter(|suggestion| !draft.hidden.contains(&suggestion.hero) && Some(suggestion.hero.as_str()) != there).filter_map(|suggestion| Some((suggestion, catalog.any_hero(&suggestion.hero)?))).collect();
 
     let roomy = ui.available_width() > 760.0;
     ui.horizontal(|ui| {
@@ -699,7 +734,7 @@ fn suggestions(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &
         return;
     }
 
-    let name_of = |id: &str| catalog.hero(id).map_or_else(|| id.to_string(), |hero| hero.name.clone());
+    let name_of = |id: &str| catalog.any_hero(id).map_or_else(|| id.to_string(), |hero| hero.name.clone());
     let (mut picks, mut hides) = (None, None);
     egui::ScrollArea::vertical().id_salt("suggestions").auto_shrink(false).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 5.0;
@@ -955,6 +990,12 @@ mod tests {
         assert_eq!(draft.own_seat(Some(Role::Mid)), Some(TEAM(4)));
         assert_eq!(draft.own_seat(Some(Role::Carry)), Some(TEAM(2)));
         assert_eq!(draft.own_seat(None), None, "with no role chosen, no place is the player's");
+        assert_eq!(draft.own_hero(Some(Role::Mid)), None);
+        draft.seat = TEAM(4);
+        draft.seat_hero("lina");
+        assert_eq!(draft.own_hero(Some(Role::Mid)), Some(("lina", Role::Mid)));
+        assert_eq!((draft.own_hero(Some(Role::Carry)), draft.own_hero(None)), (None, None));
+        draft.empty(TEAM(4));
         draft.seat = ENEMY(0);
 
         draft.set_role(ENEMY(0), Role::Mid);
@@ -991,6 +1032,10 @@ mod tests {
         assert_eq!(draft.heroes(false), ["ogre", "jakiro", "sven", "mars"]);
         assert_eq!((draft.seat, draft.role(draft.seat)), (ENEMY(4), Role::Mid), "the last picks, the enemy's first");
         assert_eq!(list_title(TEAM(4), Role::Mid, true), "Heroes for you, in mid");
+
+        assert_eq!(draft.against("sven"), ["lion", "cm", "pa", "axe"]);
+        assert_eq!(draft.against("pa"), ["ogre", "jakiro", "sven", "mars"]);
+        assert_eq!(draft.against("zeus"), ["lion", "cm", "pa", "axe"]);
 
         draft.seat = TEAM(3);
         assert_eq!(draft.around_the_seat().0, ["ogre", "jakiro", "sven"]);

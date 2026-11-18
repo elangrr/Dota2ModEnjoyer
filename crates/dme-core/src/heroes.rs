@@ -56,6 +56,7 @@ pub struct HeroFile {
     pub attribute: Option<Attribute>,
     pub slots: Vec<HeroSlot>,
     pub aliases: Vec<String>,
+    pub models: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +107,12 @@ impl HeroFiles {
             let aliases = body.str("NameAliases").and_then(|names| std::str::from_utf8(names).ok()).unwrap_or_default();
             let aliases = aliases.split([';', ',']).map(str::trim).filter(|alias| !alias.is_empty()).map(str::to_string).collect();
             let attribute = body.str("AttributePrimary").and_then(Attribute::read);
-            self.by_hero.insert(String::from_utf8_lossy(hero.key).to_ascii_lowercase(), HeroFile { attribute, slots, aliases });
+            let model = |key: &str| body.str(key).and_then(|model| std::str::from_utf8(model).ok()).map(str::trim).filter(|model| !model.is_empty()).map(str::to_string);
+            let mut models: Vec<String> = model("Model").into_iter().collect();
+            while let Some(next) = model(&format!("Model{}", models.len())).filter(|_| !models.is_empty()) {
+                models.push(next);
+            }
+            self.by_hero.insert(String::from_utf8_lossy(hero.key).to_ascii_lowercase(), HeroFile { attribute, slots, aliases, models });
         }
     }
 
@@ -145,6 +151,14 @@ impl HeroFiles {
 
     pub fn attribute(&self, hero: &str) -> Option<Attribute> {
         self.of(hero)?.attribute
+    }
+
+    pub fn model(&self, hero: &str) -> Option<&str> {
+        let (hero, size) = match hero.rsplit_once("_variant_") {
+            Some((hero, size)) => (hero, size.parse().ok()?),
+            None => (hero, 0),
+        };
+        self.of(hero)?.models.get(size).map(String::as_str)
     }
 
     pub fn len(&self) -> usize {
@@ -294,6 +308,20 @@ pub(crate) mod tests {
         assert_eq!(Attribute::read(b" dota_attribute_all "), Some(Attribute::Universal));
         assert_eq!(Attribute::read(b"DOTA_ATTRIBUTE_INTELLECT"), Some(Attribute::Intelligence));
         assert_eq!(Attribute::read(b"STRENGTH"), None);
+    }
+
+    #[test]
+    fn a_heros_file_names_its_body_and_a_hero_that_grows_one_for_each_size() {
+        let mut files = HeroFiles::default();
+        files.add(JUGGERNAUT_FILE.as_bytes());
+        let tiny = "\"DOTAHeroes\"\n{\n\"npc_dota_hero_tiny\"\n{\n\"Model\" \"models/heroes/tiny/tiny_01.vmdl\"\n\"Model1\" \"models/heroes/tiny/tiny_02.vmdl\"\n\"Model2\" \"models/heroes/tiny/tiny_03.vmdl\"\n\"Model4\" \"models/heroes/tiny/skipped.vmdl\"\n\"ItemSlots\"\n{\n\"0\"\n{\n\"SlotName\" \"head\"\n}\n}\n}\n}\n";
+        files.add(tiny.as_bytes());
+        assert_eq!(files.model(JUGG), Some("models/heroes/juggernaut/juggernaut.vmdl"));
+        assert_eq!(files.model("npc_dota_hero_tiny"), Some("models/heroes/tiny/tiny_01.vmdl"));
+        assert_eq!(files.model("npc_dota_hero_tiny_variant_0"), Some("models/heroes/tiny/tiny_01.vmdl"));
+        assert_eq!(files.model("npc_dota_hero_tiny_variant_2"), Some("models/heroes/tiny/tiny_03.vmdl"));
+        assert_eq!(files.model("npc_dota_hero_tiny_variant_3"), None, "the sizes go in order, with none missing");
+        assert_eq!(files.model("npc_dota_hero_axe"), None);
     }
 
     #[test]

@@ -18,6 +18,7 @@ use crate::vpk::Archive;
 pub struct Catalog {
     pub heroes: Vec<Hero>,
     pub every_hero: Vec<(String, String)>,
+    pub plain_heroes: Vec<Hero>,
     pub world: Vec<Slot>,
     pub rarities: Vec<Rarity>,
     pub lost_files: Vec<String>,
@@ -173,8 +174,9 @@ impl Catalog {
 
         let wholeness = Wholeness::new(archive);
         let reader = Reader { game, names, archive, rarity_places, hero_files: HeroFiles::read(archive), for_heroes, for_couriers, wholeness };
-        let mut heroes: Vec<Hero> = game.heroes().into_iter().filter_map(|hero| reader.hero(hero)).collect();
+        let (mut heroes, mut plain_heroes): (Vec<Hero>, Vec<Hero>) = game.heroes().into_iter().map(|hero| reader.hero(hero)).partition(|hero| !hero.slots.is_empty() || !hero.sets.is_empty());
         heroes.sort_by_cached_key(|hero| hero.name.to_lowercase());
+        plain_heroes.sort_by_cached_key(|hero| hero.name.to_lowercase());
         let mut every_hero: Vec<(String, String)> = game.heroes().into_iter().map(|hero| (hero.to_string(), reader.hero_name(hero))).collect();
         every_hero.sort_by_cached_key(|(_, name)| name.to_lowercase());
         let mut world: Vec<Slot> = game.world_slots().iter().filter_map(|slot| reader.slot(None, slot)).collect();
@@ -186,11 +188,21 @@ impl Catalog {
         world.extend(reader.map_slot());
         let (lost_files, moved_files) = (reader.wholeness.gone(), reader.wholeness.stand_ins());
         drop(reader);
-        Catalog { heroes, every_hero, world, rarities, lost_files, moved_files }
+        Catalog { heroes, every_hero, plain_heroes, world, rarities, lost_files, moved_files }
     }
 
     pub fn hero(&self, id: &str) -> Option<&Hero> {
         self.heroes.iter().find(|hero| hero.id.eq_ignore_ascii_case(id))
+    }
+
+    pub fn any_hero(&self, id: &str) -> Option<&Hero> {
+        self.hero(id).or_else(|| self.plain_heroes.iter().find(|hero| hero.id.eq_ignore_ascii_case(id)))
+    }
+
+    pub fn all_heroes(&self) -> Vec<&Hero> {
+        let mut all: Vec<&Hero> = self.heroes.iter().chain(&self.plain_heroes).collect();
+        all.sort_by_cached_key(|hero| hero.name.to_lowercase());
+        all
     }
 
     pub fn slots(&self, hero: Option<&str>) -> &[Slot] {
@@ -316,7 +328,7 @@ struct Reader<'g, 'a> {
 }
 
 impl Reader<'_, '_> {
-    fn hero(&self, id: &str) -> Option<Hero> {
+    fn hero(&self, id: &str) -> Hero {
         let worn = self.game.hero_slots(id).into_iter().filter(|(slot, _)| self.hero_files.has_slot(id, slot));
         let mut slots: Vec<Slot> = worn.filter_map(|(slot, _)| self.slot(Some(id), slot)).collect();
         slots.extend(self.hero_files.ability_slots(id).iter().filter_map(|known| self.effects_slot(id, known.slot, known.ability)));
@@ -324,16 +336,13 @@ impl Reader<'_, '_> {
         self.tell_apart(&mut slots);
         let mut sets: Vec<Set> = self.game.sets_for(id).into_iter().filter_map(|set| self.set(id, set)).collect();
         sets.sort_by_cached_key(|set| set.name.to_lowercase());
-        if slots.is_empty() && sets.is_empty() {
-            return None;
-        }
         let name = self.hero_name(id);
         let mut aliases = self.hero_files.aliases(id).to_vec();
         let short = items::hero_short_name(id).replace('_', " ");
         if !short.eq_ignore_ascii_case(&name) && !aliases.iter().any(|alias| alias.eq_ignore_ascii_case(&short)) {
             aliases.push(short);
         }
-        Some(Hero { id: id.to_string(), name, aliases, attribute: self.hero_files.attribute(id), picture: self.picture(&format!("heroes/{id}")), sets, slots })
+        Hero { id: id.to_string(), name, aliases, attribute: self.hero_files.attribute(id), picture: self.picture(&format!("heroes/{id}")), sets, slots }
     }
 
     fn hero_name(&self, id: &str) -> String {
@@ -792,6 +801,10 @@ mod tests {
     fn lists_heroes_with_their_slots_and_sets() {
         let catalog = catalog(&everything());
         assert_eq!(catalog.heroes.len(), 1);
+        let plain: Vec<&str> = catalog.plain_heroes.iter().map(|hero| hero.name.as_str()).collect();
+        assert_eq!(plain, ["Bane"]);
+        assert!(catalog.hero("npc_dota_hero_bane").is_none() && catalog.any_hero("NPC_DOTA_HERO_BANE").is_some() && catalog.any_hero(AXE).is_some());
+        assert_eq!(catalog.all_heroes().iter().map(|hero| hero.name.as_str()).collect::<Vec<_>>(), ["Axe", "Bane"]);
         let every: Vec<(&str, &str)> = catalog.every_hero.iter().map(|(id, name)| (id.as_str(), name.as_str())).collect();
         assert_eq!(every, [(AXE, "Axe"), ("npc_dota_hero_bane", "Bane")]);
         let axe = &catalog.heroes[0];

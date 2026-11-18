@@ -1,30 +1,56 @@
-"""Makes the file of numbers the app's Draft page works from.
+"""Makes the two files of numbers the app's Draft and Builds pages work from.
 
 draft.json: how well each hero does in each of the five roles, for each of the eight ranks,
 how well it does against and beside each other hero, for each pair of ranks, and how its lanes
 go in each role, against the heroes it meets there and beside the one it shares them with.
 
-    python publish/make_numbers.py <folder to write the file in>
+builds.json: what the players of each hero buy and skill, in each role the hero is played in,
+for each pair of ranks: the items they start with, the items they go on to buy and when,
+boots among them, and which talents are taken. And from single matches of Divine and
+Immortal players, some hundreds for each hero and role: the order the skill points are put
+in, point by point, and which items are bought more often against which enemy hero. And from
+OpenDota (https://www.opendota.com), the pro matches of the patch: what the pros who play a
+hero in each role buy, such as the Bottle that nearly every pro mid buys.
+
+    python publish/make_numbers.py <folder to write the two files in>
     python publish/make_numbers.py --check        # tries the sums below on made-up numbers
 
 The numbers are STRATZ's (https://stratz.com), asked for through its API with a token that a
 Steam login there gives. The token is read from the environment variable STRATZ_TOKEN or, where
 that is not set, from the file .dme/stratz.key in the home folder. It goes nowhere but to
-STRATZ, and never into the file that is written.
+STRATZ, and never into the file that is written. OpenDota is asked without a token, one
+question in all. Where it cannot be reached, the file is written without what pros buy.
 
-About sixty questions are asked, each for all heroes at once, which takes a few minutes.
-The file is described in docs/SPEC.md, section 5; the app refuses one that is not of that
-shape.
+About sixty questions are asked for draft.json, each for all heroes at once. For
+builds.json one is asked for each hero and pair of ranks, about five hundred, and one for
+each hero and role, about three hundred, each of which fetches some hundreds of matches.
+All of it takes about twenty minutes.
+The files are described in docs/SPEC.md, sections 5 and 6; the app refuses one that is not of
+that shape.
+
+To try the script out without asking all of that, set DME_FEW_HEROES to a number: builds are
+then made for that many heroes only.
 """
 
+import collections
 import json
+import math
 import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 API = "https://api.stratz.com/graphql"
+# What STRATZ says when its database is full for a while ("the analytics database is at
+# capacity. Please retry in a moment."): the same question is asked again after BUSY_WAIT
+# seconds, up to BUSY_TRIES times in one question.
+CAPACITY = "at capacity"
+BUSY_WAIT = 60
+BUSY_TRIES = 10
+# OpenDota's database of pro matches, which takes a question in SQL.
+PRO_API = "https://api.opendota.com/api/explorer?sql="
 
 # The pairs of ranks, in the order the file has them. STRATZ counts hero against hero for a
 # pair as a whole (the first name), and wins by role for each of its two ranks (the two names
@@ -50,9 +76,58 @@ DOUBT = 400
 MOST = 300
 # A file with fewer heroes than this is not written: something went wrong.
 LEAST_HEROES = 100
-# The most bytes the app takes (NUMBERS_LIMIT in crates/dme-core/src/draft.rs). A larger file
-# is not written: every app that is out would refuse it.
-LIMIT = 4 * 1024 * 1024
+# The most bytes the app takes of each file (NUMBERS_LIMIT in crates/dme-core/src/draft.rs,
+# BUILDS_LIMIT in builds.rs). A larger file is not written: every app that is out would refuse it.
+LIMITS = {"draft.json": 4 * 1024 * 1024, "builds.json": 8 * 1024 * 1024}
+
+# A build is made for a role that has at least this part of a hero's matches in a pair of
+# ranks, for no more than this many roles, and only from at least this many matches.
+PLAYED_SHARE = 0.10
+MOST_ROLES = 3
+LEAST_MATCHES = 150
+# What is in a build: an item or a skill that at least this part of the players have, and no
+# more than this many of each kind.
+START_SHARE, MOST_START = 0.15, 8
+BOOTS_SHARE, MOST_BOOTS = 0.05, 4
+ITEM_SHARE, MOST_ITEMS = 0.03, 30
+# A second, third or fourth copy of an item is counted where at least this part of those who
+# start with the item have that many, as with three Iron Branches.
+COPY_SHARE = 0.50
+
+# How many single matches are fetched for a hero in a role, and how few of them still say
+# in which order the skill points are put.
+SAMPLE = 600
+LEAST_SAMPLE = 30
+# The skill points of an order: one for each level up to 16, then those of the levels 18, 20
+# and 25. A point is said while at least this part of the matches got as far.
+MOST_POINTS = 19
+GOT_SO_FAR = 0.25
+# The next point is what most of those do who did the same up to there, while there are at
+# least this many of them, and what most of everybody does where there are fewer.
+LEAST_THE_SAME = 10
+# An item is said to be bought more often against a hero where, added up over all heroes
+# that met it, it was expected to be bought at least this many times, was bought more often
+# than luck would have it by this many times the spread, and that is at least this many
+# times as often as usual. No more than MOST_TIMES is said, and no more than MOST_AGAINST
+# items for a hero. DOUBT_BOUGHT pulls what few purchases show towards "as usual".
+LEAST_EXPECTED = 8
+SURE = 3.0
+LEAST_TIMES = 1.25
+MOST_TIMES = 5.0
+MOST_AGAINST = 14
+DOUBT_BOUGHT = 15
+
+# What pros buy in a role is said of a hero that at least this many pros played in it in the
+# patch, and of an item at least this part of them bought. The app shows what most buy.
+LEAST_PROS = 8
+PRO_SHARE = 0.30
+
+# Items whose purchases STRATZ loses, so that its numbers of them are not to be gone by. Of
+# five ranked matches whose mid player bought a Bottle in the second minute by OpenDota's
+# records, and in four of them still had it at the end, STRATZ had a Bottle in none: 5 of 100
+# Storm Spirits by its numbers, where pros, and ranked players by OpenDota's records, buy one
+# nearly always. What pros buy (OpenDota) is what says whether to have it.
+LOST_BY_STRATZ = {"item_bottle"}
 
 
 def token():
@@ -77,7 +152,11 @@ class Asker:
     def ask(self, query):
         body = json.dumps({"query": query}).encode("utf-8")
         headers = {"Authorization": "Bearer " + self.secret, "User-Agent": "STRATZ_API", "Content-Type": "application/json"}
-        for attempt in range(4):
+        # `attempt` counts tries against refusals and lost connections; a full database
+        # (`busy`) is counted apart, so that waiting for it does not use those up.
+        attempt, busy = -1, 0
+        while attempt < 3:
+            attempt += 1
             self.asked += 1
             try:
                 with urllib.request.urlopen(urllib.request.Request(API, data=body, headers=headers), timeout=120) as answer:
@@ -94,6 +173,13 @@ class Asker:
                     continue
                 sys.exit(f"STRATZ could not be reached: {error}")
             if said.get("errors"):
+                # STRATZ's database is full for a while: wait a minute and ask the same again,
+                # up to ten times, rather than lose all that was asked before.
+                if any(CAPACITY in str(error.get("message")) for error in said["errors"]) and busy < BUSY_TRIES:
+                    busy += 1
+                    attempt -= 1
+                    time.sleep(BUSY_WAIT)
+                    continue
                 sys.exit("STRATZ did not like the question: " + "; ".join(str(error.get("message")) for error in said["errors"][:3]))
             # A short rest, to stay far inside the limit of questions a second.
             time.sleep(0.3)
@@ -164,8 +250,363 @@ def tables(heroes, pairs_against, pairs_with):
     return table(pairs_against, expected_against, -1), table(pairs_with, expected_with, 1)
 
 
+def build(matches, starting, boots, bought, talents, is_talent):
+    """One build, from what STRATZ counts for a hero in a role: each kind of thing as a list
+    of short lists of numbers, the things named by STRATZ's own numbers for them. `matches`
+    is how many matches the counts are of. `is_talent` says of a skill's number whether it
+    is a talent."""
+    start = []
+    # For each item, each copy: the matches it was had in. The first copy counts where it was
+    # bought. STRATZ calls every copy after it that is bought in the same moment "given", as
+    # the second, third and fourth Iron Branch: the purchase logs of such matches have each of
+    # them bought, so those count whether they were bought or "given".
+    by_item = {}
+    for row in starting or []:
+        if row["instance"] == 0 and row.get("wasGiven"):
+            continue
+        held = by_item.setdefault(row["itemId"], {}).setdefault(row["instance"], [0, 0])
+        held[0] += row["matchCount"]
+        held[1] += row["winCount"]
+    for item, copies in by_item.items():
+        one = copies.get(0)
+        if one and one[0] >= START_SHARE * matches:
+            # How many of it are bought: the copies that most of those who buy it have, one
+            # after the other.
+            count = 1
+            while count in copies and copies[count][0] >= COPY_SHARE * one[0]:
+                count += 1
+            start.append([item, count, one[0], one[1]])
+    start.sort(key=lambda entry: -entry[2])
+
+    # Boots that are bought before the match begins have a time before nought: minute 0.
+    shoes = [[row["itemId"], max(0, round((row.get("timeAverage") or 0) / 60)), row["matchCount"], row["winCount"]] for row in boots or [] if row["matchCount"] >= BOOTS_SHARE * matches]
+    shoes = sorted(shoes, key=lambda entry: -entry[2])[:MOST_BOOTS]
+    all_boots = {row["itemId"] for row in boots or []}
+
+    sums = {}
+    for row in bought or []:
+        if row.get("instance", 0) == 0 and row["itemId"] not in all_boots:
+            item = sums.setdefault(row["itemId"], [0, 0, 0])
+            item[0] += row["matchCount"]
+            item[1] += row["winCount"]
+            item[2] += row["time"] * row["matchCount"]
+    # What is bought in the first minute is a starting item, which has its own list.
+    items = [[item, round(minutes / count), count, wins] for item, (count, wins, minutes) in sums.items() if count >= ITEM_SHARE * matches and minutes / count >= 1]
+    # The boots are items among the others, in the order all of them are bought in.
+    items = sorted(sorted(items, key=lambda entry: -entry[2])[:MOST_ITEMS] + shoes, key=lambda entry: (entry[1], -entry[2]))
+
+    taken = sorted(([row["abilityId"], row["matchCount"], row["winCount"]] for row in talents or [] if is_talent(row["abilityId"]) and row["matchCount"] > 0), key=lambda entry: -entry[1])
+    return {"matches": matches, "start": start[:MOST_START], "items": items, "talents": taken}
+
+
+def usual_order(orders):
+    """The order most players put their skill points in, point by point. `orders` are the
+    orders of single matches, each a list of skills. Each point is what most of those do who
+    did the same up to there; where few did, it is what most of everybody does with that
+    point, as far as the points before it leave it to be had."""
+    # No skill is put more points in than the most any one match put in it.
+    most_of = collections.Counter()
+    for one in orders:
+        for skill, points in collections.Counter(one).items():
+            most_of[skill] = max(most_of[skill], points)
+    order, the_same = [], orders
+    while len(order) < MOST_POINTS:
+        place = len(order)
+        so_far = [one for one in orders if len(one) > place]
+        if not so_far or len(so_far) < GOT_SO_FAR * len(orders):
+            break
+        the_same = [one for one in the_same if len(one) > place]
+        asked = the_same if len(the_same) >= LEAST_THE_SAME else so_far
+        liked = collections.Counter(one[place] for one in asked).most_common()
+        skill = next((skill for skill, _ in liked if order.count(skill) < most_of[skill]), None)
+        if skill is None:
+            break
+        order.append(skill)
+        the_same = [one for one in the_same if one[place] == skill]
+    return order
+
+
+def bought_against(samples):
+    """Which items are bought more often against which hero. `samples[(hero, role)]` are the
+    matches of a hero in a role, each a pair: the five heroes of the other team, and the
+    items that were bought. An item is counted against a hero over all heroes that met it:
+    how often it was bought in those matches, against how often those who met it buy it in
+    all of their matches. Returns, for each enemy hero, a list of [item, times as often],
+    the most first."""
+    seen, expected = collections.Counter(), collections.Counter()
+    for matches in samples.values():
+        if len(matches) < LEAST_SAMPLE:
+            continue
+        usual = collections.Counter(item for _, items in matches for item in items)
+        met = collections.Counter(enemy for enemies, _ in matches for enemy in enemies)
+        for enemy, times in met.items():
+            for item, bought in usual.items():
+                expected[(enemy, item)] += times * bought / len(matches)
+        for enemies, items in matches:
+            for enemy in enemies:
+                for item in items:
+                    seen[(enemy, item)] += 1
+    # Against some heroes matches are longer, and more of everything is bought: that is
+    # taken out, so that what is left is what is bought against the hero itself.
+    all_seen, all_expected = collections.Counter(), collections.Counter()
+    for (enemy, _), bought in seen.items():
+        all_seen[enemy] += bought
+    for (enemy, _), bought in expected.items():
+        all_expected[enemy] += bought
+    against = {}
+    for (enemy, item), usually in expected.items():
+        bought = seen[(enemy, item)]
+        if usually < LEAST_EXPECTED or bought < usually + SURE * math.sqrt(usually):
+            continue
+        more_of_all = all_seen[enemy] / all_expected[enemy] if all_expected[enemy] else 1.0
+        times = (bought + DOUBT_BOUGHT) / (usually + DOUBT_BOUGHT) / more_of_all
+        if times >= LEAST_TIMES:
+            against.setdefault(enemy, []).append([item, round(min(times, MOST_TIMES), 2)])
+    return {enemy: sorted(items, key=lambda entry: (-entry[1], entry[0])) for enemy, items in against.items()}
+
+
+def pro_builds(began, now):
+    """What the pros who played each hero in each role bought, in the pro matches since
+    `began`: for each hero, by its number, and role, how many pros played it so, and the items
+    that at least PRO_SHARE of them bought, each by its name in the game's files, with how many
+    bought it and the minute they first bought it in on average. Asks OpenDota once; where
+    that does not work, says so and gives nothing.
+
+    A pro match says which lane each player was in (`lane_role`: 1 the safe lane, 2 the mid, 3
+    the off lane), and nothing of roles. Of the two in the safe lane, the one with more last
+    hits at minute 10 is taken for the carry and the other for the hard support; of the two in
+    the off lane, the one with more for the offlaner and the other for the soft support; and
+    the one in mid with the most for the mid. A third player in a lane is left out."""
+    sql = """
+        WITH players AS (
+            SELECT pm.match_id, pm.player_slot, pm.player_slot < 128 AS radiant, pm.lane_role, pm.hero_id,
+                pm.purchase_log, COALESCE(pm.lh_t[11], 0) AS lh10
+            FROM player_matches pm JOIN matches m USING (match_id)
+            WHERE m.start_time >= %(began)d AND m.start_time < %(now)d AND pm.lane_role IN (1, 2, 3)
+                AND pm.purchase_log IS NOT NULL
+        ), placed AS (
+            SELECT *, row_number() OVER (PARTITION BY match_id, radiant, lane_role ORDER BY lh10 DESC, player_slot) AS place
+            FROM players
+        ), roled AS (
+            SELECT match_id, player_slot, hero_id, purchase_log,
+                CASE WHEN lane_role = 1 AND place = 1 THEN 0 WHEN lane_role = 2 AND place = 1 THEN 1
+                    WHEN lane_role = 3 AND place = 1 THEN 2 WHEN lane_role = 3 AND place = 2 THEN 3
+                    WHEN lane_role = 1 AND place = 2 THEN 4 END AS role
+            FROM placed
+        ), counted AS (
+            SELECT hero_id, role, count(*) AS players FROM roled WHERE role IS NOT NULL GROUP BY 1, 2
+        ), firsts AS (
+            SELECT r.hero_id, r.role, r.match_id, r.player_slot, p->>'key' AS item, min((p->>'time')::int) AS time
+            FROM roled r, unnest(r.purchase_log) AS p
+            WHERE r.role IS NOT NULL
+            GROUP BY 1, 2, 3, 4, 5
+        )
+        SELECT f.hero_id, f.role, c.players, f.item, count(*) AS bought, round(avg(f.time)) AS time,
+            (SELECT count(DISTINCT match_id) FROM players) AS matches
+        FROM firsts f JOIN counted c USING (hero_id, role)
+        WHERE c.players >= %(least)d
+        GROUP BY f.hero_id, f.role, c.players, f.item
+        HAVING count(*) >= %(share)f * c.players
+        ORDER BY f.hero_id, f.role, bought DESC
+    """ % {"began": began, "now": now, "least": LEAST_PROS, "share": PRO_SHARE}
+    try:
+        # OpenDota turns away Python's own name for itself, and takes a plain one.
+        asked = urllib.request.Request(PRO_API + urllib.parse.quote(" ".join(sql.split())), headers={"User-Agent": "make-numbers/1.0"})
+        with urllib.request.urlopen(asked, timeout=180) as answer:
+            said = json.load(answer)
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        print(f"  OpenDota could not be asked ({error}): the file has nothing of what pros buy")
+        return 0, {}
+    if said.get("err") or not isinstance(said.get("rows"), list):
+        print(f"  OpenDota did not like the question ({said.get('err')}): the file has nothing of what pros buy")
+        return 0, {}
+    heroes, matches = {}, 0
+    for row in said["rows"]:
+        matches = max(matches, int(row["matches"] or 0))
+        players, items = heroes.setdefault((int(row["hero_id"]), int(row["role"])), (int(row["players"]), []))
+        # What is bought before the match begins, on average, is of the start and not of
+        # what is bought after it.
+        seconds = float(row["time"] or 0)
+        if seconds > 0:
+            items.append(["item_" + row["item"], int(row["bought"]), round(seconds / 60)])
+    return matches, heroes
+
+
+def sample_of(asker, hero, role):
+    """Single matches of a hero in a role, of Divine and Immortal players: for each the
+    heroes of the other team, the skills in the order they got their points, and the items
+    that were bought."""
+    answer = asker.ask(
+        "{ heroStats { guide(heroId:%d, positionId:%s, take:%d) { guides(take:%d) { match { players { heroId isRadiant } } "
+        "matchPlayer { isRadiant abilities { abilityId } stats { itemPurchases { itemId } } } } } } }" % (hero, ROLES[role], SAMPLE, SAMPLE)
+    )
+    matches = []
+    for listed in answer["heroStats"]["guide"] or []:
+        for guide in listed.get("guides") or []:
+            match, player = guide.get("match") or {}, guide.get("matchPlayer")
+            if not player or not match.get("players"):
+                continue
+            enemies = [other["heroId"] for other in match["players"] if other["isRadiant"] != player["isRadiant"]]
+            skills = [point["abilityId"] for point in player.get("abilities") or []]
+            items = {bought["itemId"] for bought in (player.get("stats") or {}).get("itemPurchases") or []}
+            matches.append((enemies, skills, items))
+    return matches
+
+
+def roles_played(numbers, pair, hero):
+    """The roles a hero is played in often enough in a pair of ranks, the most played first.
+    `hero` is its place in the file's list."""
+    played = [sum(numbers["ranks"][rank]["played"][role][hero] for rank in (2 * pair, 2 * pair + 1)) for role in range(len(ROLES))]
+    often = [role for role in range(len(ROLES)) if played[role] > 0 and played[role] >= PLAYED_SHARE * sum(played)]
+    return sorted(often, key=lambda role: -played[role])[:MOST_ROLES]
+
+
+def make_builds(asker, now, numbers, heroes, few, patch_began):
+    """The builds of every hero of the Draft page's numbers. `heroes` are STRATZ's numbers for
+    the heroes, in the order of that file's list. `few`: for this many heroes only.
+    `patch_began`: when the patch began, for the pro matches of it."""
+    constants = asker.ask("{ constants { items { id name } abilities { id name isTalent } } }")["constants"]
+    item_names = {item["id"]: item["name"] for item in constants["items"] if item.get("name")}
+    skill_names = {skill["id"]: skill["name"] for skill in constants["abilities"] if skill.get("name")}
+    talents = {skill["id"] for skill in constants["abilities"] if skill.get("isTalent") or (skill.get("name") or "").startswith("special_bonus")}
+    # The points a hero puts in its attributes are counted among the talents, and are none.
+    skill_names = {skill: name for skill, name in skill_names.items() if name != "special_bonus_attributes"}
+
+    of_hero = {}
+    # Every item STRATZ counts among what is bought after the start, however few buy it: the
+    # items that are not used up, and that are not the parts of something else alone.
+    counted_items = set()
+    for place, hero in list(enumerate(heroes))[: few or len(heroes)]:
+        builds = []
+        for pair, (ranks, _) in enumerate(PAIRS):
+            roles = roles_played(numbers, pair, place)
+            if not roles:
+                continue
+            asked = "heroId:%d, bracketBasicIds:[%s], positionIds:[%%s]" % (hero, ranks)
+            parts = " ".join(
+                (
+                    "s%(r)d: itemStartingPurchase(%(of)s) { itemId instance wasGiven matchCount winCount } "
+                    "b%(r)d: itemBootPurchase(%(of)s) { itemId timeAverage matchCount winCount } "
+                    # STRATZ counts what is bought after the start by the minute, and leaves
+                    # out every minute that fewer than about 250 matches bought an item in,
+                    # unless `matchLimit` says otherwise. An item bought at many different
+                    # minutes, as most that are bought for the match at hand, is then not
+                    # there at all: Puck's Aghanim's Scepter, bought in 24 of 100 Divine and
+                    # Immortal matches, was missing.
+                    "i%(r)d: itemFullPurchase(%(of)s, matchLimit:0) { itemId instance time matchCount winCount } "
+                    "t%(r)d: talent(%(of)s) { abilityId matchCount winCount } "
+                    "a%(r)d: abilityMinLevel(%(of)s) { abilityId level matchCount }"
+                )
+                % {"r": role, "of": asked % ROLES[role]}
+                for role in roles
+            )
+            answer = asker.ask("{ heroStats { %s } }" % parts)["heroStats"]
+            for role in roles:
+                counted_items.update(row["itemId"] for row in answer["i%d" % role] or [])
+                first = answer["a%d" % role] or []
+                # Every match has a skill at level 1: those are the matches the counts are of.
+                matches = sum(row["matchCount"] for row in first if row["level"] == 1 and row["abilityId"] not in talents)
+                if matches < LEAST_MATCHES:
+                    continue
+                bought = [[row for row in answer[kind % role] or [] if item_names.get(row["itemId"]) not in LOST_BY_STRATZ] for kind in ("s%d", "b%d", "i%d")]
+                made = build(matches, *bought, answer["t%d" % role], talents.__contains__)
+                builds.append({"role": role, "pair": pair, **made})
+        if builds:
+            of_hero[hero] = builds
+        if (place + 1) % 20 == 0:
+            print(f"  builds of {place + 1} heroes, {asker.asked} questions asked")
+
+    # The items and skills the builds name, each once, by the names the game's files know them
+    # by. A build names them by their place in these lists. What STRATZ has no name for is
+    # left out of the builds.
+    items, skills = [], []
+
+    def place_in(names, known, number):
+        name = known.get(number)
+        if name is None:
+            return None
+        if name not in names:
+            names.append(name)
+        return names.index(name)
+
+    def named(entries, names, known):
+        placed = [[place_in(names, known, entry[0])] + entry[1:] for entry in entries]
+        return [entry for entry in placed if entry[0] is not None]
+
+    for builds in of_hero.values():
+        for made in builds:
+            for kind in ("start", "items"):
+                made[kind] = named(made[kind], items, item_names)
+            made["talents"] = named(made["talents"], skills, skill_names)
+
+    # Single matches of each hero in each role it has a build for: the order of its skill
+    # points, and what is bought against whom.
+    samples, orders, sampled = {}, {}, 0
+    for count, (hero, builds) in enumerate(of_hero.items()):
+        for role in sorted({made["role"] for made in builds}):
+            matches = sample_of(asker, hero, role)
+            sampled += len(matches)
+            samples[(hero, role)] = [(enemies, bought) for enemies, _, bought in matches]
+            if len(matches) < LEAST_SAMPLE:
+                continue
+            order = []
+            for skill in usual_order([points for _, points, _ in matches]):
+                place = place_in(skills, skill_names, skill)
+                # A point in something STRATZ has no name for: the order ends before it.
+                if place is None:
+                    break
+                order.append(place)
+            if order:
+                orders.setdefault(hero, []).append([role, len(matches), order])
+        if (count + 1) % 20 == 0:
+            print(f"  single matches of {count + 1} heroes, {sampled:,} in all, {asker.asked} questions asked")
+    # Only what some build has among its items is said to be bought against a hero.
+    in_a_build = set(items)
+    against = {}
+    for enemy, bought in bought_against(samples).items():
+        said = [[items.index(item_names[item]), round(times * 100)] for item, times in bought if item_names.get(item) in in_a_build][:MOST_AGAINST]
+        if said and enemy in heroes:
+            against[numbers["heroes"][heroes.index(enemy)]] = said
+
+    def name_of(hero):
+        return numbers["heroes"][heroes.index(hero)]
+
+    # What pros buy in each role, of the items STRATZ counts: a Town Portal Scroll that
+    # everybody buys is not to be told.
+    pro_matches, pros = pro_builds(patch_began, now)
+    countable = {item_names[item] for item in counted_items if item in item_names}
+    pro_heroes = {}
+    for (hero, role), (players, bought) in sorted(pros.items()):
+        said = [[place_of(items, name), count, minute] for name, count, minute in bought if name in countable]
+        if said and hero in of_hero:
+            pro_heroes.setdefault(name_of(hero), []).append([role, players, said])
+    print(f"  what pros buy: {sum(len(roles) for roles in pro_heroes.values())} roles of {len(pro_heroes)} heroes, from {pro_matches:,} pro matches")
+
+    return {
+        "format": 2,
+        "made": now,
+        "source": "STRATZ",
+        "patch": numbers["patch"],
+        "sampled": sampled,
+        "items": items,
+        "skills": skills,
+        "heroes": {name_of(hero): builds for hero, builds in of_hero.items()},
+        "orders": {name_of(hero): of_it for hero, of_it in orders.items()},
+        "against": against,
+        "pros": {"source": "OpenDota", "matches": pro_matches, "heroes": pro_heroes},
+    }
+
+
+def place_of(names, name):
+    """The place of a name in a list of names, which gets it where it does not have it."""
+    if name not in names:
+        names.append(name)
+    return names.index(name)
+
+
 def make(asker, now):
-    """The numbers of the Draft page."""
+    """The numbers of the Draft page, STRATZ's numbers for the heroes in the order of its list,
+    and when the newest patch began."""
     start = asker.ask("{ constants { heroes { id name displayName } gameVersions { id name asOfDateTime } } heroStats { winWeek(heroIds:[1]) { week } } }")
     names = {hero["id"]: hero["name"] for hero in start["constants"]["heroes"] if hero.get("name")}
     patch = max(start["constants"]["gameVersions"], key=lambda version: version["id"])
@@ -231,7 +672,7 @@ def make(asker, now):
         "pairs": pairs,
         "lanes": lanes,
     }
-    return numbers
+    return numbers, heroes, patch["asOfDateTime"]
 
 
 def lane_sums(row):
@@ -378,13 +819,68 @@ def check():
     assert weeks_to_add_up(weeks, 10 * WEEK - day, now) == weeks[:2], "two at the least, though one is before the patch"
     assert weeks_to_add_up(weeks, 0, 10 * WEEK + day)[0] == 9 * WEEK, "a week that is not over is left out"
 
+    # A build of 1000 matches. Item 1 is bought twice at the start by most, item 2 by few.
+    starting = [
+        {"itemId": 1, "instance": 0, "wasGiven": False, "matchCount": 900, "winCount": 500},
+        {"itemId": 1, "instance": 1, "wasGiven": False, "matchCount": 700, "winCount": 400},
+        {"itemId": 1, "instance": 2, "wasGiven": False, "matchCount": 100, "winCount": 50},
+        {"itemId": 1, "instance": 2, "wasGiven": True, "matchCount": 400, "winCount": 210},
+        {"itemId": 1, "instance": 3, "wasGiven": True, "matchCount": 300, "winCount": 160},
+        {"itemId": 2, "instance": 0, "wasGiven": False, "matchCount": 100, "winCount": 60},
+        {"itemId": 3, "instance": 0, "wasGiven": True, "matchCount": 1000, "winCount": 500},
+    ]
+    boots = [{"itemId": 5, "timeAverage": 610.0, "matchCount": 800, "winCount": 420}, {"itemId": 6, "timeAverage": 2000.0, "matchCount": 20, "winCount": 15}, {"itemId": 11, "timeAverage": -75.0, "matchCount": 100, "winCount": 50}]
+    bought = [
+        {"itemId": 7, "instance": 0, "time": 14, "matchCount": 300, "winCount": 170},
+        {"itemId": 7, "instance": 0, "time": 16, "matchCount": 300, "winCount": 150},
+        {"itemId": 7, "instance": 1, "time": 30, "matchCount": 500, "winCount": 250},
+        {"itemId": 8, "instance": 0, "time": 0, "matchCount": 900, "winCount": 450},
+        {"itemId": 9, "instance": 0, "time": 30, "matchCount": 20, "winCount": 15},
+        {"itemId": 5, "instance": 0, "time": 10, "matchCount": 800, "winCount": 420},
+        {"itemId": 10, "instance": 0, "time": 8, "matchCount": 500, "winCount": 240},
+    ]
+    talents = [{"abilityId": 90, "matchCount": 600, "winCount": 330}, {"abilityId": 91, "matchCount": 350, "winCount": 160}, {"abilityId": 20, "matchCount": 5, "winCount": 5}]
+    made = build(1000, starting, boots, bought, talents, lambda skill: skill >= 90)
+    assert made["start"] == [[1, 3, 900, 500]], "three of the first item, the third bought or 'given' in 500 of the 900 matches it is in, and not a fourth; what few buy, and a first copy that is given, are left out"
+    assert made["items"] == [[11, 0, 100, 50], [10, 8, 500, 240], [5, 10, 800, 420], [7, 15, 600, 320]], "in the order they are bought, boots among them, each with its minute and never one before the match; without starting items, second copies and what few buy"
+    assert made["talents"] == [[90, 600, 330], [91, 350, 160]], "talents alone, the most taken first"
+    assert sorted(made) == ["items", "matches", "start", "talents"]
+
+    # Skill points: most put the first in skill 1, then two in skill 2. Of the few that
+    # begin with skill 2, most go on with skill 3, but that is not what the order says.
+    orders = [[1, 2, 2, 9]] * 12 + [[1, 2, 1]] * 6 + [[2, 3, 3, 3]] * 5 + [[1]] * 2
+    assert usual_order(orders) == [1, 2, 2, 9], "what most do who did the same so far; the last point is one that enough got to"
+    assert usual_order([[1, 2]] * 2 + [[1]] * 10) == [1], "a point that few matches got as far as is not said"
+    # Where few did the same so far, everybody is asked, and a skill that has all its points
+    # is not given another.
+    assert usual_order([[1, 1, 2], [1, 1, 2], [2, 1, 1], [2, 1, 1], [1, 2, 1]]) == [1, 1, 2]
+    assert usual_order([]) == []
+
+    # Items against heroes. Heroes in a role, 400 matches each. Hero 7 is met in a quarter
+    # of them, and item 50 is bought in half of those and in a tenth of the others.
+    def matches_of(often, seldom):
+        with_it, without = (7, 2, 3, 4, 5), (6, 2, 3, 4, 5)
+        return [(with_it, {50} if place < often else {60}) for place in range(100)] + [(without, {50} if place < seldom else {60}) for place in range(300)]
+
+    said = bought_against({(1, 0): matches_of(50, 30), (8, 2): matches_of(50, 30), (9, 4): matches_of(50, 30)[:20]})
+    assert list(said) == [7], "against the hero it is bought against, and no other"
+    assert [item for item, _ in said[7]] == [50] and 2.0 < said[7][0][1] < 2.2, "50 in 100 against 20 in 100 as usual, less the doubt"
+    assert bought_against({(1, 0): matches_of(25, 75)}) == {}, "bought as often as ever: nothing is said"
+    assert bought_against({(1, 0): matches_of(3, 0)[:120]}) == {}, "three purchases are luck"
+
+    def played(carry, mid, soft):
+        return {"played": [[carry], [mid], [0], [soft], [0]]}
+
+    numbers = {"ranks": [played(600, 0, 0), played(300, 80, 20), played(0, 0, 0), played(0, 0, 0)]}
+    assert roles_played(numbers, 0, 0) == [0], "the carry, and not the mid of 8 matches in 100"
+    assert roles_played(numbers, 1, 0) == [], "no matches, no roles"
     print("The sums are right.")
 
 
 def write(folder, name, what):
-    """Writes a file, and says how large it is."""
+    """Writes one of the two files, and says how large it is."""
     text = json.dumps(what, separators=(",", ":")) + "\n"
-    if len(text.encode("utf-8")) > LIMIT:
+    if len(text.encode("utf-8")) > LIMITS[name]:
         sys.exit(f"{name} would have {len(text):,} bytes, more than the app takes: nothing was written")
     path = os.path.join(folder, name)
     with open(path, "w", encoding="utf-8", newline="\n") as file:
@@ -401,8 +897,12 @@ def main():
     os.makedirs(folder, exist_ok=True)
     asker = Asker(token())
     now = int(time.time())
-    numbers = make(asker, now)
+    numbers, heroes, patch_began = make(asker, now)
     print(write(folder, "draft.json", numbers) + f", {len(numbers['heroes'])} heroes, patch {numbers['patch']}, {numbers['weeks']} weeks, {asker.asked} questions asked")
+    few = int(os.environ.get("DME_FEW_HEROES") or 0)
+    builds = make_builds(asker, now, numbers, heroes, few, patch_began)
+    count = sum(len(of_hero) for of_hero in builds["heroes"].values())
+    print(write(folder, "builds.json", builds) + f", {count} builds of {len(builds['heroes'])} heroes, {builds['sampled']:,} single matches, {asker.asked} questions asked in all")
 
 
 if __name__ == "__main__":

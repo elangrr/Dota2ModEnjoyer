@@ -12,11 +12,11 @@ use crate::loadout::{Loadout, same_picks};
 use crate::resource::{self, Wholeness};
 use crate::signatures::{self, Signatures};
 use crate::vpk::{self, Archive, NewFile, PackFile};
-use crate::{effects, fsutil, gameinfo, map_effect, process, trees};
+use crate::{bodies, effects, fsutil, gameinfo, map_effect, process, sounds, trees};
 
 pub const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
-const REWRITE_RULES: u32 = 9;
+const REWRITE_RULES: u32 = 11;
 
 const BRANCH_FILE: &str = "gameinfo_branchspecific.gi";
 const VERIFY_HINT: &str =
@@ -160,9 +160,25 @@ impl Engine {
         }
         let compiled = |model: &str| format!("{}_c", resource::normal(model));
         let moved_data = |path: &str| moved.iter().find(|(known, _)| known == path).map(|(_, data)| data.clone());
-        apply::place_models(&game, &mut patched, &|model| archive.contains(&compiled(model)) || moved_data(&compiled(model)).is_some())?;
+        let exists = |model: &str| archive.contains(&compiled(model)) || moved_data(&compiled(model)).is_some();
+        apply::place_models(&game, &mut patched, &exists)?;
+        let after = ItemsGame::parse(&patched.bytes)?;
+        let body_swaps = bodies::swaps(&game, &after);
+        let bodies_placed = if body_swaps.is_empty() {
+            Vec::new()
+        } else {
+            let read_now;
+            let heroes = match &hero_files {
+                Some(files) => files,
+                None => {
+                    read_now = HeroFiles::read(&archive);
+                    &read_now
+                }
+            };
+            bodies::placements(&body_swaps, &|hero| heroes.model(hero).map(str::to_string), &exists, &patched.placed).0
+        };
         let mut placed_files: Vec<NewFile> = Vec::new();
-        for placed in &patched.placed {
+        for placed in patched.placed.iter().chain(&bodies_placed) {
             let from = compiled(&placed.model);
             let data = match archive.read(&from)? {
                 Some(data) => data,
@@ -170,10 +186,14 @@ impl Engine {
             };
             placed_files.push((compiled(&placed.at), data));
         }
+        let swaps = sounds::swaps(&game, &after);
+        drop(after);
+        let sound_files = if swaps.is_empty() { Vec::new() } else { sounds::Sounds::read(&archive)?.files_for(&swaps)?.files };
         let apply::Patched { bytes, mut changes, .. } = patched;
         let mut own_files: Vec<NewFile> = moved;
-        own_files.retain(|(path, _)| !placed_files.iter().any(|(placed, _)| placed == path));
+        own_files.retain(|(path, _)| !placed_files.iter().chain(&sound_files).any(|(placed, _)| placed == path));
         own_files.extend(placed_files);
+        own_files.extend(sound_files);
         let mut slots_taken: Vec<&str> = Vec::new();
         for (place, pick) in picks.iter().enumerate().filter(|(_, pick)| is_a_file(pick)) {
             if slots_taken.iter().any(|taken| taken.eq_ignore_ascii_case(&pick.slot)) {
@@ -785,6 +805,56 @@ mod tests {
         assert_eq!(game.item("2").unwrap().model, Some("models/heroes/axe/axe_weapon.vmdl"));
         assert_eq!(game.item("4").unwrap().model, Some("models/heroes/axe/axe_ponytail.vmdl"));
         assert_eq!(game.item("8653").unwrap().model, Some("models/items/axe/vanguard_misc/vanguard_misc.vmdl"));
+    }
+
+    #[test]
+    fn the_picked_items_sounds_go_in_the_package_in_the_place_of_the_heros_own() {
+        use crate::kv3::Value;
+        use crate::kv3::tests::{compiled, object, text};
+        let event = |file: &str| object(&[("type", text("dota_src1_3d")), ("vsnd_files", Value::Array(vec![text(file)]))]);
+        let axe_sounds = compiled(&object(&[
+            ("Hero_Axe.Attack", event("sounds/axe/attack.vsnd")),
+            ("Hero_Axe.Attack.Vanguard", event("sounds/axe/vanguard.vsnd")),
+        ]));
+        let path = "soundevents/game_sounds_heroes/game_sounds_axe.vsndevts_c";
+        let mut files: Vec<(&str, &[u8])> = FILES.iter().map(|&path| (path, b"compiled".as_slice())).collect();
+        files.push((path, &axe_sounds));
+        let swap = "\t\t\t\t\"asset_modifier1\"\r\n\t\t\t\t{\r\n\t\t\t\t\t\"type\"\t\t\"sound\"\r\n\t\t\t\t\t\"asset\"\t\t\"Hero_Axe.Attack\"\r\n\t\t\t\t\t\"modifier\"\t\t\"Hero_Axe.Attack.Vanguard\"\r\n\t\t\t\t}\r\n";
+        let marker = "\"modifier\"\t\t\"particles/econ/items/axe/vanguard/weapon.vpcf\"\r\n\t\t\t\t}\r\n";
+        assert_eq!(SAMPLE.matches(marker).count(), 1);
+        let items_game = SAMPLE.replacen(marker, &format!("{marker}{swap}"), 1);
+        let fake = fake_install_of(&items_game, &files);
+        fake.engine.apply(&picks()).unwrap();
+
+        let package = Archive::open(&fake.engine.dota.mod_package()).unwrap();
+        let written = package.read(path).unwrap().expect("Axe's sounds are in the package");
+        let values = crate::kv3::Compiled::parse(&written).unwrap().values().unwrap();
+        assert_eq!(values.get("Hero_Axe.Attack"), Some(&event("sounds/axe/vanguard.vsnd")));
+        assert_eq!(values.get("Hero_Axe.Attack.Vanguard"), Some(&event("sounds/axe/vanguard.vsnd")));
+
+        let fake = fake_install_of(SAMPLE, &files);
+        fake.engine.apply(&picks()).unwrap();
+        assert!(!Archive::open(&fake.engine.dota.mod_package()).unwrap().contains(path));
+    }
+
+    #[test]
+    fn the_body_a_picked_item_gives_the_hero_goes_in_the_package_where_the_heros_own_is() {
+        let hero_file = "\"DOTAHeroes\"\n{\n\"npc_dota_hero_axe\"\n{\n\"Model\" \"models/heroes/axe/axe.vmdl\"\n\"ItemSlots\"\n{\n\"0\"\n{\n\"SlotName\" \"weapon\"\n}\n}\n}\n}\n";
+        let mut files: Vec<(&str, &[u8])> = FILES.iter().map(|&path| (path, b"compiled".as_slice())).collect();
+        files.push(("scripts/npc/heroes/npc_dota_hero_axe.txt", hero_file.as_bytes()));
+        files.push(("models/items/axe/bare/axe_bare.vmdl_c", b"the bare body"));
+        let swap = "\t\t\t\t\"asset_modifier1\"\r\n\t\t\t\t{\r\n\t\t\t\t\t\"type\"\t\t\"entity_model\"\r\n\t\t\t\t\t\"asset\"\t\t\"npc_dota_hero_axe\"\r\n\t\t\t\t\t\"modifier\"\t\t\"models/items/axe/bare/axe_bare.vmdl\"\r\n\t\t\t\t}\r\n";
+        let marker = "\"modifier\"\t\t\"particles/econ/items/axe/vanguard/weapon.vpcf\"\r\n\t\t\t\t}\r\n";
+        let items_game = SAMPLE.replacen(marker, &format!("{marker}{swap}"), 1);
+        let fake = fake_install_of(&items_game, &files);
+        fake.engine.apply(&picks()).unwrap();
+
+        let package = Archive::open(&fake.engine.dota.mod_package()).unwrap();
+        assert_eq!(package.read("models/heroes/axe/axe.vmdl_c").unwrap().unwrap(), b"the bare body");
+
+        let fake = fake_install_of(SAMPLE, &files);
+        fake.engine.apply(&picks()).unwrap();
+        assert!(!Archive::open(&fake.engine.dota.mod_package()).unwrap().contains("models/heroes/axe/axe.vmdl_c"));
     }
 
     #[test]

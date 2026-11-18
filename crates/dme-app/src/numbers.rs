@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, SystemTime};
 
+use dme_core::builds::{self, Builds};
 use dme_core::draft::{self, Numbers};
 use dme_core::{fsutil, update};
 use eframe::egui;
@@ -49,9 +50,20 @@ fn source_of(options: &Options, trial: Option<&str>) -> (Option<String>, bool) {
     (source, testing)
 }
 
+fn beside(address: &str, name: &str) -> String {
+    let folder = address.rfind(['/', '\\']).map_or("", |end| &address[..=end]);
+    format!("{folder}{name}")
+}
+
 pub fn draft_numbers(options: &Options, data_dir: &Path) -> Fetcher<Numbers> {
     let (source, testing) = numbers_source(options);
     Fetcher::new(Kind { what: "numbers for the draft", limit: draft::NUMBERS_LIMIT, parse: Numbers::parse }, source, testing, data_dir.join(FILE))
+}
+
+pub fn hero_builds(options: &Options, data_dir: &Path) -> Fetcher<Builds> {
+    let (source, testing) = numbers_source(options);
+    let source = source.map(|numbers| beside(&numbers, builds::BUILDS_FILE));
+    Fetcher::new(Kind { what: "builds", limit: builds::BUILDS_LIMIT, parse: Builds::parse }, source, testing, data_dir.join(builds::BUILDS_FILE))
 }
 
 impl<T: Send + 'static> Fetcher<T> {
@@ -222,8 +234,11 @@ mod tests {
         let mut fetcher = draft_numbers(&quiet, dir.path());
         fetcher.wanted(&ctx);
         assert!(!fetcher.is_fetching() && fetcher.get().is_none() && fetcher.failure().is_none());
+        assert!(hero_builds(&quiet, dir.path()).source.is_none());
         assert_eq!(source_of(&Options::default(), None), (Some(draft::NUMBERS_URL.to_string()), false));
         assert!(update::may_fetch(draft::NUMBERS_URL, false));
+        assert_eq!(beside(draft::NUMBERS_URL, builds::BUILDS_FILE), "https://raw.githubusercontent.com/elangrr/Dota2ModEnjoyer/data/builds.json");
+        assert_eq!(hero_builds(&Options::default(), dir.path()).kept, dir.path().join("builds.json"));
     }
 
     #[test]
@@ -240,6 +255,29 @@ mod tests {
     #[test]
     fn a_version_with_these_pages_takes_no_update_of_one_without_them() {
         assert!(!update::is_newer("0.2.99", env!("CARGO_PKG_VERSION")), "this is version {}", env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn the_builds_are_fetched_from_beside_the_numbers() {
+        assert_eq!(beside("https://example.org/data/draft.json", "builds.json"), "https://example.org/data/builds.json");
+        assert_eq!(beside(r"C:\numbers\draft.json", "builds.json"), r"C:\numbers\builds.json");
+        assert_eq!(beside("draft.json", "builds.json"), "builds.json");
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("draft.json");
+        std::fs::write(dir.path().join("builds.json"), r#"{"format":2,"made":9,"patch":"7.41f","items":[],"skills":[],"heroes":{}}"#).unwrap();
+        let data = dir.path().join("data");
+        let mut fetcher = hero_builds(&options(&source), &data);
+        fetcher.wanted(&egui::Context::default());
+        wait(&mut fetcher);
+        assert_eq!(fetcher.get().map(|builds| builds.made), Some(9));
+        assert!(data.join("builds.json").is_file(), "kept under their own name");
+
+        std::fs::remove_file(dir.path().join("builds.json")).unwrap();
+        let mut fetcher = hero_builds(&options(&source), &dir.path().join("other"));
+        fetcher.wanted(&egui::Context::default());
+        wait(&mut fetcher);
+        assert!(fetcher.failure().unwrap().sentence.starts_with("The builds could not be fetched."));
     }
 
     #[test]

@@ -162,6 +162,13 @@ impl<'a> Item<'a> {
         self.styles().into_iter().filter(|style| (style.index == 0 || named.contains(&style.index)) && has_effects(style)).collect()
     }
 
+    pub fn visuals_of_type(&self, kind: &str, every_style: bool) -> Vec<Block<'a>> {
+        let visuals = self.block.block("visuals");
+        let of_kind = |block: &Block<'a>| block.str("type").is_some_and(|written| written.eq_ignore_ascii_case(kind.as_bytes()));
+        let shown = |block: &Block<'a>| every_style || block.str("style").and_then(number_of).is_none_or(|style| style == 0);
+        visuals.into_iter().flat_map(|visuals| visuals.pairs()).filter_map(|pair| pair.value.as_block()).filter(of_kind).filter(shown).collect()
+    }
+
     pub fn first_effects_style(&self, number: u32) -> u32 {
         self.effects_styles(number).first().map_or(0, |style| style.index)
     }

@@ -16,6 +16,9 @@ use dme_core::items::{self, Item, ItemsGame};
 use dme_core::signatures::{self, Signatures};
 use dme_core::update::{self, Manifest};
 use dme_core::vpk::Archive;
+use dme_core::kv3::{self, Compiled};
+use dme_core::bodies;
+use dme_core::sounds::{self, Sounds};
 use dme_core::{engine, fsutil, map_effect, pictures, trees};
 
 const ITEMS_GAME: &str = "scripts/items/items_game.txt";
@@ -77,12 +80,26 @@ pub enum DevCommand {
     Catalog,
     /// Show how the game describes ability effects that are worn apart from their item.
     Effects,
+    /// Read every file of sound events in the game's archive and write it again, to check that
+    /// it comes out the same; then say what becomes of the sounds that items change.
+    Sounds,
+    /// Say where Play puts the bodies that items give heroes, and the models of their forms.
+    Bodies,
     /// Write one of the game's pictures as a PNG file.
     Picture {
         /// A path in the archive, or a picture's name such as econ/terrain/desert_terrain.
         image: String,
         /// Where to write the PNG.
         out: PathBuf,
+    },
+    /// Read a file of builds as the Builds page does, and say what the game on this computer
+    /// has no name, no picture or no talent for.
+    Builds {
+        /// The file, as publish/make_numbers.py writes it.
+        file: PathBuf,
+        /// Show the talents and the builds of one hero, such as axe.
+        #[arg(long)]
+        hero: Option<String>,
     },
     /// Look a text up in one of the game's name files.
     Name {
@@ -208,11 +225,124 @@ pub fn run(dota: &DotaInstall, command: DevCommand) -> Result<()> {
         DevCommand::Styles => styles(dota),
         DevCommand::Catalog => catalog(dota),
         DevCommand::Effects => effects::effects(dota),
+        DevCommand::Sounds => sounds(dota),
+        DevCommand::Bodies => bodies(dota),
         DevCommand::Picture { image, out } => picture(dota, &image, &out),
         DevCommand::Find { text, limit, from } => find(&from.unwrap_or_else(|| dota.game_archive()), &text, limit),
         DevCommand::Name { token, file } => name(dota, &token, &file),
+        DevCommand::Builds { file, hero } => builds(dota, &file, hero.as_deref()),
         command @ (DevCommand::UpdateKey { .. } | DevCommand::Release { .. }) => run_without_game(command),
     }
+}
+
+fn sounds(dota: &DotaInstall) -> Result<()> {
+    let archive = Archive::open(&dota.game_archive())?;
+    let mut paths: Vec<String> = archive
+        .entries()
+        .iter()
+        .map(|entry| archive.path_of(entry))
+        .filter(|path| path.starts_with("soundevents/") && path.ends_with(".vsndevts_c"))
+        .collect();
+    paths.sort();
+    let (mut same, mut differ, mut unread) = (0, Vec::new(), Vec::new());
+    for path in &paths {
+        let bytes = archive.read(path)?.with_context(|| format!("{path} is not in the game's archive"))?;
+        let again = Compiled::parse(&bytes).and_then(|compiled| {
+            let written = compiled.with_values(&compiled.values()?)?;
+            let before = kv3::unpacked(compiled.data())?;
+            let after = kv3::unpacked(Compiled::parse(&written)?.data())?;
+            Ok((before, after))
+        });
+        match again {
+            Ok((before, after)) => {
+                let unpacked_numbers = |numbers: &[u32; 25]| numbers.iter().enumerate().filter(|(field, _)| ![8, 14, 16].contains(field)).map(|(_, number)| *number).collect::<Vec<_>>();
+                if unpacked_numbers(&before.0) == unpacked_numbers(&after.0) && before.1 == after.1 && before.2 == after.2 {
+                    same += 1;
+                } else {
+                    differ.push(path.clone());
+                }
+            }
+            Err(error) => unread.push(format!("{path}: {error}")),
+        }
+    }
+    println!("{} files of sound events: {same} written again exactly as they were, {} not, {} not read", paths.len(), differ.len(), unread.len());
+    for path in differ.iter().take(20) {
+        println!("  DIFFERS {path}");
+    }
+    for line in unread.iter().take(20) {
+        println!("  not read: {line}");
+    }
+
+    let started = Instant::now();
+    let heroes_sounds = Sounds::read(&archive)?;
+    println!("\nThe heroes' files: {} events, read in {:.1} s", heroes_sounds.len(), started.elapsed().as_secs_f32());
+    let bytes = archive.read(ITEMS_GAME)?.context("the item database is not in the game's archive")?;
+    let game = ItemsGame::parse(&bytes)?;
+    let (mut items, mut done, mut failed) = (0, 0, 0);
+    let mut left: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for item in game.items().iter().filter(|item| !item.heroes.is_empty() && !item.is_default()) {
+        let swaps = sounds::all_swaps(item);
+        if swaps.is_empty() {
+            continue;
+        }
+        items += 1;
+        match heroes_sounds.files_for(&swaps) {
+            Ok(made) => {
+                done += made.done.len();
+                for (swap, why) in made.left {
+                    left.entry(why).or_default().push(format!("{} ({}): {} to {}", item.name.unwrap_or(item.id), item.id, swap.from, swap.to));
+                }
+            }
+            Err(error) => {
+                failed += 1;
+                println!("  FAILED {} ({}): {error}", item.name.unwrap_or(item.id), item.id);
+            }
+        }
+    }
+    println!("{items} items of heroes change sounds: {done} of their sounds are made, {} left out, {failed} items FAILED", left.values().map(Vec::len).sum::<usize>());
+    for (why, lines) in &left {
+        println!("  {} left out because {why}:", lines.len());
+        for line in lines.iter().take(12) {
+            println!("    {line}");
+        }
+    }
+    if !differ.is_empty() || failed > 0 {
+        bail!("{} files of sound events are not written back as they were, and {failed} items FAILED", differ.len());
+    }
+    Ok(())
+}
+
+fn bodies(dota: &DotaInstall) -> Result<()> {
+    let archive = Archive::open(&dota.game_archive())?;
+    let bytes = archive.read(ITEMS_GAME)?.context("the item database is not in the game's archive")?;
+    let game = ItemsGame::parse(&bytes)?;
+    let heroes = HeroFiles::read(&archive);
+    let hero_model = |hero: &str| heroes.model(hero).map(str::to_string);
+    let exists = |model: &str| archive.contains(&format!("{}_c", dme_core::resource::normal(model)));
+    let (mut items, mut done) = (0, 0);
+    let mut left: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for item in game.items().iter().filter(|item| !item.heroes.is_empty() && !item.is_default()) {
+        let swaps = bodies::all_swaps(item);
+        if swaps.is_empty() {
+            continue;
+        }
+        items += 1;
+        for swap in swaps {
+            let (placed, not) = bodies::placements(std::slice::from_ref(&swap), &hero_model, &exists, &[]);
+            done += placed.len();
+            for (swap, why) in not {
+                left.entry(why).or_default().push(format!("{} ({}): {} to {}", item.name.unwrap_or(item.id), item.id, swap.from, swap.model));
+            }
+        }
+    }
+    println!("{items} items of heroes swap a body: {done} of their swaps are put in place, {} left out", left.values().map(Vec::len).sum::<usize>());
+    for (why, lines) in &left {
+        println!("  {} left out because {why}:", lines.len());
+        for line in lines.iter().take(12) {
+            println!("    {line}");
+        }
+    }
+    Ok(())
 }
 
 fn picture(dota: &DotaInstall, image: &str, out: &Path) -> Result<()> {
@@ -459,6 +589,112 @@ fn find(vpk: &Path, text: &str, limit: usize) -> Result<()> {
     Ok(())
 }
 
+fn builds(dota: &DotaInstall, file: &Path, hero: Option<&str>) -> Result<()> {
+    use std::collections::BTreeSet;
+
+    use dme_core::builds::{Build, Builds, GameTexts, POINT_LEVELS, item_picture, skill_picture, win_rate};
+    use dme_core::draft::Rank;
+
+    let bytes = std::fs::read(file).with_context(|| format!("{} could not be read", file.display()))?;
+    let builds = Builds::parse(&bytes)?;
+    let archive = Archive::open(&dota.game_archive())?;
+    let texts = GameTexts::read(&archive);
+    let has = |path: &str| archive.read(path).ok().flatten().is_some();
+
+    let (mut items, mut skills, mut strangers) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    let mut count = 0;
+    for (id, of_hero) in builds.all() {
+        count += of_hero.len();
+        let own: Vec<&str> = texts.talents(id).iter().map(|talent| talent.id.as_str()).collect();
+        for build in of_hero {
+            items.extend(build.start.iter().chain(&build.items).map(|bought| bought.item.as_str()));
+            strangers.extend(build.talents.iter().filter(|taken| build.share(taken.matches) >= 5.0 && !own.iter().any(|talent| talent.eq_ignore_ascii_case(&taken.talent))).map(|taken| format!("{id}: {}", taken.talent)));
+        }
+    }
+    let is_talent = |skill: &str| skill.to_ascii_lowercase().starts_with("special_bonus");
+    skills.extend(builds.all_orders().flat_map(|(_, order)| order.skills.iter().map(String::as_str)).filter(|skill| !is_talent(skill)));
+    items.extend(builds.all_against().map(|(_, item, _)| item));
+    items.extend(builds.all_pro_builds().flat_map(|(_, pro)| pro.items.iter().map(|item| item.item.as_str())));
+    let heroes: Vec<&str> = builds.all().map(|(id, _)| id).collect();
+    println!("{count} builds of {} heroes, patch {}, naming {} items and {} skills", heroes.len(), builds.patch, items.len(), skills.len());
+    let (orders, against) = (builds.all_orders().count(), builds.all_against().count());
+    println!("{orders} orders of skills and {against} items bought more often against a hero, from {} single matches", builds.sampled);
+    let (mut with_pros, mut bottles, mut pro_items) = (BTreeSet::new(), BTreeSet::new(), 0);
+    for (id, of_hero) in builds.all() {
+        for build in of_hero {
+            for pro in builds.pro_core(id, build, &texts) {
+                with_pros.insert(format!("{id} {}", build.role.name()));
+                pro_items += 1;
+                if pro.item == "item_bottle" {
+                    bottles.insert(format!("{id} {}", build.role.name()));
+                }
+            }
+        }
+    }
+    println!(
+        "what pros buy: {} roles of heroes, from {} pro matches of {}; it adds {pro_items} items to the core of {} builds' roles; a Bottle to: {}",
+        builds.all_pro_builds().count(),
+        builds.pro_matches,
+        builds.pro_source,
+        with_pros.len(),
+        bottles.into_iter().collect::<Vec<_>>().join(", ")
+    );
+    let (all, known) = (&builds, &texts);
+    let no_order: BTreeSet<String> = all.all().flat_map(|(id, of_hero)| of_hero.iter().filter(move |build| all.order(id, build.role).is_none()).map(move |build| format!("{id} {}", build.role.name()))).collect();
+    let odd_points: BTreeSet<String> = builds
+        .all_orders()
+        .flat_map(|(id, order)| order.skills.iter().filter(move |skill| is_talent(skill) && !known.talents(id).iter().any(|talent| talent.id.eq_ignore_ascii_case(skill))).map(move |skill| format!("{id}: {skill}")))
+        .collect();
+    let list = |what: &str, missing: Vec<String>| {
+        println!("{what}: {}{}", missing.len(), if missing.is_empty() { String::new() } else { format!(" ({})", missing.join(", ")) });
+    };
+    list("items the game has no name for", items.iter().filter(|item| !texts.names(item)).map(|item| item.to_string()).collect());
+    list("items the game has no picture for", items.iter().filter(|item| !has(&item_picture(item))).map(|item| item.to_string()).collect());
+    list("skills the game has no name for", skills.iter().filter(|skill| !texts.names(skill)).map(|skill| skill.to_string()).collect());
+    list("skills the game has no picture for", skills.iter().filter(|skill| !has(&skill_picture(skill))).map(|skill| skill.to_string()).collect());
+    list("heroes the game lists fewer than eight talents for", heroes.iter().filter(|id| texts.talents(id).len() != 8).map(|id| id.to_string()).collect());
+    let unsaid: Vec<String> = heroes.iter().flat_map(|id| texts.talents(id).iter().filter(|talent| talent.text.contains('?')).map(move |talent| format!("{id}: {} = {:?}", talent.id, talent.text))).collect();
+    list("talents with an amount the game's files do not give", unsaid);
+    list("talents that are taken and are not among the hero's eight", strangers.into_iter().collect());
+    list("roles with a build and no order of skills", no_order.into_iter().collect());
+    list("points of an order in a talent that is not among the hero's eight", odd_points.into_iter().collect());
+
+    let Some(hero) = hero else { return Ok(()) };
+    let id = items::hero_id(hero);
+    println!();
+    for (place, talent) in texts.talents(&id).iter().enumerate() {
+        println!("level {} {}: {} ({})", 10 + 5 * (place / 2), if place % 2 == 0 { "right" } else { "left " }, talent.text, talent.id);
+    }
+    for rank in [Rank::Herald, Rank::Crusader, Rank::Legend, Rank::Divine] {
+        for role in builds.roles(&id, rank) {
+            let Some(build) = builds.of(&id, rank, role) else { continue };
+            println!("\n{} and the rank above it, {}: {} matches", rank.name(), role.name(), build.matches);
+            let bought = |items: &[&dme_core::builds::Bought]| -> String {
+                let said = |item: &&dme_core::builds::Bought| format!("{}{} {:.0}% (wins {:.0}%, minute {})", texts.item_name(&item.item), if item.copies > 1 { format!(" x{}", item.copies) } else { String::new() }, build.share(item.matches), win_rate(item.matches, item.wins).unwrap_or_default(), item.minute);
+                items.iter().map(said).collect::<Vec<_>>().join("; ")
+            };
+            let start = build.starting(&texts);
+            println!("  start ({} gold): {}", Build::starting_cost(&start, &texts), bought(&start.iter().collect::<Vec<_>>()));
+            println!("  start, everything enough players start with: {}", bought(&build.start.iter().collect::<Vec<_>>()));
+            println!("  core: {}", bought(&build.core(&texts)));
+            let pros: Vec<String> = builds.pro_core(&id, build, &texts).iter().map(|pro| format!("{} {:.0}% (minute {})", texts.item_name(&pro.item), pro.share, pro.minute)).collect();
+            if !pros.is_empty() {
+                println!("  core, by most pros in the role: {}", pros.join("; "));
+            }
+            println!("  others: {}", bought(&builds.others(&id, build, &texts, &[]).iter().map(|other| other.item).collect::<Vec<_>>()));
+        }
+    }
+    for role in dme_core::draft::Role::ALL {
+        let Some(order) = builds.order(&id, role) else { continue };
+        let points: Vec<String> = order.skills.iter().zip(POINT_LEVELS).map(|(skill, level)| format!("{level} {}", texts.skill_name(skill))).collect();
+        println!("\nskill points, {}, from {} matches: {}", role.name(), order.matches, points.join("; "));
+    }
+    let mut against: Vec<(&str, f32)> = builds.all_against().filter(|(enemy, _, _)| enemy.eq_ignore_ascii_case(&id)).map(|(_, item, times)| (item, times)).collect();
+    against.sort_by(|a, b| b.1.total_cmp(&a.1));
+    println!("\nbought more often against it: {}", against.iter().map(|(item, times)| format!("{} x{times:.2}", texts.item_name(item))).collect::<Vec<_>>().join("; "));
+    Ok(())
+}
+
 fn name(dota: &DotaInstall, token: &str, file: &str) -> Result<()> {
     let bytes = Archive::open(&dota.game_archive())?
         .read(file)?
@@ -539,6 +775,9 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     let bytes = archive.read(ITEMS_GAME)?.with_context(|| format!("{ITEMS_GAME} is not in the game's archive"))?;
     let game = ItemsGame::parse(&bytes)?;
     let heroes = game.heroes();
+    let heroes_sounds = Sounds::read(&archive)?;
+    let hero_files = HeroFiles::read(&archive);
+    let made = Made { sounds: &heroes_sounds, heroes: &hero_files };
     let mut failed = 0;
 
     let in_every_style = |pick: Pick, item: &Item<'_>| -> Vec<Vec<Pick>> {
@@ -571,7 +810,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     let styled = slots.iter().flatten().flatten().filter(|pick| pick.style > 0).count();
     println!("SINGLE ITEMS: {hero_slots} hero slots and {world_slots} world slots");
     println!("{picks} picks, {styled} of them for a style other than the first");
-    failed += run_rounds(&game, &bytes, &in_rounds(&slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &in_rounds(&slots)).report(dota, &archive);
 
     let mut personas: Vec<Vec<Vec<Pick>>> = Vec::new();
     for hero in &heroes {
@@ -587,7 +826,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
         personas.push(candidates);
     }
     println!("\nPERSONAS ON THE HERO'S OWN ITEMS: {} heroes, {} picks", personas.len(), personas.iter().flatten().count());
-    failed += run_rounds(&game, &bytes, &in_rounds(&personas)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &in_rounds(&personas)).report(dota, &archive);
 
     let mut reasons = Counter::default();
     let (mut sets, mut styled_sets, mut empty_sets) = (0, 0, 0);
@@ -613,7 +852,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     }
     println!("\nSETS: {sets} sets of {} heroes", heroes.len());
     println!("{styled_sets} have pieces with styles; {empty_sets} have no piece that can be shown");
-    failed += run_rounds(&game, &bytes, &in_rounds(&per_hero)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &in_rounds(&per_hero)).report(dota, &archive);
     reasons.print("set pieces left out, by reason");
 
     let mut effect_slots: Vec<Vec<Vec<Pick>>> = Vec::new();
@@ -650,7 +889,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     for line in in_no_style.iter().take(8) {
         println!("  {line}");
     }
-    failed += run_rounds(&game, &bytes, &in_rounds(&effect_slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &in_rounds(&effect_slots)).report(dota, &archive);
 
     let mut pairs: Vec<Vec<Vec<Pick>>> = Vec::new();
     for (hero, of_hero) in heroes.iter().zip(&carriers) {
@@ -665,7 +904,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
         pairs.push(of_this_hero);
     }
     println!("\nABILITY EFFECTS WITH AN ITEM WORN WHERE THEY RIDE: {} pairs", pairs.iter().flatten().count());
-    failed += run_rounds(&game, &bytes, &in_rounds(&pairs)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &in_rounds(&pairs)).report(dota, &archive);
 
     let catalog = Catalog::load(&archive)?;
     let mut gem_slots: BTreeMap<&str, Vec<Vec<Pick>>> = BTreeMap::new();
@@ -689,7 +928,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     }
     let gem_slots: Vec<Vec<Vec<Pick>>> = gem_slots.into_values().collect();
     println!("\nEFFECTS PUT ON ITEMS: {} slots, {} picks", gem_slots.len(), gem_slots.iter().flatten().count());
-    failed += run_rounds(&game, &bytes, &in_rounds(&gem_slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &in_rounds(&gem_slots)).report(dota, &archive);
 
     let mut event_slots: Vec<Vec<Vec<Pick>>> = Vec::new();
     for slot in catalog.world.iter().filter(|slot| slot.is_for_an_event()) {
@@ -701,7 +940,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
         event_slots.push(candidates);
     }
     println!("\nEFFECTS OF EVENTS: {} kinds, {} picks", event_slots.len(), event_slots.iter().flatten().count());
-    failed += run_rounds(&game, &bytes, &in_rounds(&event_slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &in_rounds(&event_slots)).report(dota, &archive);
 
     let ability_rounds = in_rounds(&effect_slots);
     let longest = event_slots.iter().map(Vec::len).max().unwrap_or(0);
@@ -712,7 +951,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
         })
         .collect();
     println!("\nABILITY EFFECTS WITH THE EFFECTS OF EVENTS: {} rounds", together.len());
-    failed += run_rounds(&game, &bytes, &together).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &together).report(dota, &archive);
 
     let mut socket_slots: BTreeMap<&str, Vec<Vec<Pick>>> = BTreeMap::new();
     let (mut most, mut held) = (0, 0);
@@ -729,7 +968,7 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     let socket_slots: Vec<Vec<Vec<Pick>>> = socket_slots.into_values().collect();
     println!("\nITEMS THAT COME WITH A GEM: {} picks", socket_slots.iter().flatten().count());
     println!("{held} gems in those items, at most {most} in one");
-    failed += run_rounds(&game, &bytes, &in_rounds(&socket_slots)).report(dota, &archive);
+    failed += run_rounds(&game, &bytes, &made, &in_rounds(&socket_slots)).report(dota, &archive);
 
     let hero_files = HeroFiles::read(&archive);
     let live = |hero: &str, slot: &str| hero_files.has_slot(hero, slot);
@@ -794,9 +1033,16 @@ struct Outcome {
     changes: Vec<Change>,
     failures: Vec<String>,
     placed: usize,
+    sounds: usize,
+    bodies: usize,
 }
 
-fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>>]) -> Outcome {
+struct Made<'m> {
+    sounds: &'m Sounds,
+    heroes: &'m HeroFiles,
+}
+
+fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], made: &Made<'_>, rounds: &[Vec<Vec<Pick>>]) -> Outcome {
     let started = Instant::now();
     let next = AtomicUsize::new(0);
     let outcome = Mutex::new(Outcome::default());
@@ -805,22 +1051,31 @@ fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>
         for _ in 0..workers {
             scope.spawn(|| {
                 while let Some(round) = rounds.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    let (mut changes, mut failures, mut placed) = (Vec::new(), Vec::new(), 0);
+                    let (mut changes, mut failures, mut placed, mut sounds_made, mut bodies_placed) = (Vec::new(), Vec::new(), 0, 0, 0);
                     let patch = |picks: &[Pick]| {
                         let mut patched = apply::patch(game, bytes, picks)?;
                         apply::place_models(game, &mut patched, &|_| true)?;
-                        Ok::<_, dme_core::Error>(patched)
+                        let after = ItemsGame::parse(&patched.bytes)?;
+                        let sounds = made.sounds.files_for(&sounds::swaps(game, &after))?.done.len();
+                        let hero_model = |hero: &str| made.heroes.model(hero).map(str::to_string);
+                        let bodies = bodies::placements(&bodies::swaps(game, &after), &hero_model, &|_| true, &patched.placed).0.len();
+                        drop(after);
+                        Ok::<_, dme_core::Error>((patched, sounds, bodies))
                     };
                     match patch(&round.concat()) {
-                        Ok(patched) => {
+                        Ok((patched, sounds, bodies)) => {
                             placed = patched.placed.len();
+                            sounds_made = sounds;
+                            bodies_placed = bodies;
                             changes = patched.changes;
                         }
                         Err(together) => {
                             for candidate in round {
                                 match patch(candidate) {
-                                    Ok(patched) => {
+                                    Ok((patched, sounds, bodies)) => {
                                         placed += patched.placed.len();
+                                        sounds_made += sounds;
+                                        bodies_placed += bodies;
                                         changes.extend(patched.changes);
                                     }
                                     Err(error) => {
@@ -838,6 +1093,8 @@ fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>
                     outcome.changes.extend(changes);
                     outcome.failures.extend(failures);
                     outcome.placed += placed;
+                    outcome.sounds += sounds_made;
+                    outcome.bodies += bodies_placed;
                 }
             });
         }
@@ -852,11 +1109,13 @@ fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], rounds: &[Vec<Vec<Pick>
 impl Outcome {
     fn report(&self, dota: &DotaInstall, archive: &Archive) -> usize {
         println!(
-            "{} rounds in {:.1} s: {} default items rewritten, {} models put where the default's own is, {} picks FAILED",
+            "{} rounds in {:.1} s: {} default items rewritten, {} models put where the default's own is, {} bodies where the hero's own is, {} heroes' sounds made like the picked items', {} picks FAILED",
             self.rounds,
             self.seconds,
             self.changes.len(),
             self.placed,
+            self.bodies,
+            self.sounds,
             self.failures.len()
         );
         for line in self.failures.iter().take(25) {

@@ -2,6 +2,19 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.4.0
+
+- A new Builds page shows on one screen what players of a hero buy and skill in your rank and role: the core items in the order they are bought, other items for the match, and a skill point for every level.
+- Items that are bought more often against the enemy heroes of your draft move up, turn green and show which hero they answer.
+- With both teams full, "Go to build" on the Draft page opens the build of your own hero.
+- The starting items are what the hero's players start with most, and never more than the 600 gold a hero starts with.
+- Every hero has a build, Kez and Largo too, and every role can be chosen. Where too few play a hero in a role, the page shows the build of the role the hero is played in most, and says so.
+- Healing Lotuses are not listed as items to buy: they come from the pools on the map.
+- The builds come from millions of public matches, added up by STRATZ, and what pros buy from OpenDota. The app downloads them from GitHub when you open the page, and they are made new every week.
+- Picked items now sound like themselves in online matches too. Axe with Fists of Axe Unleashed attacks with their sound instead of his own axe's, and the same goes for the attack and spell sounds of over 200 other items.
+- Arcanas and other items that change a hero's whole body now show it in online matches too, such as Shadow Fiend's Demon Eater, Phantom Assassin's Manifold Paradox and Tiny's sets. So do the forms heroes change into, such as Lycan's wolf, Terrorblade's demon and Dragon Knight's dragon.
+- Press Play once after updating, so that the sounds and bodies are put in the game.
+
 ## 0.3.2
 
 - Heroes should no longer lose pieces in online matches, such as a hero without hair, Dragon Knight without his sword or Venomancer without anything on. A picked piece now loads the way the hero's own piece does.

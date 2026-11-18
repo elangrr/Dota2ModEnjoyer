@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use dme_core::apply::{self, Pick};
+use dme_core::builds::{Builds, GameTexts};
 use dme_core::catalog::{Catalog, Hero};
 use dme_core::dota::DotaInstall;
-use dme_core::draft::{Numbers, Style};
+use dme_core::draft::{Numbers, Role, Style};
 use dme_core::engine::{self, Engine, ModState, Ready};
 use dme_core::items;
 use dme_core::loadout::Loadout;
@@ -53,6 +55,7 @@ enum Tab {
     World,
     Picks,
     Draft,
+    Builds,
 }
 
 struct Banner {
@@ -123,6 +126,11 @@ pub struct App {
     draft: views::draft::Draft,
     numbers: Fetcher<Numbers>,
     lanes_asked: bool,
+    build: views::builds::Chosen,
+    builds: Fetcher<Builds>,
+    texts: Option<Arc<GameTexts>>,
+    texts_coming: Option<Receiver<GameTexts>>,
+    archive: Option<Arc<dme_core::vpk::Archive>>,
     rarities_asked: BTreeSet<usize>,
     help_open: bool,
     settings_open: bool,
@@ -160,6 +168,7 @@ impl App {
         update::clean_up();
         let updater = Updater::start(&options, ctx);
         let numbers = numbers::draft_numbers(&options, &data_dir);
+        let builds = numbers::hero_builds(&options, &data_dir);
         let before = version_before(options.updated_from.as_deref(), &settings, options.screenshot.is_some());
         let whats_new = before.map(|before| changelog::since(&before, VERSION)).filter(|news| !news.is_empty());
         let updated = options.updated_from.as_deref().is_some_and(|before| before != VERSION);
@@ -209,6 +218,11 @@ impl App {
             draft: views::draft::Draft::default(),
             numbers,
             lanes_asked: false,
+            build: views::builds::Chosen::default(),
+            builds,
+            texts: None,
+            texts_coming: None,
+            archive: None,
             rarities_asked: BTreeSet::new(),
             help_open: false,
             settings_open: false,
@@ -252,6 +266,8 @@ impl App {
         while let Some(reply) = self.worker.as_ref().and_then(Worker::poll) {
             match reply {
                 Reply::Loaded(Ok(loaded)) => {
+                    self.archive = Some(Arc::clone(&loaded.archive));
+                    (self.texts, self.texts_coming) = (None, None);
                     self.pictures.use_archive(loaded.archive);
                     self.take_catalog(loaded.catalog);
                 }
@@ -331,6 +347,22 @@ impl App {
             }
         }
         self.numbers.poll();
+        self.builds.poll();
+        if let Some(texts) = self.texts_coming.as_ref().and_then(|coming| coming.try_recv().ok()) {
+            self.texts = Some(Arc::new(texts));
+            self.texts_coming = None;
+        }
+    }
+
+    fn read_texts(&mut self, ctx: &egui::Context) {
+        let Some(archive) = self.archive.clone().filter(|_| self.texts.is_none() && self.texts_coming.is_none()) else { return };
+        let (outbox, inbox) = mpsc::channel();
+        self.texts_coming = Some(inbox);
+        let ctx = ctx.clone();
+        update::spawn("game texts", move || {
+            let _ = outbox.send(GameTexts::read(&archive));
+            ctx.request_repaint();
+        });
     }
 
     fn update(&mut self, ctx: &egui::Context) {
@@ -414,6 +446,14 @@ impl App {
             }
             Some("picks") => self.tab = Tab::Picks,
             Some("draft") => self.tab = Tab::Draft,
+            Some("builds") => {
+                self.tab = Tab::Builds;
+                let hero = parts.next().map(items::hero_id).filter(|id| catalog.any_hero(id).is_some());
+                let role = parts.next().and_then(|wanted| Role::ALL.into_iter().find(|role| role.name().to_lowercase().starts_with(&wanted.to_lowercase())));
+                if let Some(hero) = hero {
+                    self.build.set(&hero, role);
+                }
+            }
             Some("help") => self.help_open = true,
             Some("settings") => self.settings_open = true,
             Some("support") => self.support_open = true,
@@ -613,6 +653,7 @@ impl App {
         let search = match self.tab {
             Tab::Heroes if self.hero.is_none() => &mut self.hero_search,
             Tab::Draft => &mut self.draft.search,
+            Tab::Builds => &mut self.build.search,
             _ => &mut self.item_search,
         };
         if escaped {
@@ -628,7 +669,7 @@ impl App {
         let loaded = self.engine.is_none() || self.catalog.is_some() || self.load_failure.is_some();
         let asking = self.updater.as_ref().is_some_and(|updater| updater.is_working() && !updater.is_fetching());
         let updating = asking || self.start_again;
-        let settled = loaded && self.busy.is_none() && self.pictures.loading() == 0 && !updating && !self.numbers.is_fetching();
+        let settled = loaded && self.busy.is_none() && self.pictures.loading() == 0 && !updating && !self.numbers.is_fetching() && !self.builds.is_fetching() && self.texts_coming.is_none();
         if let Some(script) = &mut self.script {
             script.advance(ctx, settled);
         }
@@ -716,7 +757,7 @@ impl App {
                 crate::logo::paint(ui.painter(), mark);
                 ui.add_space(10.0);
                 let picks = self.loadout.len();
-                for (tab, icon, name, count) in [(Tab::Heroes, Icon::Heroes, "Heroes", 0), (Tab::World, Icon::World, "World", 0), (Tab::Picks, Icon::Picks, "My picks", picks), (Tab::Draft, Icon::Draft, "Draft", 0)] {
+                for (tab, icon, name, count) in [(Tab::Heroes, Icon::Heroes, "Heroes", 0), (Tab::World, Icon::World, "World", 0), (Tab::Picks, Icon::Picks, "My picks", picks), (Tab::Draft, Icon::Draft, "Draft", 0), (Tab::Builds, Icon::Builds, "Builds", 0)] {
                     if nav_button(ui, icon, name, self.tab == tab, count).clicked() && self.tab != tab {
                         self.tab = tab;
                         self.item_search.clear();
@@ -901,6 +942,7 @@ impl App {
         match self.tab {
             Tab::World => self.world_page(ui, &catalog),
             Tab::Draft => self.draft_page(ui, &catalog),
+            Tab::Builds => self.builds_page(ui, &catalog),
             Tab::Picks => {
                 let answer = views::picks::show(ui, &catalog, &mut self.loadout, &mut self.pictures, self.presets.all(), &mut self.preset_name);
                 self.picks_changed |= answer.changed;
@@ -1093,11 +1135,57 @@ impl App {
         if answer.open_source {
             self.open_source();
         }
+        if let Some((hero, role)) = answer.to_build {
+            self.build.set(&hero, Some(role));
+            self.tab = Tab::Builds;
+        }
     }
 
     fn open_source(&mut self) {
         if !self.open_page(views::draft::SOURCE_PAGE) {
             self.banner = Some(Banner::new(Tone::Plain, format!("The page could not be opened. It is at {}", views::draft::SOURCE_PAGE)));
+        }
+    }
+
+    fn builds_page(&mut self, ui: &mut Ui, catalog: &Catalog) {
+        self.builds.wanted(ui.ctx());
+        self.read_texts(ui.ctx());
+        if self.build.hero.is_none()
+            && let Some((hero, role)) = self.draft.own_hero(self.settings.draft_role)
+        {
+            let hero = hero.to_string();
+            self.build.set(&hero, Some(role));
+        }
+        let (builds, texts) = (self.builds.get().cloned(), self.texts.clone());
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs());
+        let enemies = self.build.hero.as_deref().map(|hero| self.draft.against(hero)).unwrap_or_default();
+        let view = views::builds::View {
+            catalog,
+            pictures: &mut self.pictures,
+            chosen: &mut self.build,
+            builds: builds.as_deref(),
+            fetching: self.builds.is_fetching(),
+            failure: self.builds.failure(),
+            texts: texts.as_deref(),
+            rank: self.settings.draft_rank,
+            enemies: &enemies,
+            now,
+        };
+        let answer = views::builds::show(ui, view);
+        if let Some(rank) = answer.rank {
+            self.settings.draft_rank = rank;
+            self.save_settings();
+        }
+        if answer.try_again {
+            self.builds.fetch(ui.ctx());
+        }
+        if answer.copy_details
+            && let Some(failure) = self.builds.failure()
+        {
+            self.copy(ui.ctx(), &failure.details);
+        }
+        if answer.open_source {
+            self.open_source();
         }
     }
 

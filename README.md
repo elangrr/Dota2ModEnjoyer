@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/7efdadc964c060d0e6a69f070fc155ae6dad05b7b35c91e18f3e8f8a3208c877"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
+  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/b9ab0cfa70b52eaec96ff9c916953b3045b52017a8d66d2eae25a7b2dc74deaa"><img src="https://img.shields.io/badge/VirusTotal-1%20of%2070%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 1 of 70 scanners flag it" height="40"></a><!-- /virustotal -->
   &nbsp;
   <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
@@ -53,7 +53,7 @@ Just type to search, for heroes, items and sets. **My picks** lists everything y
 There you can save your picks as a preset, and **Share** copies a short code that a friend
 pastes under **Use a code** to get the same look.
 
-## Draft
+## Draft and builds
 
 **Draft** says which heroes to pick in a match. Choose your rank and role, then put the heroes
 in as they are picked. The list shows the heroes of your role that win more often against the
@@ -66,11 +66,18 @@ mid, or the enemy's offlaner and soft support for a carry, and suggests heroes t
 lane more often. For a carry or an offlaner, the enemy core in the lane counts more than the
 support.
 
-The page works with Dota closed and never reads your game. Its numbers are added up from
-millions of public matches by [STRATZ](https://stratz.com). The app downloads them from this
-project's GitHub page when you open the page, and they are made new every week.
-
 ![The Draft page, with the heroes for the last pick in mid](assets/screens/draft.jpg)
+
+**Builds** shows on one screen what players of a hero buy and skill in your rank and role. Core
+items come in the order they are bought, with how many of 100 players buy each. Other items
+move up when they are bought more often against the enemy heroes of your draft. Skills has a
+point for every level. **Go to build** on the Draft page opens your own hero's.
+
+Both pages work with Dota closed and never read your game. Their numbers are added up from
+millions of public matches by [STRATZ](https://stratz.com), and what pros buy comes from
+[OpenDota](https://www.opendota.com). The app downloads them from this project's GitHub page
+when you open the pages, and they are made new every week. A build is a place to start from,
+and the match you are in decides what is right.
 
 ## Updates
 
@@ -103,7 +110,7 @@ copies the same text.
 ## Questions
 
 **Does it collect any data?** No. It only asks GitHub whether a new version is out and, when
-you open Draft, for the numbers of that page.
+you open Draft or Builds, for the numbers of those pages.
 
 **Can I get banned?** Nobody can promise that you cannot. The app never touches the running game
 and gives no advantage in a match.
@@ -132,6 +139,7 @@ link opens the full result for that file. A release that Microsoft's scanner fla
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.4.0 | [1 of 70 scanners flag it](https://www.virustotal.com/gui/file/b9ab0cfa70b52eaec96ff9c916953b3045b52017a8d66d2eae25a7b2dc74deaa) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/a9e7c80cbe294558087a0885cc2cecc9ad8f6a1e62e50f84e21ebd38010ee7f2) |
 | 0.3.2 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/7efdadc964c060d0e6a69f070fc155ae6dad05b7b35c91e18f3e8f8a3208c877) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/74506bb8b79458091e42c00c0655b8720b4603e6607415914102214257e8170c) |
 | 0.3.1 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/5817342e8a8d41ab8453b670a86cd20b872aab0e64121810db78437f6be0d2bf) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/33c350cac7ba91fa8578b2904faf427581d14413692b2a5d98a0adcdcf36b2e5) |
 | 0.3.0 | [3 of 71 scanners flag it](https://www.virustotal.com/gui/file/f8db5ee3a498c34d5e1234dce1c3c0756ba426194c94a9e0795f19b2a46c7111) | [1 of 70 scanners flag it](https://www.virustotal.com/gui/file/c3a4571d7c328b5ff3cff45aa66cf416016db42498c8e98fc2b8314d06a2fe98) |

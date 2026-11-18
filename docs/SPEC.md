@@ -30,6 +30,8 @@ Read from inside the game's archive:
 | `scripts/npc/heroes/npc_dota_hero_*.txt` | Each hero's slots, their names, the hero's short names (2.10) and its slots for ability effects (2.9) |
 | `materials/models/props_tree/*.vmat_c` | The looks of trees, to copy into the package (3.17) |
 | `materials/dev/deferred_post_process*.vmat_c` | What the map is drawn through, to copy into the package (3.20) |
+| `scripts/npc/items.txt`, `scripts/npc/npc_abilities.txt` | What an item is built from, and what a talent changes, for the Builds page (6.2) |
+| `panorama/images/items/*_png.vtex_c`, `panorama/images/spellicons/*_png.vtex_c` | Pictures of the items and skills of a build (6.2) |
 | `panorama/images/rank_tier_icons/handicap/*icon_psd.vtex_c` | The game's drawings for the five roles, shown on the Draft page (5.3) |
 | `panorama/images/rank_tier_icons/rank1_psd.vtex_c` to `rank8_psd.vtex_c` | The game's medals for the eight ranks, shown on the Draft page (5.3) |
 
@@ -44,6 +46,7 @@ Nothing else under the Dota folder is written. Our own files live in
 | `presets.json` | The picks a player kept under a name in the app (3.13) |
 | `crash.txt` | What made the app close, when something went wrong inside it; read and taken away at the next start (3.13) |
 | `draft.json` | The numbers of the draft helper as they were last fetched (5.4) |
+| `builds.json` | The builds of the build helper as they were last fetched (6.4) |
 | `backup\<game build>\` | The two game files as Valve shipped them |
 
 One more file is written, and only when the player asks for it: the app's own program file,
@@ -479,6 +482,9 @@ Measured on build 6973 with `dme dev effects`:
   Tiny's `shoulder`, the slot that holds what he looks like while he is small. For a slot for
   ability effects the text is the ability instead (2.9). `DisplayInLoadout "0"` marks a slot
   Dota does not show.
+- `Model` is the model of the hero's body, `models/heroes/axe/axe.vmdl`. Tiny, who grows, has
+  one for each size: `Model`, `Model1`, `Model2` and `Model3`. The item database names those
+  sizes as heroes of their own, `npc_dota_hero_tiny_variant_0` to `_3`.
 - `NameAliases` holds other names for the hero, the short ones Dota's own search finds the hero
   by, separated by `;` or `,`: `am` for Anti-Mage, `wr` for Windranger. 116 heroes have some.
 
@@ -677,6 +683,44 @@ for the named one: it counts as there, what it names is looked for in turn, and 
 copy of it in the package under the name it is asked for by (3.2). With two such files, or
 with one further away, nothing stands in. On build 6973 three files stand in.
 
+### 2.14 Sound events
+
+A sound in the game is an event with a name, such as `Hero_Axe.Attack`, which says which
+recordings (`.vsnd`) to play and how: volume, pitch, how far it carries, and other events to
+play with it (`soundevent_layer2` and so on). The events are in compiled files,
+`soundevents/**/*.vsndevts_c`, 946 on build 6975. Each hero has one of its own in
+`soundevents/game_sounds_heroes/`, which holds the hero's sounds and those of the hero's items:
+Axe's has `Hero_Axe.Attack` and Fists of Axe Unleashed's `Hero_Axe.Attack.Jungle` side by side.
+The 127 files of the heroes hold 2,943 events. Names are matched without regard to case: an item
+of Razor's names an event that the file writes in other letters.
+
+An item changes a sound with a block of type `sound` in its `visuals` (2.6), from `asset` to
+`modifier`. On build 6975, 213 items of heroes do, 331 times in all.
+
+A compiled file of events is a list of blocks, as in 2.13. The block `DATA` holds the events, as
+KeyValues 3 in binary, of the fifth version (it starts with `\x05` and `3VK`):
+
+- 16 bytes that name the format, then 25 four-byte numbers. The first says how the two buffers
+  that follow are compressed (1 is LZ4, a single block each); the others say how big each part
+  below is, and how many objects and arrays there are. Numbers 13 to 16 are the sizes of the two
+  buffers, unpacked and packed, and 7 and 8 their sums.
+- The first buffer: every string, each ending in a zero byte, in the order they are first used;
+  then their number; then the numbers of arrays that keep them here (positions, below).
+- The second buffer, in streams that are read side by side: the number of members of each
+  object; one byte for the length of each short array; four-byte numbers, which are the index of
+  a string for every key and every string value; eight-byte numbers, most of them doubles; one
+  byte for each value saying what kind it is; and `00 DD EE FF` at the end.
+
+The kinds the files use: 5 a double, 6 a string, 9 an object, 11 a four-byte number, 13 and 14
+true and false, 15 and 16 the numbers 0 and 1, 17 and 18 the doubles 0 and 1, which carry nothing
+more, 24 an array of up to 255 items of one kind, its kind written once after its length, and 25
+the same with doubles from the first buffer (the `position` of a sound in the world). The other
+blocks of the file, such as `RED2`, are about how it was made.
+
+`dme dev sounds` reads every such file and writes it again: 940 come out the same, byte for byte
+once unpacked, and 6 are compressed another way and are not read (music, fan voices and one of
+the tools'; none is a hero's).
+
 ## 3. What the tool does
 
 ### 3.1 Find Dota
@@ -713,8 +757,10 @@ emblem (3.19), for other trees (3.17), for another look of the map (3.20) and fo
    and do not stop anything; Valve's own data names a few files the game never shipped. A
    file that another stands in for (2.13) is not missing.
 7. Put the picked models where the default items' own are (3.24): their files go in the
-   package under the defaults' names.
-8. Write the result to `game\mod_enjoyer\pak01_dir.vpk`, with those models, and with other
+   package under the defaults' names. Put the bodies the picked items give heroes where the
+   heroes' own are (3.26). Make the heroes' own sounds like those the picked items play in
+   their place (3.25).
+8. Write the result to `game\mod_enjoyer\pak01_dir.vpk`, with those models and sounds, and with other
    trees or another look for the map where they are picked (3.17, 3.20), and with a copy of a
    file that the picks name and that is one folder away from where it is named (2.13), under
    the name it is asked for by.
@@ -1038,7 +1084,7 @@ Two files keep apart what the player wants and what is in the game.
 - `state.json` is written when a package is. It holds the picks in the package, the game build it
   was made from, the number of the rewrite rules it was made by, and which heroes got the effects
   of events. The number goes up whenever sections 3.3, 3.4 or 3.14 to 3.22 change what is written
-  for the same picks; it is 9 now. The file is deleted before the first of the game's files is
+  for the same picks; it is 11 now. The file is deleted before the first of the game's files is
   written and written again after the last, so that a write that fails on the way leaves no
   picks that pass for the ones in the game, and the next Play writes them all. Going back to
   normal Dota deletes it too.
@@ -1212,6 +1258,8 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
   the maker takes donations: a page for PayPal, and wallets whose addresses are copied with a
   click. The app opens `https` addresses only, and asks for nothing by itself.
 - "Draft" on the left side opens the draft helper (5). `--open draft` shows it in a picture.
+- "Builds" on the left side opens the build helper (6). `--open builds:axe:offlane` shows
+  the build of a hero in a role in a picture, and `--open builds` the page with no hero.
 - "Settings" on the left side opens the settings page, with: which heroes get the effects of events
   and an emblem (3.21), as every hero, the heroes picked for, or heroes chosen from a list;
   Low-end PC mode (3.18); "Update automatically" (4.2), off by default; where Dota is and where
@@ -1244,7 +1292,7 @@ For testing, the app can work itself and take a picture of its own window, which
 meanwhile. Nobody's screen is captured.
 
 ```
-Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weapon | world:courier | picks | draft | help | settings | support | share]
+Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weapon | world:courier | picks | draft | builds:axe | help | settings | support | share]
                     [--click X,Y] [--right-click X,Y] [--rest X,Y] [--type TEXT] [--scroll X,Y,DOWN] [--wait SECONDS] ...
                     [--dota FOLDER] [--data-dir FOLDER] [--no-start] [--ignore-running]
                     [--update-from MANIFEST] [--pretend-version VERSION] [--no-restart]
@@ -1259,7 +1307,7 @@ the steps up, so that a picture can show how far it has come; the start of it do
 Dota. `--ignore-running` writes even while Dota runs and only works together with `--dota`: it
 is for a copy of the game. `--update-from`, `--pretend-version` and `--no-restart` are for
 trying the app's own updates (4.5). `--numbers-from` says where the Draft page fetches its
-numbers (5.4).
+numbers (5.4), and the Builds page its builds from beside them (6.4).
 
 A window that only has its picture taken leaves the clipboard and the browser alone: what it
 would copy is written to `copied.txt` in its data folder, and an address it would open to
@@ -1740,11 +1788,81 @@ items, show the picked model on whoever wears one, on this computer only.
 than the item database alone. Idea taken from ArdysaModsTools (its public GPL code), which ships its sets
 this way; the code is this project's own. **(to confirm in a match)**
 
+### 3.25 The picked item's sounds in the place of the hero's own
+
+A rewritten default item carries the picked item's swaps of sounds (2.14) like the rest of its
+`visuals`, and in a bot match on this computer the hero plays them. In a match on Valve's
+servers it does not: there the server says which sound to play, it goes by the default item as
+Valve wrote it, and that changes no sound. Axe with Fists of Axe Unleashed picked attacked with
+the sound of his own axe (a player's report, 0.3.2).
+
+So the game is given the sound the server asks for, made like the item's. After the rewrite:
+
+1. The swaps are those that the default items of heroes have in the rewritten item database and
+   did not have in Valve's, each once, in the order of the items. Of a block marked for a style,
+   only those for the first count, the style the game shows a default item in (3.4). Blocks for
+   ability effects count wherever they ride (3.14).
+2. A swap is made if the event it swaps from is in a hero's own file of events and the one it
+   swaps to is in one of them too. Events elsewhere are shared by every hero, such as Blink
+   Dagger's and the teleport's: making one of them like an item's would give every hero that
+   sound, and they are left alone (8 swaps of 4 items on build 6975, among them Zeus's and
+   Earthshaker's arcanas for Blink Dagger and Tinker's Mecha Boots for the teleport). So are
+   two of Disruptor's, whose event no file has.
+3. The event swapped from becomes a copy of the event swapped to, as the game has it. Where two
+   swaps are of the same event, the first is made. A swap whose event plays the hero's own event
+   along with it, through another event or not, is left alone, as the copy would play itself;
+   none does on build 6975 (Lifestealer's Dark Maw Inhibitor names its event only to count how
+   often it plays, and that is not playing it).
+4. Each hero's file with a swap in it goes in the package under its own path, with the same
+   blocks before `DATA` and its events written again (2.14). The buffers are written without
+   compressing them, as a single LZ4 block of literals, which every reader of LZ4 unpacks.
+
+Whoever on Valve's servers asks for the hero's sound then plays the item's, on this computer,
+for every hero that the server gives the default sound: the same as models (3.10). A player whose
+own item changes that sound is asked for the item's event by the server, which is not changed.
+
+`dme dev try-all` makes the heroes' files for every round, and `dme dev sounds` for every item
+of a hero on its own: 321 of the 331 swaps are made. **(to confirm in a match)**
+
+### 3.26 The body a picked item gives the hero, where the hero's own is
+
+Some items swap a hero's whole body for another model, and the server decides a hero's model
+the way it decides its sounds (3.25), so online such an item showed on the hero's own body. Two
+kinds of blocks in `visuals` do it:
+
+- `entity_model` whose `asset` is a hero, as `npc_dota_hero_nevermore`: the hero's body. Arcanas
+  (Demon Eater, Manifold Paradox, Axe Unleashed's bare body), personas (3.22) and Tiny's sets,
+  which name his sizes (2.10).
+- `hero_model_change`: the model of a form the hero takes, named in `asset`, as
+  `models/heroes/lycan/lycan_wolf.vmdl` for Lycan's Shapeshift, and also Terrorblade's
+  Metamorphosis, Dragon Knight's dragon, Lone Druid's and Muerta's true forms and Undying's
+  golem.
+
+After the rewrite, the swaps are those that the default items of heroes have and did not have
+in Valve's file, of the first style, each once (as 3.25 takes sounds). Each puts the item's
+compiled model in the package where the game looks for the hero's body (its own file says,
+2.10) or for the form's, as 3.24 does with pieces. It is left out where the place is not in
+`models/heroes/` (something other heroes could have too), where the model is swapped for
+itself, where the game lacks the item's model, and where another swap or a piece (3.24) put a
+model there first. On build 6975, 145 items of heroes swap a body; `dme dev bodies` puts 150 of
+their 151 swaps in place, the one left being a model swapped for itself.
+
+Left out on purpose: the models of a hex (`hex_model`), as the item database names most of them
+only as `hex` and the game's files do not say which model each hero's hex is, nor whether
+Scythe of Vyse uses it too.
+
+An arcana's body comes with its own animations. The game picks one by what the server says the
+hero does, and an arcana's body may have two that fit where the hero's own has one, so a loop
+such as standing still may start again on the other now and then. ArdysaModsTools' notes say
+so, and that it rebuilds such bodies with Valve's tools to avoid it; that is not done here.
+**(to confirm in a match)**
+
 ## 4. The app updating itself
 
 The app can put a newer version of itself in the place of its own program file. Nothing of
-the game's has a part in this. It is one of the two things the app ever fetches from the
-network. The other is the file of numbers of the draft helper (5.4).
+the game's has a part in this. It is one of the three things the app ever fetches from the
+network. The others are the two files of numbers of the draft helper (5.4) and the build
+helper (6.4).
 
 A build is told two things, both in `crates/dme-core/src/update.rs`:
 
@@ -2103,7 +2221,10 @@ draft", for a hero that is banned or that the player does not play.
 Once all ten places have a hero, the page says which draft is better (5.2), small, at the
 right end of the line of the two lists, over the teams. A bar is shared by the two teams by
 their chances, with each team's percent on its part, and a few words stand before it where
-there is room. Two drafts within one percent of each other are called even. The list says whose
+there is room. Two drafts within one percent of each other are called even. Under the teams
+is a large button, "Go to build", which names the player's own hero and opens its build
+(6.3). With no role chosen no hero is the player's own: the button cannot be pressed, and
+the words beside it say to choose "My role". The list says whose
 numbers it shows, of which patch and how old they are, and those words open stratz.com.
 
 ### 5.4 Fetching and keeping
@@ -2125,5 +2246,224 @@ For testing, `--numbers-from` says where to fetch the file from, which may be a 
 computer. A window that is only there to have its picture taken fetches only then. A build
 made while the environment variable `DME_NUMBERS_TRIAL` holds such a place fetches from
 there in the place of the built-in address, with no option, the way `DME_UPDATE_TRIAL` does
-it for updates (4.5). That is for a build somebody is to try before the file is put out.
+it for updates (4.5). That is for a build somebody is to try before the files are put out.
 `publish/release.ps1` builds with neither of the two set.
+
+## 6. The build helper
+
+The Builds page says what the players of a hero buy and skill in a role, in the player's rank.
+Like the Draft page it reads nothing of the game that is running. It shows what is added up
+from finished matches.
+
+### 6.1 The builds
+
+The page works from a second file, `builds.json`, which `publish/make_numbers.py` makes in the
+same run as `draft.json` (5.1) and from STRATZ as well. It is beside that file, where it is
+fetched from and where it is kept.
+
+```json
+{
+  "format": 2,
+  "made": 1794499945,
+  "source": "STRATZ",
+  "patch": "7.41f",
+  "sampled": 160000,
+  "items": ["item_tango", "item_power_treads", "item_bfury", "item_monkey_king_bar"],
+  "skills": ["antimage_mana_break", "antimage_blink", "special_bonus_unique_antimage_3"],
+  "heroes": {
+    "npc_dota_hero_antimage": [
+      { "role": 0, "pair": 1, "matches": 95312,
+        "start": [[0, 1, 87700, 43900]],
+        "items": [[1, 8, 94300, 47200], [2, 15, 93400, 46800]],
+        "talents": [[2, 57200, 31700]] }
+    ]
+  },
+  "orders": { "npc_dota_hero_antimage": [[0, 600, [1, 0, 0, 1, 0]]] },
+  "against": { "npc_dota_hero_phantom_assassin": [[3, 240]] },
+  "pros": { "source": "OpenDota", "matches": 1227,
+            "heroes": { "npc_dota_hero_storm_spirit": [[1, 109, [[4, 109, 1]]]] } }
+}
+```
+
+| Key | Holds |
+|---|---|
+| `format` | 2. The app refuses a file of another format and goes on with the builds it has |
+| `made`, `source`, `patch` | As in `draft.json` |
+| `sampled` | How many single matches the orders of skill points and what is bought against whom are from |
+| `items`, `skills` | The items and the skills the file names, by the names the game's files know them by. Everything else names one by its place in these lists. Talents are among the skills |
+| `heroes` | For each hero, by the name the game's files know it by, its builds |
+| `role` | The role the build is for, from 0 for carry to 4 for hard support |
+| `pair` | The pair of ranks, from 0 for Herald with Guardian to 3 for Divine with Immortal. STRATZ counts builds for two ranks together |
+| `matches` | How many matches the build is added up from |
+| `start` | What is bought before the match begins. Each is the item, how many of it, the matches it was bought in and how many of those were won |
+| `items` | What is bought after the start, boots among it, in the order it is bought. Each is the item, the minute it is bought in on average, matches and wins |
+| `talents` | For each talent that is taken, matches and wins |
+| `orders` | For each hero, for the roles it has builds for: the role, how many single matches the order is from, and the skill or talent each skill point is put in, the first point first |
+| `against` | For each enemy hero, the items that are bought more often against it, each with how many times as often, in hundredths: 240 is 2.4 times |
+| `pros` | What pros buy: whose numbers they are, how many pro matches they are from, and for each hero, for the roles enough pros played it in, the role, how many pros played it so and the items they bought, each with how many of them bought it and the minute they first bought it in on average. A file without it is read, and has nothing of the pros |
+
+A hero has a build for each role that has at least a tenth of its ranked matches in the pair
+of ranks, for three roles at most, and only where the build is of at least 150 matches. An
+item is in a build where enough of the hero's players buy it, which is 15 of 100 at the
+start, 5 of 100 for boots and 3 of 100 after that, thirty items at most. STRATZ counts what
+is bought after the start by the minute, and leaves out every minute an item was bought in
+by fewer than about 250 matches, unless the question's `matchLimit` says otherwise. The
+maker sets it to 0. Without it an item that is bought at many different minutes, as most
+that are bought for the match at hand are, was not there at all: Puck's Aghanim's Scepter,
+bought in 24 of 100 Divine and Immortal matches, and Linken's Sphere, in 27. A second, third or
+fourth copy of a starting item counts where at least half of those who start with the item
+have that many. STRATZ calls each copy after the first that is bought in the same moment
+"given" (`wasGiven`), as the second, third and fourth Iron Branch. The purchase logs of pro
+matches have each of those bought, so they count whether they are called bought or given. A
+first copy that is given is not one the player bought, and is left out.
+The builds are of the newest whole week of matches, and the maker asks one question for each
+hero and pair of ranks, about five hundred.
+
+STRATZ loses purchases of some items, so its numbers of them are not used. In patch 7.41f a
+Bottle was bought in 6 of 100 matches of mid heroes across all ranks by STRATZ's numbers,
+and in about 5 to 10 of 100 even on Storm Spirit, Puck, Queen of Pain or Lina. Of 123 mid
+players in ranked matches that OpenDota had parsed lately, mostly Immortal, 35 of the 38 on
+those heroes and the like bought one. Of five such matches, in which the mid player bought a
+Bottle in the second minute by OpenDota's records and in four of them still had it at the
+end, STRATZ's records of the same matches had no Bottle. So the maker leaves the Bottle out
+of what STRATZ says (`LOST_BY_STRATZ`), and what pros buy says whether to have it.
+
+What pros buy is asked of OpenDota (opendota.com), whose database of pro matches takes a
+question in SQL, and whose records of purchases are whole. It is one question, without a
+token, for the pro matches since the patch began. A pro match says which lane each player
+was in (`lane_role`: 1 the safe lane, 2 the mid, 3 the off lane), not their role. Of the two
+in the safe lane, the one with more last hits at minute 10 is taken for the carry and the
+other for the hard support; of the two in the off lane, the one with more for the offlaner
+and the other for the soft support; and in mid the one with the most. In 7.41f carries had
+64 last hits at minute 10 on average, mids 59, offlaners 55, and the supports 8. A third
+player in a lane is left out. For each hero and role the question gives how many pros played
+it so, and what they bought, each item once for each pro, with the first minute they bought
+it in. A hero and role are in it where at least 8 pros played them, and an item where at
+least 30 of 100 of them bought it. Of those, only items that STRATZ counts among what is
+bought after the start are kept, which leaves out what is used up, such as a Town Portal
+Scroll, and what is bought before the match begins on average. Where OpenDota cannot be
+reached, the file is written without them.
+
+STRATZ adds up no order of skill points, and nothing by the heroes of the other team. Both
+are made from single matches, which STRATZ hands out as guides: up to 600 for each hero and
+role, all of them won, by Divine and Immortal players, of the last days. One question is
+asked for each hero and role, about three hundred. What is made from them is the same for
+every rank.
+
+The order of skill points is made point by point. Each point is what most of those matches
+do that did the same up to there, while there are at least ten of them, and what most of all
+the matches do with that point where there are fewer. A point is said while a quarter of the
+matches got as far, and nineteen points at most. A hero has a point to put somewhere at
+every level up to 16 and at the levels 18, 20 and 25, so the nineteenth is that of level 25.
+
+What is bought against whom is counted over all heroes together, since the matches of one
+hero against one other are too few to say anything. For an item and an enemy hero, the maker
+adds up how often the item was bought in the matches against that hero, and how often it
+would have been bought there if the players had bought as they do in all of their matches.
+The item is said to be bought more often against the hero where it was expected at least 8
+times, was bought more often than expected by 3 times the spread that luck gives, and at
+least 1.25 times as often. Before that, 15 purchases are added to both sides, which pulls
+what few purchases show towards "as usual", and what is bought more of everything against
+that hero is taken out, since matches against some heroes are longer. No more than 5 times
+is said, no more than 14 items for a hero, and only items that some build has.
+
+### 6.2 Names and pictures
+
+The file names things as the game's files do, and has no words or pictures of its own.
+Everything shown is read from the game on the player's computer, when the page is first opened.
+
+| What | Where it is read from |
+|---|---|
+| The name of an item or a skill | `resource/localization/abilities_english.txt`, under `DOTA_Tooltip_ability_` and its name |
+| The picture of an item | `panorama/images/items/NAME_png.vtex_c`, without the `item_` the name begins with |
+| The picture of a skill | `panorama/images/spellicons/NAME_png.vtex_c` |
+| A hero's talents | The hero's own file (2.10), `Ability10` to `Ability17`. Two for each of the levels 10, 15, 20 and 25, and of each two the one the game shows on the right comes first |
+| What an item is built from | `scripts/npc/items.txt`, where a recipe names its `ItemResult` and the parts in `ItemRequirements` |
+
+A talent's text has its amounts left open, as in `+{s:bonus_attack_factor}% Stifling Dagger
+Damage`. The amount is written where the skill's value is listed in the hero's own file,
+under the talent's name, as in `"attack_factor" { "value" "30" "special_bonus_unique_x" "+15" }`.
+A name in the text that begins with `bonus_` stands for the value without it. For `{s:value}`
+the amount is in the talent's own description, in the hero's file or in
+`scripts/npc/npc_abilities.txt`, or it is the number the talent's name ends in. The sign is
+taken off the amount, since the text has its own. An amount that is found nowhere shows as "?".
+
+An item is left out of a build as a part of another item of the build where at least 60 of
+100 of those who buy it go on to the other. A Perseverance that nearly everybody turns into a
+Battle Fury is not shown, and a Skull Basher that most players keep is.
+
+### 6.3 The page
+
+"Builds" is under "Draft" on the left side. The page shows one hero's build in one role, for
+the rank chosen as "My rank". The role and the rank are two lists beside the hero's name. The
+role's list has all five roles. A role too few play the hero in for a build of its own, as
+Crystal Maiden as a carry, shows the build of the role the hero is played in most, and beside
+the lists: "Too few play Crystal Maiden as Carry in this rank for a build of its own. This is
+the build of Hard support, the role Crystal Maiden is played in most."
+
+Every hero is on the page and on the Draft page, also one with nothing to pick, which the
+Heroes page leaves out: Kez and Largo on build 6975 (`Catalog::plain_heroes`). STRATZ counts
+no talents of those two and has no single matches of them, so their builds have no order of
+skill points, and the talents line says "the numbers do not count them" and shows no shares
+in the place of 0 of 100.
+
+Which hero it is comes about in three ways. "Go to build" on the Draft page, which shows once
+all ten places have a hero, opens the build of the player's own hero in the role the player
+plays. That hero is the one in the place of the player's team with the player's role (5.3),
+so the button waits for a role to be chosen. Opening the page while no hero is chosen shows
+that same hero, if there is one. And typing a hero's name on the page finds any hero.
+
+The build is on one screen, in five lines, each with its name at the left edge.
+
+| Line | What it shows |
+|---|---|
+| Start | What is bought before the match begins, as one player could buy it with the 600 gold every hero starts with (the game's files do not say it; it has been 600 since 7.09). The file has each item that at least 15 of 100 start with, which together cost more: a support's Tango, Blood Grenade, Magic Stick, Wind Lace and Boots came to 1380. The page takes them the most bought first, each while the gold left pays for it, and as many of its copies as it pays for; what costs more than is left is passed over, and something after it that costs less is still taken. The prices are the game's own, `ItemCost` in `scripts/npc/items.txt`; an item without one costs nothing, and without that file everything is shown. Under the line's name, what it comes to, "595 of 600 gold". An item that is bought three times is there three times, up to four. Where the line has no room for that, or there are more, it is there once with "×3" in its corner |
+| Core items | The items that at least 35 of 100 of the hero's players buy, boots among them, and those that at least 50 of 100 pros who played the hero in the same role buy (6.1), together in the order they are bought, each with its minute in a corner |
+| Other items | The rest, the most bought first |
+
+What the shop does not sell is left out of every line, though STRATZ counts it as bought: the
+Healing Lotus, Great Healing Lotus and Greater Healing Lotus, picked up from the pools on the
+map. The game's file of items says so of each, `"ItemPurchasable" "0"`.
+
+| Line | What it shows |
+|---|---|
+| Skills | A square for each skill point, with the hero's level over it. In it is the skill's picture, or for a talent the level it is of |
+| Talents | As the game shows them, level 25 at the top, each with how many take it. Of each two, the one more players take stands out |
+
+Under each item is how many of 100 of the hero's players buy it, and under an item of the
+core that is there for the pros, how many of 100 of the pros do. The two are not told apart
+on the line: the user asked for one build, without a mark for the pros. Resting the pointer
+on an item, a skill point or a talent says more: the minute, how often its buyers win, what a
+talent does, and for an item of the pros how many pros buy it and, where the rank's numbers
+have the item, how many players of the rank do. Where they do not, as for the Bottle that
+STRATZ loses, nothing is said of the rank.
+
+Every item of the core is shown. Where they are more than the line has room for, as they
+can be with the pros' items, the pictures of that line are smaller, down to 30 points wide.
+
+An item of the pros is one the core of the build does not have. One that is a part of an
+item of the core is left out, as Boots of Speed beside Power Treads, and so is one that is a
+part of another item of the pros that at least 60 of 100 of the pros who buy it go on to.
+Such an item is not among the other items too.
+
+Resting the pointer on one of the other items also names the heroes it is bought more often
+against (6.1), the three it is the most so for, with a draft or without one.
+
+With a draft on the Draft page, the other items go by the heroes the hero has against it.
+Those are the other team's, and the enemy's for a hero that is in neither team. An item that
+is bought 2 times as often against one of them (6.1) has twice the odds of being bought in
+this match. An item that 10 of 100 buy, which is odds of 1 to 9, comes to 2 to 9, which is 18
+of 100. The odds are doubled and not the share, since the times are counted in matches of
+the highest ranks, where the item may be bought less often to begin with. Two such heroes
+count one on top of the other. Such an item moves up in its line, its number is green, and the hero it is bought
+against most shows in its corner.
+
+The page grows with the window, up to one and three quarter times its smallest size. In a window that is too small
+for the smallest of them the page can be scrolled. Where the hero has no build for the
+player's role, the role it is played in most is shown.
+
+### 6.4 Fetching and keeping
+
+`builds.json` is fetched and kept as `draft.json` is (5.4), when the Builds page is first
+opened, and takes no more than 8 MB. `--numbers-from` names where `draft.json` is fetched
+from, and `builds.json` is fetched from beside it.

@@ -26,7 +26,7 @@ const TOUR: [(&str, &str); 4] = [
 const LOW_END_HINT: &str = "Play starts Dota with its lightest video settings: no shadows, simple water and lighting, no fog, grass or other extras. \
      An experiment. Dota may keep these settings afterwards; you can change them back in Dota's video options.";
 
-const HELP: [(&str, &str); 17] = [
+const HELP: [(&str, &str); 18] = [
     (
         "Finding things",
         "Just type. On the hero grid that finds heroes and, from the third letter on, items and sets wherever they are. The chips above the heroes show only those of one attribute, or those with picks. Rest the pointer on an item or a set for a larger look at it and its styles.",
@@ -38,6 +38,10 @@ const HELP: [(&str, &str); 17] = [
     (
         "The draft helper",
         "\"Draft\", on the left, says which heroes to pick. Put the heroes of both teams in as they are picked: click a place, type a few letters of the name, press Enter. The places are in the order of a ranked draft: two heroes for each team, then two more, then the last. The first two are taken to be the supports, the next two the carry and the offlaner, the last the mid. Each place shows its role as a small drawing in its corner; a click on it opens the roles to choose another. The list is for the place that is lit: it shows the heroes of that role that win more often there, in your rank. A click on a hero in the list puts it in that place and goes on to the next, the same as typing its name. Your own place, the one with the role you play, says \"You\". In the list, what a hero adds is green and what it takes is red. The switch at the top says what the list is for: \"Team composition\" weighs the whole match, \"Lane winning\" only the heroes of that lane, such as the enemy's mid for a mid; for a carry or an offlaner the enemy's core there counts more than its support. Once both teams are full, the page says which draft is better, with each team's chance in percent. The numbers are STRATZ's, added up from millions of matches and made new every week. The app does not look at your game: you put the heroes in yourself, and nothing is read from Dota.",
+    ),
+    (
+        "The build helper",
+        "\"Builds\", on the left, shows what the players of a hero buy and skill in your rank, on one screen: what is bought at the start, the core items in the order they are bought, the other items, where each skill point goes level by level, and the talents. With a draft on the Draft page, an item that is bought more often against one of the enemy's heroes moves up, turns green and shows that hero. The core items also have what most pros buy in that role, such as the Bottle of a mid. When both teams of a draft are full, \"Go to build\" on the Draft page opens the build of your own hero, the one in the place with your role. Or type a hero's name on the Builds page. Rest the pointer on an item for when it is bought and how often its buyers win. A build is what most players do: a place to start from, not a rule.",
     ),
     (
         "A pick does not show in Dota",

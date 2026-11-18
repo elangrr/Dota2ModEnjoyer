@@ -46,6 +46,8 @@ dme dev try-all                 build every item, style, set, effect, gem and em
 dme dev copied-keys             which keys a default item takes from a picked item; run after a Dota update
 dme dev catalog                 count what the app offers, read every picture it would show, list the files that are gone
 dme dev effects                 how the game describes ability effects worn apart from their item
+dme dev sounds                  write every file of sound events again and compare; make the heroes' sounds for every item
+dme dev bodies                  where Play puts the bodies that items give heroes, and the models of their forms
 dme dev compare                 list exactly what the installed mod package changes
 dme dev item 595                print one item as the game stores it (--from <vpk> for the mod package)
 dme dev picture <image> <png>   write one of the game's pictures as a PNG file
@@ -78,8 +80,9 @@ closes. The app has no `--help`: an option it does not know is left alone, and w
 
 ## The draft helper's numbers
 
-The Draft page works from one file, `draft.json`, which [SPEC.md](SPEC.md), section 5,
-describes. This makes it in a folder, from the statistics of [STRATZ](https://stratz.com):
+The Draft page works from one file, `draft.json`, and the Builds page from another,
+`builds.json`. [SPEC.md](SPEC.md), sections 5 and 6, describes them. This makes both in a
+folder, from the statistics of [STRATZ](https://stratz.com):
 
 ```
 set STRATZ_TOKEN=<your token>
@@ -87,25 +90,34 @@ python publish/make_numbers.py numbers
 ```
 
 A token is free. STRATZ gives one to whoever logs in with Steam at stratz.com/api, and asks
-for a link back to it wherever its numbers are shown. The script asks about sixty
-questions, which takes a few minutes, and needs nothing but Python. `python publish/make_numbers.py --check` tries its sums.
+for a link back to it wherever its numbers are shown. The script asks about eight hundred
+questions, which takes about twenty minutes, and needs nothing but Python. `python publish/make_numbers.py --check` tries its sums.
 
-To see the page with a file of your own, without publishing anything:
+What pros buy in each role is one question to [OpenDota](https://www.opendota.com)'s
+database of pro matches, which needs no token. Where it cannot be reached, the script says
+so and writes `builds.json` without it.
+
+To see the pages with files of your own, without publishing anything:
 
 ```
 Dota2ModEnjoyer.exe --data-dir scratch --numbers-from numbers/draft.json --open draft
+Dota2ModEnjoyer.exe --data-dir scratch --numbers-from numbers/draft.json --open builds:axe:offlane
+dme dev builds numbers/builds.json --hero axe
 ```
 
 A build made while the environment variable `DME_NUMBERS_TRIAL` names such a `draft.json`
-fetches it from there with no option at all. That is handy for a build somebody else is to
-try by starting it the usual way. A released build is made without it.
+fetches both files from there with no option at all. That is handy for a build somebody else
+is to try by starting it the usual way. A released build is made without it.
 
-The released app's file is made anew once a week and put on the branch `data` of this
-repository, which holds that one file.
+The last one reads the builds against your own game and says what the game has no name, no
+picture or no talent for.
+
+The released app's two files are made anew once a week and put on the branch `data` of this
+repository, which holds those two files alone.
 
 A build of the app fetches `draft.json` from the address `NUMBERS_URL` in
-`crates/dme-core/src/draft.rs`. If you hand out builds of your own, point that at a file you
-publish yourself.
+`crates/dme-core/src/draft.rs`, and `builds.json` from beside it. If you hand out builds of
+your own, point that at files you publish yourself.
 
 ## Releases of the app
 

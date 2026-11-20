@@ -2130,7 +2130,10 @@ share `against` and `with`. Every rank has enough matches for its own counts. He
 has the fewest, had 2.3 million ranked matches of a hero in four weeks.
 
 The maker adds up the whole weeks since the newest patch came out, four at most and two at
-least. It asks STRATZ about sixty questions, each for all heroes at once, with a token that
+least. Where fewer than two whole weeks have passed since the patch, the two newest are added
+up, which are of the patch before it, and `patch` names the patches the weeks are of rather
+than the newest: "7.41f", or "7.41f and 7.42" for a week a patch came out in. The file of
+builds names the newest patch, which STRATZ counts builds over. It asks STRATZ about sixty questions, each for all heroes at once, with a token that
 it reads from the environment variable `STRATZ_TOKEN`. The token is never written anywhere.
 `python publish/make_numbers.py --check` tries the sums on made-up numbers. The maker writes
 no file larger than the 4 MB the app takes (5.4). With the lanes the file is about 2.1 MB.
@@ -2423,12 +2426,14 @@ The build is on one screen, in five lines, each with its name at the left edge.
 
 What the shop does not sell is left out of every line, though STRATZ counts it as bought: the
 Healing Lotus, Great Healing Lotus and Greater Healing Lotus, picked up from the pools on the
-map. The game's file of items says so of each, `"ItemPurchasable" "0"`.
+map. The game's file of items says so of each, `"ItemPurchasable" "0"`. So is what a patch
+took out of the game, which that file keeps with `"IsObsolete" "1"`: the Javelin, the Helm of
+the Overlord and Angel's Demise in 7.42, though the numbers of the weeks before it have them.
 
 | Line | What it shows |
 |---|---|
 | Skills | A square for each skill point, with the hero's level over it. In it is the skill's picture, or for a talent the level it is of |
-| Talents | As the game shows them, level 25 at the top, each with how many take it. Of each two, the one more players take stands out |
+| Talents | As the game shows them, level 25 at the top, each with how many take it. Of each two, the one more players take stands out. A talent the numbers count none of, where they count talents the hero no longer has, came with a patch after them: it says "new" in the place of how many take it, and neither of its level stands out (`Build::is_new_talent`) |
 
 Under each item is how many of 100 of the hero's players buy it, and under an item of the
 core that is there for the pros, how many of 100 of the pros do. The two are not told apart

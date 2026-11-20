@@ -444,8 +444,10 @@ fn talents(ui: &mut Ui, own: &[Talent], build: &Build, high: f32, counted: bool)
         for tier in (0..(own.len() / 2).min(4)).rev() {
             let (right, left) = (&own[2 * tier], &own[2 * tier + 1]);
             let taken = |talent: &Talent| build.talent(&talent.id).map_or(0, |taken| taken.matches);
+            let new = |talent: &Talent| counted && build.is_new_talent(own, &talent.id);
+            let either_new = new(left) || new(right);
             let (rect, _) = ui.allocate_exact_size(vec2(wide, high), Sense::hover());
-            let boxes = [(left, Rect::from_min_size(rect.min, vec2(side, high)), taken(left) > taken(right)), (right, Rect::from_min_size(pos2(rect.right() - side, rect.top()), vec2(side, high)), taken(right) > taken(left))];
+            let boxes = [(left, Rect::from_min_size(rect.min, vec2(side, high)), !either_new && taken(left) > taken(right)), (right, Rect::from_min_size(pos2(rect.right() - side, rect.top()), vec2(side, high)), !either_new && taken(right) > taken(left))];
             for (place, (talent, room, more)) in boxes.into_iter().enumerate() {
                 if ui.is_rect_visible(room) {
                     let painter = ui.painter();
@@ -454,7 +456,12 @@ fn talents(ui: &mut Ui, own: &[Talent], build: &Build, high: f32, counted: bool)
                     painter.rect_stroke(room, round, if more { Stroke::new(1.5, theme::accent()) } else { Stroke::new(1.0, theme::line()) }, StrokeKind::Inside);
                     let share = build.talent(&talent.id).map_or(0.0, |taken| build.share(taken.matches));
                     let letters = 12.5 + 2.5 * (high / TALENT - 1.0);
-                    let number = painter.layout_no_wrap(if counted { format!("{share:.0}%") } else { String::new() }, theme::heavy(letters - 0.5), if more { theme::accent_text() } else { theme::text_dim() });
+                    let shown = match (counted, new(talent)) {
+                        (false, _) => String::new(),
+                        (true, true) => "new".to_string(),
+                        (true, false) => format!("{share:.0}%"),
+                    };
+                    let number = painter.layout_no_wrap(shown, theme::heavy(letters - 0.5), if more { theme::accent_text() } else { theme::text_dim() });
                     let number_left = room.right() - 9.0 - number.size().x;
                     painter.galley(pos2(number_left, room.center().y - number.size().y / 2.0), number, theme::text_dim());
                     let mut text = LayoutJob::simple(talent.text.clone(), FontId::proportional(letters), theme::text(), (number_left - 8.0 - room.left() - 9.0).max(20.0));
@@ -463,7 +470,12 @@ fn talents(ui: &mut Ui, own: &[Talent], build: &Build, high: f32, counted: bool)
                     let text = painter.layout_job(text);
                     painter.galley(pos2(room.left() + 9.0, room.center().y - text.size().y / 2.0), text, theme::text());
                 }
-                ui.interact(room, ui.make_persistent_id(("talent", tier, place)), Sense::hover()).on_hover_ui(|ui| said(ui, &talent.text, &if counted { talent_words(build, talent) } else { "The numbers do not say how many take it.".to_string() }));
+                let words = match (counted, new(talent)) {
+                    (false, _) => "The numbers do not say how many take it.".to_string(),
+                    (true, true) => NEW_TALENT.to_string(),
+                    (true, false) => talent_words(build, talent),
+                };
+                ui.interact(room, ui.make_persistent_id(("talent", tier, place)), Sense::hover()).on_hover_ui(|ui| said(ui, &talent.text, &words));
             }
             if ui.is_rect_visible(rect) {
                 ui.painter().text(rect.center(), Align2::CENTER_CENTER, (10 + 5 * tier).to_string(), theme::heavy(13.0), theme::accent_text());
@@ -471,6 +483,8 @@ fn talents(ui: &mut Ui, own: &[Talent], build: &Build, high: f32, counted: bool)
         }
     });
 }
+
+const NEW_TALENT: &str = "New in this patch. The numbers are from before it, so they do not say how many take it yet.";
 
 fn talent_words(build: &Build, talent: &Talent) -> String {
     let Some(taken) = build.talent(&talent.id).filter(|taken| build.share(taken.matches) >= 0.5) else { return "Hardly anybody takes it.".to_string() };

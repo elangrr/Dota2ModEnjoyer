@@ -2,6 +2,12 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.4.1
+
+- Ready for Dota 7.42. Items the patch took out of the game, such as the Javelin and the Helm of the Overlord, are no longer listed in builds.
+- Talents that 7.42 changed say "new" on the Builds page until the numbers of the new patch are in, in the place of a wrong 0%.
+- The numbers say which patch their matches were played on. In the first two weeks of a patch they are still of the patch before it.
+
 ## 0.4.0
 
 - A new Builds page shows on one screen what players of a hero buy and skill in your rank and role: the core items in the order they are bought, other items for the match, and a skill point for every level.

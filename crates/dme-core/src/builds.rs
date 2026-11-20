@@ -129,6 +129,10 @@ impl Build {
     pub fn talent(&self, talent: &str) -> Option<&Taken> {
         self.talents.iter().find(|taken| taken.talent.eq_ignore_ascii_case(talent))
     }
+
+    pub fn is_new_talent(&self, own: &[Talent], talent: &str) -> bool {
+        self.talent(talent).is_none_or(|taken| taken.matches == 0) && self.talents.iter().any(|taken| taken.matches > 0 && !own.iter().any(|talent| talent.id.eq_ignore_ascii_case(&taken.talent)))
+    }
 }
 
 pub fn win_rate(matches: u64, wins: u64) -> Option<f32> {
@@ -428,7 +432,7 @@ impl GameTexts {
                 if let Some(cost) = number("ItemCost") {
                     costs.insert(name.clone(), cost);
                 }
-                if number("ItemPurchasable") == Some(0) {
+                if number("ItemPurchasable") == Some(0) || number("IsObsolete") == Some(1) {
                     unsold.insert(name);
                 }
             }
@@ -766,6 +770,7 @@ mod tests {
             "item_magic_stick" { "ItemCost" "200" } "item_boots" { "ItemCost" "500" } "item_wind_lace" { "ItemCost" "225" }
             "item_ward_observer" { "ItemCost" "0" } "item_circlet" { "ItemCost" " 155 " }
             "item_famango" { "ItemCost" "0" "ItemPurchasable" "0" } "item_great_famango" { "ItemPurchasable" "0" } "item_bfury" { "ItemPurchasable" "1" }
+            "item_javelin" { "ItemCost" "900" "IsObsolete" "1" }
         }"#;
         let texts = GameTexts::from_files(Names::default(), &[], prices, b"");
         assert_eq!((texts.item_cost("ITEM_TANGO"), texts.item_cost("item_circlet"), texts.item_cost("item_other")), (Some(90), Some(155), None));
@@ -784,6 +789,7 @@ mod tests {
         assert_eq!(build.starting(&GameTexts::default()), build.start);
 
         assert!(!texts.can_be_bought("ITEM_FAMANGO") && texts.can_be_bought("item_bfury") && texts.can_be_bought("item_tango"));
+        assert!(!texts.can_be_bought("item_javelin"));
         build.start = vec![one("item_famango", 1, 900), one("item_tango", 1, 700)];
         assert_eq!(build.starting(&texts).len(), 1);
         build.items = vec![Bought { minute: 25, ..one("item_great_famango", 1, 300) }, Bought { minute: 16, ..one("item_bfury", 1, 800) }];
@@ -857,5 +863,18 @@ mod tests {
         assert!(texts.talents(PA).is_empty());
         assert!(!texts.is_part_of("item_pers", "item_bfury"));
         assert_eq!(texts.item_name("item_blink"), "Blink");
+    }
+
+    #[test]
+    fn a_talent_the_numbers_do_not_count_is_new_where_they_count_talents_the_hero_no_longer_has() {
+        let own = |ids: &[&str]| ids.iter().map(|id| Talent { id: id.to_string(), text: String::new() }).collect::<Vec<_>>();
+        let taken = |talent: &str, matches: u64| Taken { talent: talent.to_string(), matches, wins: matches / 2 };
+        let mut build = read(&file()).unwrap().of(PA, Rank::Archon, Role::Carry).unwrap().clone();
+        build.talents = vec![taken("special_bonus_a", 600), taken("special_bonus_old", 400), taken("special_bonus_none", 0)];
+        let now = own(&["special_bonus_a", "special_bonus_new", "special_bonus_none"]);
+        assert!(build.is_new_talent(&now, "special_bonus_new") && build.is_new_talent(&now, "SPECIAL_BONUS_NONE"));
+        assert!(!build.is_new_talent(&now, "special_bonus_a"));
+        let before = own(&["special_bonus_a", "special_bonus_old", "special_bonus_none", "special_bonus_new"]);
+        assert!(!build.is_new_talent(&before, "special_bonus_new") && !build.is_new_talent(&before, "special_bonus_none"));
     }
 }

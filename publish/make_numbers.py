@@ -187,6 +187,21 @@ class Asker:
         sys.exit("STRATZ kept refusing")
 
 
+def patches_of(versions, weeks):
+    """The name of the patch the weeks are of, or of the patches where they are of more than
+    one: "7.41f and 7.42". For the first two weeks of a patch, the weeks added up are of the
+    one before it (`weeks_to_add_up`), and the file says so rather than the newest patch's
+    name. `versions` are STRATZ's, with `name` and `asOfDateTime`."""
+    by_date = sorted(versions, key=lambda version: version["asOfDateTime"])
+    names = []
+    for version in by_date:
+        later = [other["asOfDateTime"] for other in by_date if other["asOfDateTime"] > version["asOfDateTime"]]
+        ended = min(later) if later else float("inf")
+        if version["asOfDateTime"] < max(weeks) + WEEK and ended > min(weeks):
+            names.append(version["name"])
+    return " and ".join(names) if len(names) <= 2 else f"{names[0]} to {names[-1]}"
+
+
 def weeks_to_add_up(weeks, patch_began, now):
     """The weeks to add up, newest first: the whole weeks since the newest patch began, no more
     than MOST_WEEKS, and where those are fewer than LEAST_WEEKS, the newest whole weeks there are."""
@@ -461,10 +476,10 @@ def roles_played(numbers, pair, hero):
     return sorted(often, key=lambda role: -played[role])[:MOST_ROLES]
 
 
-def make_builds(asker, now, numbers, heroes, few, patch_began):
+def make_builds(asker, now, numbers, heroes, few, patch):
     """The builds of every hero of the Draft page's numbers. `heroes` are STRATZ's numbers for
     the heroes, in the order of that file's list. `few`: for this many heroes only.
-    `patch_began`: when the patch began, for the pro matches of it."""
+    `patch`: STRATZ's newest, with its name and when it began, for the pro matches of it."""
     constants = asker.ask("{ constants { items { id name } abilities { id name isTalent } } }")["constants"]
     item_names = {item["id"]: item["name"] for item in constants["items"] if item.get("name")}
     skill_names = {skill["id"]: skill["name"] for skill in constants["abilities"] if skill.get("name")}
@@ -573,7 +588,7 @@ def make_builds(asker, now, numbers, heroes, few, patch_began):
 
     # What pros buy in each role, of the items STRATZ counts: a Town Portal Scroll that
     # everybody buys is not to be told.
-    pro_matches, pros = pro_builds(patch_began, now)
+    pro_matches, pros = pro_builds(patch["asOfDateTime"], now)
     countable = {item_names[item] for item in counted_items if item in item_names}
     pro_heroes = {}
     for (hero, role), (players, bought) in sorted(pros.items()):
@@ -586,7 +601,9 @@ def make_builds(asker, now, numbers, heroes, few, patch_began):
         "format": 2,
         "made": now,
         "source": "STRATZ",
-        "patch": numbers["patch"],
+        # STRATZ counts builds over the newest patch, whatever weeks the Draft page's
+        # numbers add up.
+        "patch": patch["name"],
         "sampled": sampled,
         "items": items,
         "skills": skills,
@@ -606,7 +623,7 @@ def place_of(names, name):
 
 def make(asker, now):
     """The numbers of the Draft page, STRATZ's numbers for the heroes in the order of its list,
-    and when the newest patch began."""
+    and STRATZ's newest patch."""
     start = asker.ask("{ constants { heroes { id name displayName } gameVersions { id name asOfDateTime } } heroStats { winWeek(heroIds:[1]) { week } } }")
     names = {hero["id"]: hero["name"] for hero in start["constants"]["heroes"] if hero.get("name")}
     patch = max(start["constants"]["gameVersions"], key=lambda version: version["id"])
@@ -665,14 +682,14 @@ def make(asker, now):
         "format": 1,
         "made": now,
         "source": "STRATZ",
-        "patch": patch["name"],
+        "patch": patches_of(start["constants"]["gameVersions"], weeks),
         "weeks": len(weeks),
         "heroes": [names[hero] for hero in heroes],
         "ranks": ranks,
         "pairs": pairs,
         "lanes": lanes,
     }
-    return numbers, heroes, patch["asOfDateTime"]
+    return numbers, heroes, patch
 
 
 def lane_sums(row):
@@ -818,6 +835,11 @@ def check():
     assert weeks_to_add_up(weeks, 8 * WEEK, now) == weeks[:3], "the weeks since the patch"
     assert weeks_to_add_up(weeks, 10 * WEEK - day, now) == weeks[:2], "two at the least, though one is before the patch"
     assert weeks_to_add_up(weeks, 0, 10 * WEEK + day)[0] == 9 * WEEK, "a week that is not over is left out"
+    versions = [{"name": "7.42", "asOfDateTime": 10 * WEEK + 5 * day}, {"name": "7.41f", "asOfDateTime": 3 * WEEK}, {"name": "7.41e", "asOfDateTime": WEEK}]
+    assert patches_of(versions, [9 * WEEK, 8 * WEEK]) == "7.41f", "the weeks before a patch are of the one before it"
+    assert patches_of(versions, [10 * WEEK, 9 * WEEK]) == "7.41f and 7.42", "a week a patch came in is of both"
+    assert patches_of(versions, [11 * WEEK]) == "7.42"
+    assert patches_of(versions, [10 * WEEK, 2 * WEEK]) == "7.41e to 7.42"
 
     # A build of 1000 matches. Item 1 is bought twice at the start by most, item 2 by few.
     starting = [
@@ -897,10 +919,10 @@ def main():
     os.makedirs(folder, exist_ok=True)
     asker = Asker(token())
     now = int(time.time())
-    numbers, heroes, patch_began = make(asker, now)
+    numbers, heroes, patch = make(asker, now)
     print(write(folder, "draft.json", numbers) + f", {len(numbers['heroes'])} heroes, patch {numbers['patch']}, {numbers['weeks']} weeks, {asker.asked} questions asked")
     few = int(os.environ.get("DME_FEW_HEROES") or 0)
-    builds = make_builds(asker, now, numbers, heroes, few, patch_began)
+    builds = make_builds(asker, now, numbers, heroes, few, patch)
     count = sum(len(of_hero) for of_hero in builds["heroes"].values())
     print(write(folder, "builds.json", builds) + f", {count} builds of {len(builds['heroes'])} heroes, {builds['sampled']:,} single matches, {asker.asked} questions asked in all")
 

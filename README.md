@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/b9ab0cfa70b52eaec96ff9c916953b3045b52017a8d66d2eae25a7b2dc74deaa"><img src="https://img.shields.io/badge/VirusTotal-1%20of%2070%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 1 of 70 scanners flag it" height="40"></a><!-- /virustotal -->
+  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/02f0bbe2c5ef23511e0fdbf139466593d1d8201d84a0f98a2473407742a3fb4e"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
   &nbsp;
   <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
@@ -139,6 +139,7 @@ link opens the full result for that file. A release that Microsoft's scanner fla
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.4.1 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/02f0bbe2c5ef23511e0fdbf139466593d1d8201d84a0f98a2473407742a3fb4e) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/55cb557aa17c40acf6ee8177ccad6cfed4b79a3d86779720b80a78771c4870a7) |
 | 0.4.0 | [1 of 70 scanners flag it](https://www.virustotal.com/gui/file/b9ab0cfa70b52eaec96ff9c916953b3045b52017a8d66d2eae25a7b2dc74deaa) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/a9e7c80cbe294558087a0885cc2cecc9ad8f6a1e62e50f84e21ebd38010ee7f2) |
 | 0.3.2 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/7efdadc964c060d0e6a69f070fc155ae6dad05b7b35c91e18f3e8f8a3208c877) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/74506bb8b79458091e42c00c0655b8720b4603e6607415914102214257e8170c) |
 | 0.3.1 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/5817342e8a8d41ab8453b670a86cd20b872aab0e64121810db78437f6be0d2bf) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/33c350cac7ba91fa8578b2904faf427581d14413692b2a5d98a0adcdcf36b2e5) |

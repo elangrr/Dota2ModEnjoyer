@@ -42,6 +42,18 @@ pub enum DevCommand {
         #[arg(long, value_name = "VPK")]
         from: Option<PathBuf>,
     },
+    /// Print the values of a compiled file that holds them as KeyValues 3: a particle file, a
+    /// file of sound events.
+    Values {
+        /// Path inside the archive, such as particles/ui_mouseactions/selected_ring.vpcf_c.
+        path: String,
+        /// Print this member of the values alone, such as the name of a sound event.
+        #[arg(long)]
+        member: Option<String>,
+        /// A `*_dir.vpk` file to read instead of the game's archive.
+        #[arg(long, value_name = "VPK")]
+        from: Option<PathBuf>,
+    },
     /// List exactly what differs between the game's item database and the one in a mod package.
     Compare {
         /// The package to compare with. Defaults to the installed mod package.
@@ -85,6 +97,10 @@ pub enum DevCommand {
     Sounds,
     /// Say where Play puts the bodies that items give heroes, and the models of their forms.
     Bodies,
+    /// Read every particle file in the game's archive whose values are of an earlier version
+    /// and write it again, to check that it comes out the same; then say what each emblem's
+    /// effect is held by, and whether Play can give it to the hero.
+    Particles,
     /// Write one of the game's pictures as a PNG file.
     Picture {
         /// A path in the archive, or a picture's name such as econ/terrain/desert_terrain.
@@ -217,6 +233,7 @@ pub fn run(dota: &DotaInstall, command: DevCommand) -> Result<()> {
         DevCommand::CheckVpk { file } => check_vpk(&file.unwrap_or_else(|| dota.game_archive())),
         DevCommand::CheckSignatures => check_signatures(dota),
         DevCommand::Extract { path, out, from } => extract(&from.unwrap_or_else(|| dota.game_archive()), &path, &out),
+        DevCommand::Values { path, member, from } => values(&from.unwrap_or_else(|| dota.game_archive()), &path, member.as_deref()),
         DevCommand::Compare { package } => compare(dota, &package.unwrap_or_else(|| dota.mod_package())),
         DevCommand::Item { id, from } => item(&from.unwrap_or_else(|| dota.game_archive()), &id),
         DevCommand::Keys => keys(dota),
@@ -227,12 +244,79 @@ pub fn run(dota: &DotaInstall, command: DevCommand) -> Result<()> {
         DevCommand::Effects => effects::effects(dota),
         DevCommand::Sounds => sounds(dota),
         DevCommand::Bodies => bodies(dota),
+        DevCommand::Particles => particles(dota),
         DevCommand::Picture { image, out } => picture(dota, &image, &out),
         DevCommand::Find { text, limit, from } => find(&from.unwrap_or_else(|| dota.game_archive()), &text, limit),
         DevCommand::Name { token, file } => name(dota, &token, &file),
         DevCommand::Builds { file, hero } => builds(dota, &file, hero.as_deref()),
         command @ (DevCommand::UpdateKey { .. } | DevCommand::Release { .. }) => run_without_game(command),
     }
+}
+
+fn particles(dota: &DotaInstall) -> Result<()> {
+    use dme_core::kv3::earlier;
+    let archive = Archive::open(&dota.game_archive())?;
+    let mut paths: Vec<String> = archive.entries().iter().map(|entry| archive.path_of(entry)).filter(|path| path.ends_with(".vpcf_c")).collect();
+    paths.sort();
+    let started = Instant::now();
+    let (mut same, mut later, mut differ, mut unread) = (0, 0, Vec::new(), Vec::new());
+    for path in &paths {
+        let bytes = archive.read(path)?.with_context(|| format!("{path} is not in the game's archive"))?;
+        let again = Compiled::parse(&bytes).and_then(|compiled| {
+            if !earlier::is_earlier(compiled.data()) {
+                return Ok(None);
+            }
+            let written = earlier::read(compiled.data())?.write()?;
+            Ok(Some(earlier::unpacked(compiled.data())? == earlier::unpacked(&written)?))
+        });
+        match again {
+            Ok(None) => later += 1,
+            Ok(Some(true)) => same += 1,
+            Ok(Some(false)) => differ.push(path.clone()),
+            Err(error) => unread.push(format!("{path}: {error}")),
+        }
+    }
+    println!(
+        "{} particle files in {:.1} s: {same} of an earlier version written again exactly as they were, {} not, {} not read; {later} of the fifth version, not looked at",
+        paths.len(),
+        started.elapsed().as_secs_f32(),
+        differ.len(),
+        unread.len()
+    );
+    for path in differ.iter().take(20) {
+        println!("  DIFFERS {path}");
+    }
+    for line in unread.iter().take(20) {
+        println!("  not read: {line}");
+    }
+
+    let bytes = archive.read(engine::ITEMS_GAME)?.context("the item database is not in the game's archive")?;
+    let game = ItemsGame::parse(&bytes)?;
+    let emblems: Vec<&Item<'_>> = game.items().iter().filter(|item| !dme_core::effects::emblem_blocks(&game, item).is_empty()).collect();
+    println!("
+EMBLEMS: {} with an effect that shows on a hero", emblems.len());
+    let mut failed = differ.len() + unread.len();
+    for item in emblems {
+        for block in dme_core::effects::emblem_blocks(&game, item) {
+            let Some(system) = block.value.as_block().and_then(|block| block.str("modifier")).and_then(|system| std::str::from_utf8(system).ok()) else { continue };
+            let path = format!("{}_c", dme_core::resource::normal(system));
+            let held = archive.read(&path)?.context("the game does not have it").and_then(|data| Ok(dme_core::effects::held_on_the_hero(&data)?));
+            let outcome = match held {
+                Ok(None) => "held by the hero, as the game has it".to_string(),
+                Ok(Some(file)) => format!("held by the item that creates it: Play gives it to the hero ({} bytes)", file.len()),
+                Err(error) => {
+                    failed += 1;
+                    format!("FAILED: {error:#}")
+                }
+            };
+            println!("  {:>5} {}: {outcome}
+        {path}", item.id, item.name.unwrap_or(item.id));
+        }
+    }
+    if failed > 0 {
+        bail!("{failed} files FAILED");
+    }
+    Ok(())
 }
 
 fn sounds(dota: &DotaInstall) -> Result<()> {
@@ -989,12 +1073,25 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     println!("heroes that show it only while a slot with items to pick is on its default: {}", if unsure.is_empty() { "none".to_string() } else { unsure.join(", ") });
     let started = Instant::now();
     let mut outcome = Outcome { rounds: emblems.len(), ..Outcome::default() };
+    let mut given_to_the_hero = 0;
     for id in &emblems {
         match apply::patch_with(&game, &bytes, &[Pick::world(dme_core::effects::EMBLEM_SLOT, id)], &live) {
-            Ok(patched) => outcome.changes.extend(patched.changes),
+            Ok(patched) => {
+                for file in patched.changes.iter().flat_map(|change| &change.files) {
+                    let path = format!("{}_c", dme_core::resource::normal(file));
+                    let held = archive.read(&path)?.map(|data| dme_core::effects::held_on_the_hero(&data));
+                    match held {
+                        Some(Ok(Some(_))) => given_to_the_hero += 1,
+                        Some(Err(error)) => outcome.failures.push(format!("emblem={id}: {path}: {error}")),
+                        Some(Ok(None)) | None => {}
+                    }
+                }
+                outcome.changes.extend(patched.changes);
+            }
             Err(error) => outcome.failures.push(format!("emblem={id}: {error}")),
         }
     }
+    println!("{given_to_the_hero} of the emblems' effects are held by the item that creates them, and are given to the hero");
     outcome.seconds = started.elapsed().as_secs_f32();
     failed += outcome.report(dota, &archive);
 
@@ -1402,6 +1499,65 @@ fn extract(vpk: &Path, path: &str, out: &Path) -> Result<()> {
         opened.as_millis(),
         read.as_millis()
     );
+    Ok(())
+}
+
+fn values(vpk: &Path, path: &str, member: Option<&str>) -> Result<()> {
+    use dme_core::kv3::{Value, earlier};
+    let archive = Archive::open(vpk)?;
+    let contents = archive.read(path)?.with_context(|| format!("{path} is not in {}", vpk.display()))?;
+    let compiled = Compiled::parse(&contents)?;
+    let root = if earlier::is_earlier(compiled.data()) { earlier::read(compiled.data())?.root } else { compiled.values()? };
+    fn short(value: &Value) -> Option<String> {
+        Some(match value {
+            Value::Plain(1) => "null".to_string(),
+            Value::Plain(13) | Value::Bool(true) => "true".to_string(),
+            Value::Plain(14) | Value::Bool(false) => "false".to_string(),
+            Value::Plain(15 | 17) => "0".to_string(),
+            Value::Plain(16 | 18) => "1".to_string(),
+            Value::Plain(kind) => format!("(kind {kind})"),
+            Value::Int(_, number) => number.to_string(),
+            Value::Double(number) => number.to_string(),
+            Value::String(text) => format!("{:?}", text.as_deref().unwrap_or_default()),
+            Value::Marked(mark, inner) => format!("{} (mark {mark})", short(inner)?),
+            Value::Array(items) | Value::Typed(_, _, items) if items.iter().all(|item| !matches!(item, Value::Object(_) | Value::Array(_) | Value::Typed(..))) => {
+                format!("[{}]", items.iter().filter_map(short).collect::<Vec<_>>().join(", "))
+            }
+            _ => return None,
+        })
+    }
+    fn show(value: &Value, depth: usize) {
+        let pad = "  ".repeat(depth);
+        match value {
+            Value::Object(members) => {
+                for (name, value) in members {
+                    match short(value) {
+                        Some(text) => println!("{pad}{name}: {text}"),
+                        None => {
+                            println!("{pad}{name}:");
+                            show(value, depth + 1);
+                        }
+                    }
+                }
+            }
+            Value::Array(items) | Value::Typed(_, _, items) => {
+                for (index, item) in items.iter().enumerate() {
+                    match short(item) {
+                        Some(text) => println!("{pad}[{index}] {text}"),
+                        None => {
+                            println!("{pad}[{index}]");
+                            show(item, depth + 1);
+                        }
+                    }
+                }
+            }
+            other => println!("{pad}{}", short(other).unwrap_or_default()),
+        }
+    }
+    match member {
+        Some(name) => show(root.get(name).with_context(|| format!("{path} has no member {name}"))?, 0),
+        None => show(&root, 0),
+    }
     Ok(())
 }
 

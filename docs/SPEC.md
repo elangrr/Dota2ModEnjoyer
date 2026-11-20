@@ -721,6 +721,60 @@ blocks of the file, such as `RED2`, are about how it was made.
 once unpacked, and 6 are compressed another way and are not read (music, fan voices and one of
 the tools'; none is a hero's).
 
+### 2.15 Particle files, and what holds an effect
+
+An effect is a particle system, a compiled file `x.vpcf_c` (2.13), 83,719 of them on build
+6986. Its block `DATA` holds a `CParticleSystemDefinition` as KeyValues 3 in binary: of the
+fifth version (2.14) in 9,756 files that were compiled lately, and of the second, third or
+fourth in the other 73,963, the files of every emblem among them.
+
+Those earlier versions start with their number and `3VK`, 16 bytes that name the format, and a
+header of four-byte numbers: how the values are compressed (0 not at all, 1 as one block of
+LZ4), a dictionary and a frame size (two bytes each), how many single bytes, four-byte numbers
+and eight-byte numbers there are, the size of the strings and kinds together, how many objects
+and how many arrays there are (two bytes each), the size of the buffer unpacked and packed, and
+how many blocks of bytes follow (none in particle files). The fourth version has two numbers
+more, the first of them the count of two-byte numbers (none either). Then comes one buffer, in
+streams that are read side by side:
+
+- single bytes: each boolean, and the length of each short array (kind 24, fourth version);
+- padding to a multiple of four, then the four-byte numbers: first how many strings there are,
+  then the index of a string for every key and every string value, whole numbers, and the
+  length of every object, array (kind 8) and long typed array (kind 10);
+- padding to a multiple of eight, then the eight-byte numbers, most of them doubles;
+- the strings, each ending in a zero byte;
+- one byte for each value saying what kind it is, the kinds of 2.14 and 10; a kind with its
+  top bit set is followed by one byte more, a mark: `86 01` is a string that names another
+  file of the game's, as `m_ChildRef` does for a part of the effect;
+- `00 DD EE FF`.
+
+The header counts objects and arrays of every kind, those inside typed arrays too. `dme dev
+particles` reads every such file and writes it again: all 73,963 come out the same once
+unpacked.
+
+**What holds an effect.** A particle system is placed by its control points; the first, number
+0, is where the effect is. The file says in itself what holds each point, in
+`m_controlPointConfigurations`: a list of configurations (nearly always one, named `preview`),
+each with `m_drivers`, one driver for a point:
+
+```
+m_iControlPoint   1                       (left out for point 0)
+m_iAttachType     "PATTACH_POINT_FOLLOW"  (left out for the usual way: at the origin, following)
+m_attachmentName  "attach_blade"
+m_entityName      "self"                  ("parent", "self_with_wearables")
+```
+
+For an effect that an item creates (a block `particle_create`, 2.11), `self` is the item and
+`parent` is the hero who wears it. That is what the game goes by, and not the name
+`preview`: of the 2,742 systems that items create, 2,016 are not in the list of 2.11 at all,
+and their files hold the attachment points their effects sit on (`attach_eye_l` on
+`self_with_wearables`, `attach_blade` on `self`). Where a system is in the list too, the two
+agree: an entry `absorigin_follow` on `parent` is a driver that names `parent` and no way of
+holding, 77 times. Axe's Bloodchaser, an axe, creates its sparks on the ground that way.
+
+An entry added to the list for a system whose file says otherwise changed nothing in a match
+(2026-11-20): the file is what counts.
+
 ## 3. What the tool does
 
 ### 3.1 Find Dota
@@ -1595,6 +1649,30 @@ slot is picked twice.
 
 The effects of emblems are not in the list of effects that says how to attach one (2.11).
 Neither are 1,859 of the 2,343 effects that the things heroes wear create, and those show.
+What holds an emblem's effect is said in its own file (2.15), and the emblems differ:
+
+| Emblem | The driver of control point 0 |
+|---|---|
+| Sunken (638), Crystal Echelon (663), Overgrown (12996) | `parent`, the usual way |
+| Divinity (13815), Nemestice 2021 (18787), Aghanim's 2021 (22263), Battle Pass 2022 (23238), the four of Diretide (13453, 18379, 18393, 18394) | `self`, `PATTACH_WORLDORIGIN` |
+
+In Dota the emblem's item has no model, so `self` is where the hero stands, and both kinds stay
+at the hero's feet. Here the emblem rides on a piece the hero wears, so an emblem of the second
+kind is held by that piece and goes where the piece goes: the user saw the Nemestice emblem
+follow the hero's attacks (2026-11-20), where an emblem of the first kind had stayed put.
+
+So Play puts each emblem's effect file in the package, at the game's own path, with the driver
+of point 0 of every configuration made like the first kind's: `m_entityName` is `parent`, and
+`m_iAttachType` is left out. Nothing else in the file changes: not the drivers of its other
+points, which give those points their numbers, not the parts it names, and not the blocks
+before `DATA`. The values are written without compressing them, as the game has 192 of its own
+particle files. A file that says `parent` already is left to the game. So is one that this tool
+does not understand to the last byte: read and written again untouched it has to come out the
+same, or it is not changed, and the emblem shows as the game's file has it. `dme dev try-all`
+counts such a file as FAILED, and `dme dev particles` says what each emblem's file says.
+
+An entry for the emblem's system in the list of 2.11 (`absorigin_follow`, `parent`) was tried
+first and changed nothing in a match; it was taken out again.
 
 **(to confirm in game)**
 

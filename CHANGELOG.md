@@ -2,6 +2,11 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.4.2
+
+- An emblem should now stay at the hero's feet. The newer emblems, such as the Nemestice 2021, Aghanim's 2021, Battle Pass 2022, Divinity and Diretide ones, used to jump around with the hero's attacks.
+- Press Play once after updating, so that the emblem is put in the game the new way.
+
 ## 0.4.1
 
 - Ready for Dota 7.42. Items the patch took out of the game, such as the Javelin and the Helm of the Overlord, are no longer listed in builds.

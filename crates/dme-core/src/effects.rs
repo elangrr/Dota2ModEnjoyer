@@ -1,6 +1,8 @@
 use crate::apply::Pick;
+use crate::error::{Error, Result};
 use crate::items::{Item, ItemsGame};
 use crate::kv::Pair;
+use crate::kv3::{self, Compiled, Value, earlier};
 
 pub const SLOT_PREFIX: &str = "fx_";
 
@@ -154,6 +156,72 @@ pub fn emblem_blocks<'a>(game: &ItemsGame<'a>, item: &Item<'a>) -> Vec<Pair<'a>>
         says("type", CREATING) && names_something("modifier") && !names_something("asset") && !says(LOADOUT_ONLY, b"1")
     };
     visuals.pairs().filter(shows_on_a_hero).collect()
+}
+
+pub fn held_on_the_hero(file: &[u8]) -> Result<Option<Vec<u8>>> {
+    const WHAT: &str = "an emblem's effect file";
+    let compiled = Compiled::parse(file)?;
+    let mut document = earlier::read(compiled.data())?;
+    if earlier::unpacked(&document.write()?)? != earlier::unpacked(compiled.data())? {
+        return Err(Error::format(WHAT, "it does not come out as it went in"));
+    }
+    let configurations = members_mut(&mut document.root).and_then(|members| member_mut(members, "m_controlPointConfigurations")).and_then(items_mut);
+    let mut changed = false;
+    for configuration in configurations.into_iter().flatten() {
+        let drivers = members_mut(configuration).and_then(|members| member_mut(members, "m_drivers")).and_then(items_mut);
+        for driver in drivers.into_iter().flatten().filter_map(members_mut) {
+            let is_first = match driver.iter().find(|(name, _)| name == POINT) {
+                None | Some((_, Value::Plain(kv3::ZERO) | Value::Int(_, 0))) => true,
+                Some(_) => false,
+            };
+            if !is_first {
+                continue;
+            }
+            let parent = Value::String(Some(PARENT.to_string()));
+            let before = driver.len();
+            driver.retain(|(name, _)| name != ATTACH_TYPE);
+            changed |= driver.len() != before;
+            match member_mut(driver, ENTITY) {
+                Some(entity) if *entity == parent => {}
+                Some(entity) => {
+                    *entity = parent;
+                    changed = true;
+                }
+                None => {
+                    driver.push((ENTITY.to_string(), parent));
+                    changed = true;
+                }
+            }
+        }
+    }
+    if !changed {
+        return Ok(None);
+    }
+    document.not_compressed();
+    compiled.with_data(&document.write()?).map(Some)
+}
+
+const POINT: &str = "m_iControlPoint";
+const ENTITY: &str = "m_entityName";
+const ATTACH_TYPE: &str = "m_iAttachType";
+const PARENT: &str = "parent";
+
+fn members_mut(value: &mut Value) -> Option<&mut Vec<(String, Value)>> {
+    match value {
+        Value::Object(members) => Some(members),
+        _ => None,
+    }
+}
+
+fn member_mut<'v>(members: &'v mut [(String, Value)], key: &str) -> Option<&'v mut Value> {
+    members.iter_mut().find(|(name, _)| name == key).map(|(_, value)| value)
+}
+
+fn items_mut(value: &mut Value) -> Option<&mut Vec<Value>> {
+    match value {
+        Value::Array(items) | Value::Typed(_, _, items) => Some(items),
+        _ => None,
+    }
 }
 
 const CREATING: &[u8] = b"particle_create";
@@ -805,6 +873,60 @@ pub(crate) mod tests {
 
     pub(crate) fn emblems() -> String {
         crate::items::tests::laid_out(EMBLEMS_TEXT, "\n")
+    }
+
+    pub(crate) fn emblem_file(entity: &str, attach: Option<&str>) -> Vec<u8> {
+        use crate::kv3::tests::{file_with, object, text};
+        const OBJECT: u8 = 9;
+        const LONG_ARRAY: u8 = 10;
+        let mut first = vec![("m_entityName", text(entity))];
+        if let Some(attach) = attach {
+            first.insert(0, ("m_iAttachType", text(attach)));
+        }
+        let second = object(&[("m_iControlPoint", Value::Int(11, 2)), ("m_iAttachType", text("PATTACH_WORLDORIGIN")), ("m_entityName", text("self"))]);
+        let preview = object(&[("m_name", text("preview")), ("m_drivers", Value::Typed(LONG_ARRAY, OBJECT, vec![object(&first), second]))]);
+        let part = object(&[("m_ChildRef", Value::Marked(1, Box::new(text("particles/events/t21/ring.vpcf"))))]);
+        let root = object(&[
+            ("_class", text("CParticleSystemDefinition")),
+            ("m_controlPointConfigurations", Value::Typed(LONG_ARRAY, OBJECT, vec![preview])),
+            ("m_Children", Value::Typed(LONG_ARRAY, OBJECT, vec![part])),
+        ]);
+        file_with(&earlier::Document::made(2, 1, root).write().unwrap(), true)
+    }
+
+    pub(crate) fn drivers_of(file: &[u8]) -> Vec<Vec<(String, Value)>> {
+        let document = earlier::read(Compiled::parse(file).unwrap().data()).unwrap();
+        let Some(Value::Typed(_, _, configurations)) = document.root.get("m_controlPointConfigurations") else { panic!("no configurations") };
+        let Some(Value::Typed(_, _, drivers)) = configurations[0].get("m_drivers") else { panic!("no drivers") };
+        drivers.iter().map(|driver| if let Value::Object(members) = driver { members.clone() } else { panic!() }).collect()
+    }
+
+    #[test]
+    fn an_emblem_held_by_the_item_is_given_to_the_hero() {
+        use crate::kv3::tests::text;
+        let file = emblem_file("self", Some("PATTACH_WORLDORIGIN"));
+        let held = held_on_the_hero(&file).unwrap().expect("the file changes");
+        let drivers = drivers_of(&held);
+        assert_eq!(drivers[0], [("m_entityName".to_string(), text("parent"))]);
+        assert_eq!(drivers[1], drivers_of(&file)[1]);
+        let values = |file: &[u8]| earlier::read(Compiled::parse(file).unwrap().data()).unwrap().root;
+        assert_eq!(values(&held).get("m_Children"), values(&file).get("m_Children"));
+        assert_eq!(values(&held).get("_class"), values(&file).get("_class"));
+        let start = file.len() - Compiled::parse(&file).unwrap().data().len();
+        assert_eq!(held[40..start], file[40..start]);
+        assert_eq!(u32::from_le_bytes([held[0], held[1], held[2], held[3]]) as usize, held.len());
+
+        assert_eq!(held_on_the_hero(&held).unwrap(), None);
+        assert_eq!(held_on_the_hero(&emblem_file("parent", None)).unwrap(), None);
+        let held = held_on_the_hero(&emblem_file("parent", Some("PATTACH_WORLDORIGIN"))).unwrap().unwrap();
+        assert_eq!(drivers_of(&held)[0], [("m_entityName".to_string(), text("parent"))]);
+    }
+
+    #[test]
+    fn an_effect_file_that_is_not_understood_is_refused() {
+        assert!(held_on_the_hero(b"compiled").is_err());
+        let fifth = crate::kv3::tests::compiled(&crate::kv3::tests::object(&[]));
+        assert!(held_on_the_hero(&fifth).is_err());
     }
 
     fn modifiers(variant: &Variant<'_>) -> Vec<String> {

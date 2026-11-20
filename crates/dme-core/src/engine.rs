@@ -16,7 +16,7 @@ use crate::{bodies, effects, fsutil, gameinfo, map_effect, process, sounds, tree
 
 pub const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
-const REWRITE_RULES: u32 = 11;
+const REWRITE_RULES: u32 = 12;
 
 const BRANCH_FILE: &str = "gameinfo_branchspecific.gi";
 const VERIFY_HINT: &str =
@@ -189,11 +189,19 @@ impl Engine {
         let swaps = sounds::swaps(&game, &after);
         drop(after);
         let sound_files = if swaps.is_empty() { Vec::new() } else { sounds::Sounds::read(&archive)?.files_for(&swaps)?.files };
+        let mut emblem_files: Vec<NewFile> = Vec::new();
+        for change in patched.changes.iter().filter(|change| change.hero.is_none() && change.slot == effects::EMBLEM_SLOT) {
+            for path in change.files.iter().map(|file| compiled(file)) {
+                let held = archive.read(&path)?.and_then(|data| effects::held_on_the_hero(&data).ok().flatten());
+                emblem_files.extend(held.map(|data| (path, data)));
+            }
+        }
         let apply::Patched { bytes, mut changes, .. } = patched;
         let mut own_files: Vec<NewFile> = moved;
-        own_files.retain(|(path, _)| !placed_files.iter().chain(&sound_files).any(|(placed, _)| placed == path));
+        own_files.retain(|(path, _)| !placed_files.iter().chain(&sound_files).chain(&emblem_files).any(|(placed, _)| placed == path));
         own_files.extend(placed_files);
         own_files.extend(sound_files);
+        own_files.extend(emblem_files);
         let mut slots_taken: Vec<&str> = Vec::new();
         for (place, pick) in picks.iter().enumerate().filter(|(_, pick)| is_a_file(pick)) {
             if slots_taken.iter().any(|taken| taken.eq_ignore_ascii_case(&pick.slot)) {
@@ -660,6 +668,28 @@ mod tests {
         let without = fake_install_of(&items, &[effect]);
         without.engine.apply(&emblem).unwrap();
         assert_eq!(carriers(&without), ["3", "6", "8"]);
+    }
+
+    #[test]
+    fn an_emblems_effect_goes_in_the_package_held_by_the_hero() {
+        use crate::effects::tests::{drivers_of, emblem_file};
+        use crate::kv3::tests::text;
+        let items = crate::effects::tests::emblems();
+        let path = "particles/events/t17/hero_effect.vpcf_c";
+        let emblem = [Pick::world("emblem", "638")];
+        let package_of = |file: &[u8]| {
+            let fake = fake_install_of(&items, &[(path, file)]);
+            fake.engine.apply(&emblem).unwrap();
+            Archive::open(&fake.engine.dota.mod_package()).unwrap()
+        };
+
+        let package = package_of(&emblem_file("self", Some("PATTACH_WORLDORIGIN")));
+        let written = package.read(path).unwrap().expect("the emblem's effect is in the package");
+        assert_eq!(drivers_of(&written)[0], [("m_entityName".to_string(), text("parent"))]);
+        assert_eq!(package.len(), 2);
+
+        assert!(!package_of(&emblem_file("parent", None)).contains(path));
+        assert!(!package_of(b"compiled").contains(path));
     }
 
     #[test]

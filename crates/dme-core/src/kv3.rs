@@ -7,6 +7,8 @@ const TRAILER: u32 = 0xFFEE_DD00;
 const HEADER: usize = 20 + 25 * 4;
 const LZ4: u32 = 1;
 
+pub const ZERO: u8 = kind::INT_ZERO;
+
 mod kind {
     pub const NULL: u8 = 1;
     pub const BOOL: u8 = 2;
@@ -38,6 +40,7 @@ pub enum Value {
     Array(Vec<Value>),
     Object(Vec<(String, Value)>),
     Typed(u8, u8, Vec<Value>),
+    Marked(u8, Box<Value>),
 }
 
 impl Value {
@@ -56,6 +59,7 @@ impl Value {
         match self {
             Value::String(Some(text)) => visit(key, text),
             Value::Array(items) | Value::Typed(_, _, items) => items.iter().for_each(|item| item.strings_under(key, visit)),
+            Value::Marked(_, value) => value.strings_under(key, visit),
             Value::Object(members) => members.iter().for_each(|(name, value)| value.strings_under(Some(name), visit)),
             _ => {}
         }
@@ -106,9 +110,12 @@ impl<'a> Compiled<'a> {
     }
 
     pub fn with_values(&self, value: &Value) -> Result<Vec<u8>> {
-        let block = write(value, self.data())?;
+        self.with_data(&write(value, self.data())?)
+    }
+
+    pub fn with_data(&self, block: &[u8]) -> Result<Vec<u8>> {
         let mut out = self.file[..self.data.start].to_vec();
-        out.extend_from_slice(&block);
+        out.extend_from_slice(block);
         let total = u32::try_from(out.len()).map_err(|_| Error::format(WHAT, "the file would be too big"))?;
         out[0..4].copy_from_slice(&total.to_le_bytes());
         out[self.entry + 8..self.entry + 12].copy_from_slice(&(block.len() as u32).to_le_bytes());
@@ -392,7 +399,8 @@ impl Writer {
             Value::String(_) => kind::STRING,
             Value::Array(_) => kind::ARRAY,
             Value::Object(_) => kind::OBJECT,
-            Value::Typed(kind, _, _) => *kind,
+            Value::Typed(kind @ (kind::SHORT_ARRAY | kind::SIDE_ARRAY), _, _) => *kind,
+            Value::Typed(..) | Value::Marked(..) => return Err(Error::format(WHAT, "it has a value that the fifth version is not known to write")),
         };
         match of {
             Some(of) if of != kind => return Err(Error::format(WHAT, "an item of a typed array is not of the array's kind")),
@@ -400,7 +408,7 @@ impl Writer {
             None => self.kinds.push(kind),
         }
         match value {
-            Value::Plain(_) => {}
+            Value::Plain(_) | Value::Marked(..) => {}
             Value::Bool(value) => self.bytes.push(u8::from(*value)),
             Value::Int(kind::INT32 | kind::UINT32, value) => self.int(*value as i32),
             Value::Int(_, value) => self.eights.extend_from_slice(&value.to_le_bytes()),
@@ -589,6 +597,8 @@ pub mod lz4 {
         out
     }
 }
+
+pub mod earlier;
 
 #[cfg(test)]
 pub(crate) mod tests;

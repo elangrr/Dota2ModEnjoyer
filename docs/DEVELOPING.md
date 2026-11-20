@@ -48,6 +48,8 @@ dme dev catalog                 count what the app offers, read every picture it
 dme dev effects                 how the game describes ability effects worn apart from their item
 dme dev sounds                  write every file of sound events again and compare; make the heroes' sounds for every item
 dme dev bodies                  where Play puts the bodies that items give heroes, and the models of their forms
+dme dev particles               write every particle file of an earlier version again and compare; what holds each emblem's effect
+dme dev values <path>           print the values of a compiled file (a particle file, a file of sound events); --member for one of them
 dme dev compare                 list exactly what the installed mod package changes
 dme dev item 595                print one item as the game stores it (--from <vpk> for the mod package)
 dme dev picture <image> <png>   write one of the game's pictures as a PNG file

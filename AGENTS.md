@@ -62,7 +62,7 @@ whether a request is one of the above, ask the person before writing code.
 | Path | What is there |
 |---|---|
 | `crates/dme-core/src/` | Everything that reads and writes files; no window, no command line |
-| `kv.rs`, `kv3.rs`, `vpk.rs`, `hash.rs`, `pictures.rs`, `names.rs`, `resource.rs` | Valve's formats: KeyValues text, binary KeyValues 3 (the game's files of sound events), VPK archives, checksums, textures, name files, what a compiled file names |
+| `kv.rs`, `kv3.rs`, `vpk.rs`, `hash.rs`, `pictures.rs`, `names.rs`, `resource.rs` | Valve's formats: KeyValues text, binary KeyValues 3 (the game's files of sound events, and in `kv3/earlier.rs` its particle files), VPK archives, checksums, textures, name files, what a compiled file names |
 | `items.rs`, `heroes.rs` | The item database (`items_game.txt`) and each hero's own file |
 | `catalog.rs` | What a player can pick, with names and pictures, for the app and `dme` to show |
 | `loadout.rs`, `share.rs` | The picks a player made, as saved between runs; share codes of picks |

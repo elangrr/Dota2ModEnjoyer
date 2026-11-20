@@ -123,8 +123,12 @@ fn bytes_packed_as_lz4_unpack_to_themselves() {
 }
 
 fn compiled_in(values: &Value, data_last: bool) -> Vec<u8> {
+    file_with(&write(values, &like()).unwrap(), data_last)
+}
+
+pub(crate) fn file_with(data: &[u8], data_last: bool) -> Vec<u8> {
     let other = b"RED2 editing info".to_vec();
-    let data = write(values, &like()).unwrap();
+    let data = data.to_vec();
     let mut blocks = vec![(b"RED2", &other), (b"DATA", &data)];
     if !data_last {
         blocks.reverse();

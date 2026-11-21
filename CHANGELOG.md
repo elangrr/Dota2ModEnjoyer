@@ -2,6 +2,12 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.4.3
+
+- After a Dota update, the app reads the game's files again by itself. Left open through an update, it used to show some pictures empty and some names wrong until it was started again.
+- What pros buy, such as the Bottle of a mid, stays in the builds through the first weeks of a new patch, when too few pro matches have been played on it to go by.
+- "Copy details" and "Report" leave the name of your Windows account out where it has a letter such as the Turkish İ, too.
+
 ## 0.4.2
 
 - An emblem should now stay at the hero's feet. The newer emblems, such as the Nemestice 2021, Aghanim's 2021, Battle Pass 2022, Divinity and Diretide ones, used to jump around with the hero's attacks.

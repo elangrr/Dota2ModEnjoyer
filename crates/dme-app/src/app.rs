@@ -112,6 +112,9 @@ pub struct App {
     banner: Option<Banner>,
     close_when_done: bool,
     tidy_tried: bool,
+    read_at: Option<String>,
+    reading_again: bool,
+    read_again: (String, u32),
 
     tab: Tab,
     hero: Option<String>,
@@ -205,6 +208,9 @@ impl App {
             banner,
             close_when_done: false,
             tidy_tried: false,
+            read_at: None,
+            reading_again: false,
+            read_again: (String::new(), 0),
             tab: Tab::Heroes,
             hero: None,
             hero_search: String::new(),
@@ -269,15 +275,22 @@ impl App {
                     self.archive = Some(Arc::clone(&loaded.archive));
                     (self.texts, self.texts_coming) = (None, None);
                     self.pictures.use_archive(loaded.archive);
+                    (self.read_at, self.reading_again) = (Some(loaded.build), false);
                     self.take_catalog(loaded.catalog);
                 }
-                Reply::Loaded(Err(failure)) => self.load_failure = Some(failure),
+                Reply::Loaded(Err(failure)) => {
+                    self.reading_again = false;
+                    if self.catalog.is_none() {
+                        self.load_failure = Some(failure);
+                    }
+                }
                 Reply::Game(game) => {
                     if game.running {
                         self.starting_until = None;
                     }
                     self.game = Some(game);
                     self.tidy_if_half_undone();
+                    self.read_again_after_an_update();
                 }
                 Reply::Tidied(done) => {
                     self.busy = None;
@@ -316,6 +329,7 @@ impl App {
                 }
                 Reply::Stopped(failure) => {
                     self.busy = None;
+                    self.reading_again = false;
                     if self.catalog.is_none() {
                         self.load_failure = Some(failure.clone());
                     }
@@ -405,10 +419,11 @@ impl App {
             }
             self.save_picks();
         }
-        if let Some(target) = self.options.open.clone() {
+        if let Some(target) = self.options.open.take() {
             self.open(&catalog, &target);
         }
         self.rarities_asked.clear();
+        self.found = views::heroes::Found::default();
         self.catalog = Some(catalog);
     }
 
@@ -499,6 +514,16 @@ impl App {
         self.tidy_tried = true;
         self.busy = Some(Busy::Restoring);
         worker.send(Job::Tidy);
+    }
+
+    fn read_again_after_an_update(&mut self) {
+        let (Some(game), Some(read_at), Some(worker)) = (&self.game, &self.read_at, &self.worker) else { return };
+        let tries = if self.read_again.0 == game.build { self.read_again.1 } else { 0 };
+        if self.reading_again || !reads_again(read_at, &game.build, game.steam_busy, tries) {
+            return;
+        }
+        (self.reading_again, self.read_again) = (true, (game.build.clone(), tries + 1));
+        worker.send(Job::Load);
     }
 
     fn play(&mut self) {
@@ -1130,7 +1155,7 @@ impl App {
         if answer.copy_details
             && let Some(failure) = self.numbers.failure()
         {
-            self.copy(ui.ctx(), &failure.details);
+            self.copy(ui.ctx(), &report::without_the_profile(&failure.details));
         }
         if answer.open_source {
             self.open_source();
@@ -1182,7 +1207,7 @@ impl App {
         if answer.copy_details
             && let Some(failure) = self.builds.failure()
         {
-            self.copy(ui.ctx(), &failure.details);
+            self.copy(ui.ctx(), &report::without_the_profile(&failure.details));
         }
         if answer.open_source {
             self.open_source();
@@ -1348,6 +1373,12 @@ fn tidies(in_use: bool, tried: bool, busy: bool, may_write: bool) -> bool {
     !in_use && !tried && !busy && may_write
 }
 
+const MOST_READS_AGAIN: u32 = 3;
+
+fn reads_again(read_at: &str, build: &str, steam_busy: bool, tries: u32) -> bool {
+    read_at != build && !steam_busy && tries < MOST_READS_AGAIN
+}
+
 fn picks_in_words(count: usize) -> String {
     match count {
         1 => "1 pick".to_string(),
@@ -1428,6 +1459,15 @@ mod tests {
         assert!(!tidies(false, true, false, true), "once, until the game is found otherwise");
         assert!(!tidies(false, false, true, true), "not in the middle of Play or of going back");
         assert!(!tidies(false, false, false, false), "a test window leaves the real game alone");
+    }
+
+    #[test]
+    fn the_games_files_are_read_again_once_a_dota_update_is_in() {
+        assert!(!reads_again("6983", "6983", false, 0), "the same build: what was read is what is there");
+        assert!(reads_again("6983", "6986", false, 0), "Dota was updated while the app was open");
+        assert!(!reads_again("6983", "6986", true, 0), "not while Steam is still putting the update in place");
+        assert!(reads_again("6983", "6986", false, MOST_READS_AGAIN - 1) && !reads_again("6983", "6986", false, MOST_READS_AGAIN));
+        assert!(reads_again("", "6986", false, 0), "a build that could not be told when they were read");
     }
 
     #[test]

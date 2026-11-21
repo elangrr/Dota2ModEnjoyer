@@ -195,7 +195,7 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
                 sampled => format!("The order of the skill points and what is bought against whom are from {} single matches of Divine and Immortal players. ", with_spaces(sampled)),
             };
             if builds.pro_matches > 0 {
-                from.push_str(&format!("What pros buy is from {} pro matches of the patch, from {}. ", with_spaces(builds.pro_matches), builds.pro_source));
+                from.push_str(&format!("What pros buy is from {} recent pro matches, from {}. ", with_spaces(builds.pro_matches), builds.pro_source));
             }
             answer.open_source = credit.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("{from}Opens {SOURCE_PAGE}")).clicked();
         });
@@ -358,7 +358,7 @@ fn item_words(build: &Build, item: &Bought) -> String {
 
 fn pro_words(hero: &str, build: &Build, pro: &ProItem, players: u64) -> String {
     let pros = format!(
-        "Most pros who play {hero} {} buy it: {:.0} of 100 of the {players} who did in the pro matches of this patch, around minute {}.",
+        "Most pros who play {hero} {} buy it: {:.0} of 100 of the {players} who did in recent pro matches, around minute {}.",
         build.role.as_played(),
         pro.share,
         pro.minute
@@ -590,7 +590,7 @@ mod tests {
         let bottle = ProItem { item: "item_bottle".to_string(), share: 96.4, minute: 2 };
         assert_eq!(
             pro_words("Axe", &build, &bottle, 109),
-            "Most pros who play Axe in the offlane buy it: 96 of 100 of the 109 who did in the pro matches of this patch, around minute 2."
+            "Most pros who play Axe in the offlane buy it: 96 of 100 of the 109 who did in recent pro matches, around minute 2."
         );
         let basher = ProItem { item: "item_basher".to_string(), share: 60.0, minute: 22 };
         assert!(pro_words("Axe", &build, &basher, 20).ends_with("Of the players of your rank, 20 of 100 buy it."));

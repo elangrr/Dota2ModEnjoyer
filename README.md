@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/fbf1b73db1a1b64d870718a7629c2b731eb76d1ee765873232af3fa6d22ea503"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
+  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/931e5e43d3b87d14dd126a9fbf5ab2853ae20e2b6b3b796566194b55fa294826"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2069%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 69 scanners flag it" height="40"></a><!-- /virustotal -->
   &nbsp;
   <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
@@ -37,7 +37,7 @@ Only you see your picks, and you do not need to own the items.
 | ![The hero grid](assets/screens/heroes.jpg) | ![A hero's page with a set picked](assets/screens/hero.jpg) |
 | Every hero, with search and filters | A whole set in one click, or piece by piece |
 
-![A hero's page by day](assets/screens/day.jpg)
+![A hero's page by day, with a set picked](assets/screens/day.jpg)
 
 ## What you can change
 
@@ -71,7 +71,10 @@ support.
 **Builds** shows on one screen what players of a hero buy and skill in your rank and role. Core
 items come in the order they are bought, with how many of 100 players buy each. Other items
 move up when they are bought more often against the enemy heroes of your draft. Skills has a
-point for every level. **Go to build** on the Draft page opens your own hero's.
+point for every level. Talents show how many players take each side. **Go to build** on the
+Draft page opens your own hero's.
+
+![The Builds page, with Juggernaut as a carry](assets/screens/builds.jpg)
 
 Both pages work with Dota closed and never read your game. Their numbers are added up from
 millions of public matches by [STRATZ](https://stratz.com), and what pros buy comes from
@@ -139,6 +142,7 @@ link opens the full result for that file. A release that Microsoft's scanner fla
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.4.3 | [2 of 69 scanners flag it](https://www.virustotal.com/gui/file/931e5e43d3b87d14dd126a9fbf5ab2853ae20e2b6b3b796566194b55fa294826) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/277135a736edf2c54ea397a892a2134d0458c7583591b9c8a13cc25f072683b6) |
 | 0.4.2 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/fbf1b73db1a1b64d870718a7629c2b731eb76d1ee765873232af3fa6d22ea503) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/423fccffb74a826886ed2e2d32276d8ff8632651db29f98fc9c8b69d4e8fee31) |
 | 0.4.1 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/02f0bbe2c5ef23511e0fdbf139466593d1d8201d84a0f98a2473407742a3fb4e) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/55cb557aa17c40acf6ee8177ccad6cfed4b79a3d86779720b80a78771c4870a7) |
 | 0.4.0 | [1 of 70 scanners flag it](https://www.virustotal.com/gui/file/b9ab0cfa70b52eaec96ff9c916953b3045b52017a8d66d2eae25a7b2dc74deaa) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/a9e7c80cbe294558087a0885cc2cecc9ad8f6a1e62e50f84e21ebd38010ee7f2) |

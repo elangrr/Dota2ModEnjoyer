@@ -9,8 +9,9 @@ for each pair of ranks: the items they start with, the items they go on to buy a
 boots among them, and which talents are taken. And from single matches of Divine and
 Immortal players, some hundreds for each hero and role: the order the skill points are put
 in, point by point, and which items are bought more often against which enemy hero. And from
-OpenDota (https://www.opendota.com), the pro matches of the patch: what the pros who play a
-hero in each role buy, such as the Bottle that nearly every pro mid buys.
+OpenDota (https://www.opendota.com), the pro matches of the patch, and of the four weeks
+before now where the patch is newer than that: what the pros who play a hero in each role
+buy, such as the Bottle that nearly every pro mid buys.
 
     python publish/make_numbers.py <folder to write the two files in>
     python publish/make_numbers.py --check        # tries the sums below on made-up numbers
@@ -121,6 +122,11 @@ DOUBT_BOUGHT = 15
 # patch, and of an item at least this part of them bought. The app shows what most buy.
 LEAST_PROS = 8
 PRO_SHARE = 0.30
+# The pro matches that are counted are those since the newest patch began, and those of at
+# least this many days: in the first weeks of a patch too few of its own are played to go by
+# (26 in the first two days of 7.42, where the nine weeks of 7.41f had 1,350), and what the
+# pros bought until then, such as a mid's Bottle, would be gone from every build.
+PRO_LEAST_DAYS = 28
 
 # Items whose purchases STRATZ loses, so that its numbers of them are not to be gone by. Of
 # five ranked matches whose mid player bought a Bottle in the second minute by OpenDota's
@@ -380,6 +386,12 @@ def bought_against(samples):
     return {enemy: sorted(items, key=lambda entry: (-entry[1], entry[0])) for enemy, items in against.items()}
 
 
+def pros_since(patch_began, now):
+    """When the pro matches that are counted begin: with the newest patch, or PRO_LEAST_DAYS
+    ago where the patch is newer than that."""
+    return min(patch_began, now - PRO_LEAST_DAYS * 24 * 3600)
+
+
 def pro_builds(began, now):
     """What the pros who played each hero in each role bought, in the pro matches since
     `began`: for each hero, by its number, and role, how many pros played it so, and the items
@@ -479,7 +491,8 @@ def roles_played(numbers, pair, hero):
 def make_builds(asker, now, numbers, heroes, few, patch):
     """The builds of every hero of the Draft page's numbers. `heroes` are STRATZ's numbers for
     the heroes, in the order of that file's list. `few`: for this many heroes only.
-    `patch`: STRATZ's newest, with its name and when it began, for the pro matches of it."""
+    `patch`: STRATZ's newest, with its name and when it began, for the pro matches since then
+    (`pros_since`)."""
     constants = asker.ask("{ constants { items { id name } abilities { id name isTalent } } }")["constants"]
     item_names = {item["id"]: item["name"] for item in constants["items"] if item.get("name")}
     skill_names = {skill["id"]: skill["name"] for skill in constants["abilities"] if skill.get("name")}
@@ -588,7 +601,7 @@ def make_builds(asker, now, numbers, heroes, few, patch):
 
     # What pros buy in each role, of the items STRATZ counts: a Town Portal Scroll that
     # everybody buys is not to be told.
-    pro_matches, pros = pro_builds(patch["asOfDateTime"], now)
+    pro_matches, pros = pro_builds(pros_since(patch["asOfDateTime"], now), now)
     countable = {item_names[item] for item in counted_items if item in item_names}
     pro_heroes = {}
     for (hero, role), (players, bought) in sorted(pros.items()):
@@ -840,6 +853,9 @@ def check():
     assert patches_of(versions, [10 * WEEK, 9 * WEEK]) == "7.41f and 7.42", "a week a patch came in is of both"
     assert patches_of(versions, [11 * WEEK]) == "7.42"
     assert patches_of(versions, [10 * WEEK, 2 * WEEK]) == "7.41e to 7.42"
+    # Pro matches: those of the patch, and in its first weeks those of the weeks before it too.
+    assert pros_since(3 * WEEK, now) == 3 * WEEK, "a patch that is old enough: its own matches"
+    assert pros_since(now - 2 * day, now) == now - PRO_LEAST_DAYS * day, "a patch of two days: the last four weeks"
 
     # A build of 1000 matches. Item 1 is bought twice at the start by most, item 2 by few.
     starting = [

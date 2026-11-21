@@ -53,8 +53,9 @@ impl Pictures {
         Pictures { ctx: ctx.clone(), known: HashMap::new(), wanted: Vec::new(), shared, read, frame: 0 }
     }
 
-    pub fn use_archive(&self, archive: Arc<Archive>) {
+    pub fn use_archive(&mut self, archive: Arc<Archive>) {
         *self.shared.archive.lock().unwrap() = Some(archive);
+        self.known.clear();
     }
 
     pub fn begin_frame(&mut self) {

@@ -293,8 +293,7 @@ fn particles(dota: &DotaInstall) -> Result<()> {
     let bytes = archive.read(engine::ITEMS_GAME)?.context("the item database is not in the game's archive")?;
     let game = ItemsGame::parse(&bytes)?;
     let emblems: Vec<&Item<'_>> = game.items().iter().filter(|item| !dme_core::effects::emblem_blocks(&game, item).is_empty()).collect();
-    println!("
-EMBLEMS: {} with an effect that shows on a hero", emblems.len());
+    println!("\nEMBLEMS: {} with an effect that shows on a hero", emblems.len());
     let mut failed = differ.len() + unread.len();
     for item in emblems {
         for block in dme_core::effects::emblem_blocks(&game, item) {
@@ -309,8 +308,7 @@ EMBLEMS: {} with an effect that shows on a hero", emblems.len());
                     format!("FAILED: {error:#}")
                 }
             };
-            println!("  {:>5} {}: {outcome}
-        {path}", item.id, item.name.unwrap_or(item.id));
+            println!("  {:>5} {}: {outcome}\n        {path}", item.id, item.name.unwrap_or(item.id));
         }
     }
     if failed > 0 {

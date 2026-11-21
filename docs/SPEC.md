@@ -1203,6 +1203,20 @@ every 9 seconds, for an update that comes meanwhile. While Dota runs so, the bar
 says to close it and press Play. A window that only has its picture taken does it only to a
 copy of the game it is pointed to (`--dota`).
 
+An update also changes the game's archive under an app that is open. The app holds the
+archive's list of files in memory and reads the files themselves from disk as they are asked
+for (2.2), so after an update the list names files by where they were: with the list of build
+6983 and the archives of build 6986, a hero's page had a picture come out empty and names
+fall back to the files' own words ("Berserkers Call"), and items the update brought or took
+away were not known of until the app was started again. So the app remembers the build its
+files were read from, and when the look every 9 seconds finds another build and Steam is done
+with Dota's files, it reads them again (`App::read_again_after_an_update`): the catalog, the
+archive for the pictures, every picture anew, and the game's words for the Builds page when
+that is next shown. The picks are gone through as at a start, and one that names something the
+update took away is taken off and said. The page in view stays. Where reading does not work it
+is tried again at the next looks, three times for one build, and what was read before stays
+in use.
+
 The game is started by running `steam.exe -applaunch 570` from the Steam folder (3.1). Steam does
 the starting, with the launch options set in Steam; the tool never runs or touches the game
 itself. **(confirmed in game)** If Dota is already running, nothing is written and nothing is
@@ -1296,7 +1310,11 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
   details" and "Report". "Report" opens a new issue on the project's page on GitHub, with the
   details written in, for the player to read over and send; the app sends nothing. In what is
   copied and reported, the path of the player's own folders, which names their Windows account,
-  is written `%USERPROFILE%`. Help has "Report a problem" at its end, for a report with only the
+  is written `%USERPROFILE%`, however its letters are cased and whichever way its slashes
+  lean. The text is gone through letter by letter: a name with a letter that is two letters in
+  lower case, as the Turkish İ is, was passed over by counting letters, and went into a report
+  as it was (`report::starts_with`). What "Copy details" copies on the Draft and the Builds
+  page is written so too. Help has "Report a problem" at its end, for a report with only the
   version written in. Taking several picks off at once can be undone from the same place. A
   message that asks nothing of the player goes away by itself after 7 seconds, one with an
   Undo after 12; one about something that went wrong, or about an update, stays until closed.
@@ -2411,7 +2429,11 @@ of what STRATZ says (`LOST_BY_STRATZ`), and what pros buy says whether to have i
 
 What pros buy is asked of OpenDota (opendota.com), whose database of pro matches takes a
 question in SQL, and whose records of purchases are whole. It is one question, without a
-token, for the pro matches since the patch began. A pro match says which lane each player
+token, for the pro matches since the patch began, and for those of the last 28 days where
+the patch is newer than that (`PRO_LEAST_DAYS`): the first two days of 7.42 had 26 pro
+matches, where the nine weeks of 7.41f had 1,350, and with the patch's own alone every
+build would have lost what the pros buy, the mid's Bottle with it, for some weeks after each
+patch. So the page says "recent pro matches", not "of the patch". A pro match says which lane each player
 was in (`lane_role`: 1 the safe lane, 2 the mid, 3 the off lane), not their role. Of the two
 in the safe lane, the one with more last hits at minute 10 is taken for the carry and the
 other for the hard support; of the two in the off lane, the one with more for the offlaner

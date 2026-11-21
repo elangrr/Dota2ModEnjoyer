@@ -38,6 +38,7 @@ pub enum Reply {
 pub struct Loaded {
     pub catalog: Arc<Catalog>,
     pub archive: Arc<Archive>,
+    pub build: String,
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +49,7 @@ pub struct GameState {
     pub effects_for: EffectsFor,
     pub package_is_current: bool,
     pub steam_busy: bool,
+    pub build: String,
 }
 
 impl GameState {
@@ -65,6 +67,7 @@ impl From<Status> for GameState {
             effects_for: status.effects_for,
             package_is_current: status.package_is_current,
             steam_busy: status.steam_busy,
+            build: status.version.build,
         }
     }
 }
@@ -168,9 +171,10 @@ fn guarded<T>(engine: &Engine, doing: &str, work: impl FnOnce() -> dme_core::Res
 }
 
 fn load(engine: &Engine) -> dme_core::Result<Loaded> {
+    let build = engine.dota.version().map(|version| version.build).unwrap_or_default();
     let archive = Arc::new(Archive::open(&engine.dota.game_archive())?);
     let catalog = Arc::new(Catalog::load(&archive)?);
-    Ok(Loaded { catalog, archive })
+    Ok(Loaded { catalog, archive, build })
 }
 
 fn play(engine: &Engine, picks: &[Pick], effects_for: &EffectsFor, start: bool, low_end: bool) -> dme_core::Result<Played> {

@@ -45,6 +45,9 @@ fn unpack(block: &[u8]) -> Result<(usize, Vec<u8>)> {
         return Err(Error::format(WHAT, "its values are not KeyValues 3 of the second, third or fourth version"));
     }
     let header = if block[0] >= 4 { 72 } else { 64 };
+    if block.len() < header {
+        return Err(Error::format(WHAT, "its values are cut short"));
+    }
     if u32_at(block, at::BLOCKS)? != 0 || (block[0] >= 4 && u32_at(block, at::TWOS)? != 0) {
         return Err(Error::format(WHAT, "it holds blocks of bytes or two-byte numbers, which this tool does not know"));
     }
@@ -437,5 +440,8 @@ mod tests {
         let mut packed_otherwise = block;
         packed_otherwise[at::COMPRESSION] = 2;
         assert!(read(&packed_otherwise).is_err());
+        let mut short = vec![2, b'3', b'V', b'K'];
+        short.resize(60, 0);
+        assert!(unpacked(&short).is_err() && read(&short).is_err());
     }
 }

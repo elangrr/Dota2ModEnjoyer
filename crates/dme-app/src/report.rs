@@ -49,21 +49,38 @@ fn profile_out(text: &str, profile: &str) -> String {
         let wanted: Vec<char> = written.to_lowercase().chars().collect();
         let mut rest = out.as_str();
         let mut changed = String::with_capacity(out.len());
-        while !rest.is_empty() {
-            let here: Vec<char> = rest.chars().take(wanted.len()).flat_map(char::to_lowercase).collect();
-            if here == wanted {
-                changed.push_str(PROFILE);
-                let skipped: usize = rest.chars().take(wanted.len()).map(char::len_utf8).sum();
-                rest = &rest[skipped..];
-            } else {
-                let letter = rest.chars().next().expect("rest is not empty");
-                changed.push(letter);
-                rest = &rest[letter.len_utf8()..];
+        while let Some(letter) = rest.chars().next() {
+            match starts_with(rest, &wanted) {
+                Some(bytes) => {
+                    changed.push_str(PROFILE);
+                    rest = &rest[bytes..];
+                }
+                None => {
+                    changed.push(letter);
+                    rest = &rest[letter.len_utf8()..];
+                }
             }
         }
         out = changed;
     }
     out
+}
+
+fn starts_with(text: &str, wanted: &[char]) -> Option<usize> {
+    let (mut found, mut bytes) = (0, 0);
+    for letter in text.chars() {
+        if found == wanted.len() {
+            break;
+        }
+        for lower in letter.to_lowercase() {
+            if wanted.get(found) != Some(&lower) {
+                return None;
+            }
+            found += 1;
+        }
+        bytes += letter.len_utf8();
+    }
+    (found == wanted.len()).then_some(bytes)
 }
 
 fn encode(text: &str) -> String {
@@ -101,6 +118,16 @@ mod tests {
         assert_eq!(profile_out(r"D:\People\Анна Smith\x", r"D:\People\Анна Smith\"), r"%USERPROFILE%\x");
         assert_eq!(profile_out(r"C:\Games\Dota", "C:"), r"C:\Games\Dota");
         assert_eq!(profile_out("nothing of theirs", PROFILE_PATH), "nothing of theirs");
+    }
+
+    #[test]
+    fn a_name_with_a_letter_that_is_two_in_lower_case_is_not_named_either() {
+        let profile = r"D:\People\İbrahim Işık";
+        let out = profile_out(r"Data in D:\People\İbrahim Işık\AppData\Local\Dota2ModEnjoyer and d:/PEOPLE/İbrahim Işık/x", profile);
+        assert_eq!(out, r"Data in %USERPROFILE%\AppData\Local\Dota2ModEnjoyer and %USERPROFILE%/x");
+        assert_eq!(profile_out(r"D:\People\İbrahim", profile), r"D:\People\İbrahim");
+        assert_eq!(starts_with("İstanbul", &['i', '\u{307}', 's']), Some("İs".len()));
+        assert_eq!(starts_with("İ", &['i']), None, "half a letter is no match");
     }
 
     #[test]

@@ -18,7 +18,7 @@ const FRESH_FOR: Duration = Duration::from_secs(24 * 3600);
 type Parse<T> = fn(&[u8]) -> dme_core::Result<T>;
 
 struct Kind<T> {
-    what: &'static str,
+    failed: crate::lang::T,
     limit: usize,
     parse: Parse<T>,
 }
@@ -57,13 +57,13 @@ fn beside(address: &str, name: &str) -> String {
 
 pub fn draft_numbers(options: &Options, data_dir: &Path) -> Fetcher<Numbers> {
     let (source, testing) = numbers_source(options);
-    Fetcher::new(Kind { what: "numbers for the draft", limit: draft::NUMBERS_LIMIT, parse: Numbers::parse }, source, testing, data_dir.join(FILE))
+    Fetcher::new(Kind { failed: crate::lang::T::NumbersNotFetched, limit: draft::NUMBERS_LIMIT, parse: Numbers::parse }, source, testing, data_dir.join(FILE))
 }
 
 pub fn hero_builds(options: &Options, data_dir: &Path) -> Fetcher<Builds> {
     let (source, testing) = numbers_source(options);
     let source = source.map(|numbers| beside(&numbers, builds::BUILDS_FILE));
-    Fetcher::new(Kind { what: "builds", limit: builds::BUILDS_LIMIT, parse: Builds::parse }, source, testing, data_dir.join(builds::BUILDS_FILE))
+    Fetcher::new(Kind { failed: crate::lang::T::BuildsNotFetched, limit: builds::BUILDS_LIMIT, parse: Builds::parse }, source, testing, data_dir.join(builds::BUILDS_FILE))
 }
 
 impl<T: Send + 'static> Fetcher<T> {
@@ -101,7 +101,7 @@ impl<T: Send + 'static> Fetcher<T> {
         self.failure = None;
         let (testing, kept, limit, parse) = (self.testing, self.kept.clone(), self.kind.limit, self.kind.parse);
         let (outbox, ctx) = (self.outbox.clone(), ctx.clone());
-        crate::update::spawn(self.kind.what, move || {
+        crate::update::spawn("fetching", move || {
             let fetched = crate::update::fetch(&source, limit, testing).and_then(|bytes| {
                 let read = parse(&bytes).map_err(|error| error.to_string())?;
                 let _ = keep(&kept, &bytes);
@@ -120,7 +120,8 @@ impl<T: Send + 'static> Fetcher<T> {
                 Err(error) => {
                     let source = self.source.as_deref().unwrap_or_default();
                     self.failure = Some(Failure {
-                        sentence: format!("The {} could not be fetched. Check your internet connection.", self.kind.what),
+                        sentence: crate::lang::t(self.kind.failed).to_string(),
+                        english: crate::lang::text_in(crate::lang::LANGUAGES[0], self.kind.failed).to_string(),
                         details: format!("Dota 2 Mod Enjoyer {}\nWhile fetching {source}: {error}", env!("CARGO_PKG_VERSION")),
                     });
                 }

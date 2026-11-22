@@ -20,6 +20,7 @@ use crate::Options;
 use crate::changelog;
 use crate::crash;
 use crate::glass;
+use crate::lang;
 use crate::numbers::{self, Fetcher};
 use crate::pictures::Pictures;
 use crate::presets::Presets;
@@ -33,7 +34,7 @@ use crate::update::{self, News, Updater};
 use crate::views::icons::Icon;
 use crate::views::loadout::{Page, Row};
 use crate::views::{self, dim, title_bar};
-use crate::worker::{Failure, GameState, Job, Reply, Worker};
+use crate::worker::{Failure, GameState, Job, Mend, Reply, Worker};
 
 mod sheets;
 
@@ -44,10 +45,6 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SETTINGS_FILE: &str = "settings.json";
 const PRESETS_FILE: &str = "presets.json";
 const STARTING_SECONDS: f64 = 90.0;
-const CLOSED_LAST_TIME: &str = "The app closed last time because something went wrong inside it. Your picks are kept. Reporting it helps to get it fixed.";
-const TIDIED: &str = "Dota was updated, which undid half of the app's changes. The app put Dota back to normal, so that Valve's anti-cheat check finds nothing half-changed. Press Play to put your picks back.";
-const COPY_HINT: &str = "Copy what happened, to send to whoever helps you or to paste in a report";
-const REPORT_HINT: &str = "Open a new report on the app's GitHub page, with what happened written in. You read it over and send it yourself. It needs a GitHub account.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -62,6 +59,7 @@ struct Banner {
     tone: Tone,
     text: String,
     details: Option<String>,
+    title: Option<String>,
     undo: Option<Loadout>,
     update: bool,
     since: Option<f64>,
@@ -69,7 +67,7 @@ struct Banner {
 
 impl Banner {
     fn new(tone: Tone, text: impl Into<String>) -> Banner {
-        Banner { tone, text: text.into(), details: None, undo: None, update: false, since: None }
+        Banner { tone, text: text.into(), details: None, title: None, undo: None, update: false, since: None }
     }
 
     fn stays(&self) -> Option<f64> {
@@ -83,7 +81,7 @@ impl Banner {
     }
 
     fn failure(failure: Failure) -> Banner {
-        Banner { details: Some(failure.details), ..Banner::new(Tone::Warn, failure.sentence) }
+        Banner { details: Some(failure.details), title: Some(failure.english), ..Banner::new(Tone::Warn, failure.sentence) }
     }
 
     fn with_undo(text: String, before: Loadout) -> Banner {
@@ -112,6 +110,7 @@ pub struct App {
     banner: Option<Banner>,
     close_when_done: bool,
     tidy_tried: bool,
+    mends: (String, u32),
     read_at: Option<String>,
     reading_again: bool,
     read_again: (String, u32),
@@ -134,9 +133,12 @@ pub struct App {
     texts: Option<Arc<GameTexts>>,
     texts_coming: Option<Receiver<GameTexts>>,
     archive: Option<Arc<dme_core::vpk::Archive>>,
+    han_in: bool,
     rarities_asked: BTreeSet<usize>,
     help_open: bool,
     settings_open: bool,
+    pool: views::settings::PoolState,
+    to_pool: bool,
     support_open: bool,
     share_open: bool,
     share_text: String,
@@ -158,7 +160,15 @@ impl App {
         let ctx = &creation.egui_ctx;
         let data_dir = options.data_dir.clone().unwrap_or_else(engine::default_data_dir);
         let mut settings = Settings::load(&data_dir.join(SETTINGS_FILE));
-        theme::install_fonts(ctx);
+        let han_font = theme::han_font().is_some();
+        let offered = |language: &lang::Language| language.letters != lang::Letters::Han || han_font;
+        let chosen = settings.language.as_deref().and_then(lang::by_code).filter(|language| offered(language));
+        let language = chosen.unwrap_or_else(|| lang::for_windows(&lang::windows_languages(), offered));
+        lang::choose(language.code);
+        let first_start = settings.language.is_none();
+        settings.language = Some(language.code.to_string());
+        let han = language.letters == lang::Letters::Han || options.game_language.as_deref().is_some_and(|game| game.contains("chinese"));
+        let han_in = theme::install_fonts(ctx, han);
         theme::apply(ctx, settings.theme);
         let look = (settings.theme, ctx.system_theme());
         let backdrop = match options.screenshot.is_some() {
@@ -175,11 +185,11 @@ impl App {
         let before = version_before(options.updated_from.as_deref(), &settings, options.screenshot.is_some());
         let whats_new = before.map(|before| changelog::since(&before, VERSION)).filter(|news| !news.is_empty());
         let updated = options.updated_from.as_deref().is_some_and(|before| before != VERSION);
-        let mut banner = (updated && whats_new.is_none()).then(|| Banner::new(Tone::Good, format!("The app was updated. This is version {VERSION} now.")));
+        let mut banner = (updated && whats_new.is_none()).then(|| Banner::new(Tone::Good, tr!(AppUpdated, version = VERSION)));
         if let Some(details) = crash::left_from_last_time(&data_dir) {
-            banner = Some(Banner::failure(Failure { sentence: CLOSED_LAST_TIME.to_string(), details }));
+            banner = Some(Banner::failure(Failure { sentence: tr!(ClosedLastTime).to_string(), english: tr_en!(ClosedLastTime).to_string(), details }));
         }
-        if whats_new.is_none() && options.screenshot.is_none() && settings.seen_version.as_deref() != Some(VERSION) {
+        if whats_new.is_none() && options.screenshot.is_none() && (settings.seen_version.as_deref() != Some(VERSION) || first_start) {
             settings.seen_version = Some(VERSION.to_string());
             let _ = settings.save(&data_dir.join(SETTINGS_FILE));
         }
@@ -208,6 +218,7 @@ impl App {
             banner,
             close_when_done: false,
             tidy_tried: false,
+            mends: (String::new(), 0),
             read_at: None,
             reading_again: false,
             read_again: (String::new(), 0),
@@ -229,9 +240,12 @@ impl App {
             texts: None,
             texts_coming: None,
             archive: None,
+            han_in,
             rarities_asked: BTreeSet::new(),
             help_open: false,
             settings_open: false,
+            pool: Default::default(),
+            to_pool: false,
             support_open: false,
             share_open: false,
             share_text: String::new(),
@@ -247,7 +261,7 @@ impl App {
         };
         match found {
             Ok(dota) => app.connect(dota, ctx),
-            Err(error) => app.find_error = Some(error.to_string()),
+            Err(error) => app.find_error = Some(crate::lang::words::error(&error, std::path::Path::new(""))),
         }
         app
     }
@@ -258,7 +272,7 @@ impl App {
         self.saved = self.loadout.clone();
         let never_saved = self.loadout != Loadout::default() && !engine.loadout_file().exists();
         let worker = Worker::start(engine.clone(), ctx.clone());
-        worker.send(Job::Load);
+        worker.send(Job::Load { language: self.game_language().to_string() });
         self.engine = Some(engine);
         self.worker = Some(worker);
         self.find_error = None;
@@ -277,27 +291,38 @@ impl App {
                     self.pictures.use_archive(loaded.archive);
                     (self.read_at, self.reading_again) = (Some(loaded.build), false);
                     self.take_catalog(loaded.catalog);
+                    self.mend_after_an_update();
                 }
                 Reply::Loaded(Err(failure)) => {
                     self.reading_again = false;
                     if self.catalog.is_none() {
                         self.load_failure = Some(failure);
                     }
+                    self.mend_after_an_update();
                 }
                 Reply::Game(game) => {
                     if game.running {
                         self.starting_until = None;
                     }
                     self.game = Some(game);
-                    self.tidy_if_half_undone();
+                    self.mend_after_an_update();
                     self.read_again_after_an_update();
                 }
                 Reply::Tidied(done) => {
                     self.busy = None;
+                    let text = if self.loadout.is_empty() { tr!(TidiedNoPicks) } else { tr!(Tidied) };
                     self.banner = Some(match done {
-                        Ok(_) => Banner::new(Tone::Plain, TIDIED),
+                        Ok(_) => Banner::new(Tone::Plain, text),
                         Err(failure) => Banner::failure(failure),
                     });
+                }
+                Reply::Mended(done) => {
+                    self.busy = None;
+                    match done {
+                        Ok(Mend::Back) => self.banner = Some(Banner::new(Tone::Good, tr!(Mended))),
+                        Ok(Mend::Later) => {}
+                        Ok(Mend::Normal(failure)) | Err(failure) => self.banner = Some(Banner::failure(failure)),
+                    }
                 }
                 Reply::Played(Ok(played)) => {
                     self.busy = None;
@@ -305,8 +330,8 @@ impl App {
                         self.starting_until = Some(now + STARTING_SECONDS);
                     } else {
                         let text = match played.ready {
-                            Ready::Normal(_) => "Dota 2 is as Valve ships it.",
-                            Ready::Already | Ready::Applied(_) => "Your picks are in the game.",
+                            Ready::Normal(_) => tr!(AsValveShips),
+                            Ready::Already | Ready::Applied(_) => tr!(PicksAreIn),
                         };
                         self.banner = Some(Banner::new(Tone::Good, text));
                     }
@@ -314,11 +339,11 @@ impl App {
                 Reply::Restored(Ok(restored)) => {
                     self.busy = None;
                     let text = if !restored.notes.is_empty() {
-                        restored.notes.join(" ")
+                        restored.notes.iter().map(|note| crate::lang::words::note(*note)).collect::<Vec<_>>().join(" ")
                     } else if self.loadout.is_put_away() {
-                        "Dota 2 is back to normal. Your picks are put away: \"Bring back my picks\" shows them again.".to_string()
+                        tr!(BackToNormalPutAway).to_string()
                     } else {
-                        "Dota 2 is back to normal.".to_string()
+                        tr!(BackToNormalDone).to_string()
                     };
                     let tone = if restored.notes.is_empty() { Tone::Good } else { Tone::Warn };
                     self.banner = Some(Banner::new(tone, text));
@@ -352,7 +377,7 @@ impl App {
                 News::Offered(_) if !under_way && self.settings.auto_update => self.update(ctx),
                 News::Offered(manifest) if !under_way && self.banner.as_ref().is_none_or(|banner| banner.update) => {
                     let notes = manifest.notes.as_deref().map(|notes| format!(" {}", notes.trim())).unwrap_or_default();
-                    let text = format!("Version {} of this app is out.{notes}", manifest.version);
+                    let text = format!("{}{notes}", tr!(VersionOut, version = manifest.version));
                     self.banner = Some(Banner { update: true, ..Banner::new(Tone::Plain, text) });
                 }
                 News::Offered(_) | News::Nothing(None) | News::Progress(..) => {}
@@ -373,10 +398,34 @@ impl App {
         let (outbox, inbox) = mpsc::channel();
         self.texts_coming = Some(inbox);
         let ctx = ctx.clone();
+        let language = self.game_language().to_string();
         update::spawn("game texts", move || {
-            let _ = outbox.send(GameTexts::read(&archive));
+            let _ = outbox.send(GameTexts::read_in(&archive, &language));
             ctx.request_repaint();
         });
+    }
+
+    fn game_language(&self) -> &str {
+        self.options.game_language.as_deref().unwrap_or(lang::current().game)
+    }
+
+    pub(crate) fn offered_languages(&self) -> Vec<&'static lang::Language> {
+        let han = self.han_in || theme::han_font().is_some();
+        lang::LANGUAGES.iter().copied().filter(|language| language.letters != lang::Letters::Han || han).collect()
+    }
+
+    pub(crate) fn use_language(&mut self, ctx: &egui::Context, code: &str) {
+        let Some(language) = lang::by_code(code) else { return };
+        lang::choose(language.code);
+        self.settings.language = Some(language.code.to_string());
+        self.save_settings();
+        if language.letters == lang::Letters::Han && !self.han_in {
+            self.han_in = theme::install_fonts(ctx, true);
+        }
+        (self.texts, self.texts_coming) = (None, None);
+        if let Some(worker) = &self.worker {
+            worker.send(Job::Load { language: self.game_language().to_string() });
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context) {
@@ -399,7 +448,7 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else {
             let version = self.updater.as_ref().and_then(Updater::offer).map(|manifest| manifest.version.clone()).unwrap_or_default();
-            self.banner = Some(Banner::new(Tone::Good, format!("Version {version} is in place. Close the app and start it again to use it.")));
+            self.banner = Some(Banner::new(Tone::Good, tr!(VersionInPlace, version)));
         }
     }
 
@@ -411,11 +460,8 @@ impl App {
             self.saved = self.loadout.clone();
             match gone {
                 0 => {}
-                1 => self.banner = Some(Banner::new(Tone::Plain, "One of your picks is not in the game any more and was taken off.")),
-                many => {
-                    let text = format!("{many} of your picks are not in the game any more and were taken off.");
-                    self.banner = Some(Banner::new(Tone::Plain, text));
-                }
+                1 => self.banner = Some(Banner::new(Tone::Plain, tr!(PickGone))),
+                many => self.banner = Some(Banner::new(Tone::Plain, tr!(PicksGone, count = many))),
             }
             self.save_picks();
         }
@@ -484,6 +530,11 @@ impl App {
             None => (false, ModState::Off, false),
         };
         let half_undone = mods.is_half_undone();
+        let may_write = self.options.screenshot.is_none() || self.options.dota.is_some();
+        let undone = self.game.as_ref().is_some_and(|game| {
+            let (tries, _, given_up) = self.mend_tries(game);
+            (half_undone || game.undone) && tries < MOST_MENDS && !given_up && may_write
+        });
         Facts {
             loaded: self.catalog.is_some(),
             load_failed: self.load_failure.is_some(),
@@ -496,24 +547,50 @@ impl App {
             in_game,
             reach_nobody: apply::reach_nobody(self.loadout.picks(), self.loadout.effects_for()),
             half_undone,
+            undone,
+            steam_busy: self.game.as_ref().is_some_and(|game| game.steam_busy),
         }
     }
 
-    fn tidy_if_half_undone(&mut self) {
+    fn mend_after_an_update(&mut self) {
         let Some(game) = &self.game else { return };
-        if !game.mods.is_half_undone() {
+        let half = game.mods.is_half_undone();
+        if !half {
             self.tidy_tried = false;
+        }
+        if !half && !game.undone {
             return;
         }
         let running = game.running && !self.options.ignore_running;
         let may_write = self.options.screenshot.is_none() || self.options.dota.is_some();
-        if !tidies(running || game.steam_busy, self.tidy_tried, self.busy.is_some(), may_write) {
+        if running || game.steam_busy || self.busy.is_some() || !may_write {
             return;
         }
         let Some(worker) = &self.worker else { return };
-        self.tidy_tried = true;
-        self.busy = Some(Busy::Restoring);
-        worker.send(Job::Tidy);
+        let (tries, catalog_is_new, given_up) = self.mend_tries(game);
+        match after_an_update(!self.loadout.is_empty(), catalog_is_new, given_up, tries) {
+            AfterAnUpdate::Wait => {}
+            AfterAnUpdate::PutBack => {
+                self.mends = (game.build.clone(), tries + 1);
+                self.busy = Some(Busy::Playing);
+                let effects_for = self.loadout.effects_for().clone();
+                worker.send(Job::Mend { picks: self.loadout.picks().to_vec(), effects_for });
+            }
+            AfterAnUpdate::Normal if half && !self.tidy_tried => {
+                self.tidy_tried = true;
+                self.busy = Some(Busy::Restoring);
+                worker.send(Job::Tidy);
+            }
+            AfterAnUpdate::Normal => {}
+        }
+    }
+
+    fn mend_tries(&self, game: &GameState) -> (u32, bool, bool) {
+        let tries = if self.mends.0 == game.build { self.mends.1 } else { 0 };
+        let catalog_is_new = self.catalog.is_some() && !self.reading_again && self.read_at.as_deref() == Some(game.build.as_str());
+        let read_again = self.read_again.0 == game.build && self.read_again.1 >= MOST_READS_AGAIN;
+        let given_up = !self.reading_again && (self.load_failure.is_some() || read_again) && !catalog_is_new;
+        (tries, catalog_is_new, given_up)
     }
 
     fn read_again_after_an_update(&mut self) {
@@ -523,7 +600,7 @@ impl App {
             return;
         }
         (self.reading_again, self.read_again) = (true, (game.build.clone(), tries + 1));
-        worker.send(Job::Load);
+        worker.send(Job::Load { language: self.game_language().to_string() });
     }
 
     fn play(&mut self) {
@@ -562,7 +639,7 @@ impl App {
         match self.loadout.save(&engine.loadout_file()) {
             Ok(()) => true,
             Err(error) => {
-                self.banner = Some(Banner::new(Tone::Warn, format!("Your picks could not be saved: {error}")));
+                self.banner = Some(Banner::new(Tone::Warn, tr!(PicksNotSaved, error)));
                 false
             }
         }
@@ -570,14 +647,14 @@ impl App {
 
     fn save_presets(&mut self) {
         if let Err(error) = self.presets.save(&self.data_dir.join(PRESETS_FILE)) {
-            self.banner = Some(Banner::new(Tone::Warn, format!("Your presets could not be saved: {error}")));
+            self.banner = Some(Banner::new(Tone::Warn, tr!(PresetsNotSaved, error)));
         }
     }
 
     fn save_preset(&mut self) {
         let Some(name) = self.presets.keep(&self.preset_name, self.loadout.picks()) else { return };
         self.preset_name.clear();
-        self.banner = Some(Banner::new(Tone::Good, format!("Your picks are saved as the preset \"{name}\".")));
+        self.banner = Some(Banner::new(Tone::Good, tr!(PresetSaved, name)));
         self.save_presets();
     }
 
@@ -589,9 +666,9 @@ impl App {
         let gone = picked.picks().iter().filter(|pick| catalog.settled(pick).is_none()).count();
         picked.settle(|pick| catalog.settled(pick));
         let text = match gone {
-            0 => format!("The preset \"{}\" is picked. Press Play to see it in Dota.", preset.name),
-            1 => format!("The preset \"{}\" is picked, without one item that is not in the game any more.", preset.name),
-            many => format!("The preset \"{}\" is picked, without {many} items that are not in the game any more.", preset.name),
+            0 => tr!(PresetPicked, name = preset.name),
+            1 => tr!(PresetPickedWithoutOne, name = preset.name),
+            many => tr!(PresetPickedWithout, name = preset.name, count = many),
         };
         self.loadout = picked;
         self.saved = self.loadout.clone();
@@ -600,9 +677,9 @@ impl App {
         }
     }
 
-    fn share(&mut self, ctx: &egui::Context, name: Option<&str>, picks: &[Pick], what: String) {
+    fn share(&mut self, ctx: &egui::Context, name: Option<&str>, picks: &[Pick], said: String) {
         self.copy(ctx, &share::code(name, picks));
-        self.banner = Some(Banner::new(Tone::Good, format!("A share code of {what} is copied. Paste it anywhere: whoever has the app uses it under My picks, \"Use a code\".")));
+        self.banner = Some(Banner::new(Tone::Good, said));
     }
 
     fn take_in(&mut self, catalog: &Catalog, picks: &[Pick], left_out: usize) {
@@ -622,13 +699,13 @@ impl App {
 
     fn keep_code(&mut self, name: &str, picks: &[Pick]) {
         let Some(name) = self.presets.keep(name, picks) else { return };
-        self.banner = Some(Banner::new(Tone::Good, format!("The code is kept as the preset \"{name}\", under My picks. A click on it picks it.")));
+        self.banner = Some(Banner::new(Tone::Good, tr!(CodeKept, name)));
         self.save_presets();
     }
 
     fn forget_preset(&mut self, place: usize) {
         if let Some(preset) = self.presets.forget(place) {
-            self.banner = Some(Banner::new(Tone::Plain, format!("The preset \"{}\" is forgotten. Your picks stay as they are.", preset.name)));
+            self.banner = Some(Banner::new(Tone::Plain, tr!(PresetForgotten, name = preset.name)));
             self.save_presets();
         }
     }
@@ -642,12 +719,12 @@ impl App {
         let dropped = if self.loadout.is_put_away() { 0 } else { before.kept_away().len() };
         match removed {
             Some(count) if count > 1 => {
-                self.banner = Some(Banner::with_undo(format!("{count} picks were taken off."), before));
+                self.banner = Some(Banner::with_undo(tr!(PicksTakenOff, count), before));
             }
             _ if dropped > 0 => {
                 let text = match dropped {
-                    1 => "You have started over. The pick you had put away is gone.".to_string(),
-                    many => format!("You have started over. The {many} picks you had put away are gone."),
+                    1 => tr!(StartedOverOne).to_string(),
+                    many => tr!(StartedOver, count = many),
                 };
                 self.banner = Some(Banner::with_undo(text, before));
             }
@@ -782,7 +859,7 @@ impl App {
                 crate::logo::paint(ui.painter(), mark);
                 ui.add_space(10.0);
                 let picks = self.loadout.len();
-                for (tab, icon, name, count) in [(Tab::Heroes, Icon::Heroes, "Heroes", 0), (Tab::World, Icon::World, "World", 0), (Tab::Picks, Icon::Picks, "My picks", picks), (Tab::Draft, Icon::Draft, "Draft", 0), (Tab::Builds, Icon::Builds, "Builds", 0)] {
+                for (tab, icon, name, count) in [(Tab::Heroes, Icon::Heroes, tr!(NavHeroes), 0), (Tab::World, Icon::World, tr!(NavWorld), 0), (Tab::Picks, Icon::Picks, tr!(NavPicks), picks), (Tab::Draft, Icon::Draft, tr!(NavDraft), 0), (Tab::Builds, Icon::Builds, tr!(NavBuilds), 0)] {
                     if nav_button(ui, icon, name, self.tab == tab, count).clicked() && self.tab != tab {
                         self.tab = tab;
                         self.item_search.clear();
@@ -793,13 +870,13 @@ impl App {
                 ui.add_space(10.0);
                 look = views::theme_switch(ui);
                 ui.add_space(8.0);
-                if nav_button(ui, Icon::Help, "Help", self.help_open, 0).clicked() {
+                if nav_button(ui, Icon::Help, tr!(NavHelp), self.help_open, 0).clicked() {
                     self.help_open = true;
                 }
-                if nav_button(ui, Icon::Settings, "Settings", self.settings_open, 0).clicked() {
+                if nav_button(ui, Icon::Settings, tr!(NavSettings), self.settings_open, 0).clicked() {
                     self.settings_open = true;
                 }
-                if nav_button(ui, Icon::Support, "Support", self.support_open, 0).on_hover_text("Give the project a star, or donate").clicked() {
+                if nav_button(ui, Icon::Support, tr!(NavSupport), self.support_open, 0).on_hover_text(tr!(NavSupportHint)).clicked() {
                     self.support_open = true;
                 }
                 if let Some(updater) = &self.updater
@@ -808,10 +885,10 @@ impl App {
                     let coming = updater.is_fetching() || updater.is_installed();
                     let come = updater.progress();
                     let label = match (updater.is_installed(), coming, come) {
-                        (true, _, _) => "Updated".to_string(),
+                        (true, _, _) => tr!(NavUpdated).to_string(),
                         (false, true, Some(come)) => format!("{}%", (come * 100.0).floor() as u32),
-                        (false, true, None) => "Updating…".to_string(),
-                        (false, false, _) => "Update".to_string(),
+                        (false, true, None) => tr!(NavUpdating).to_string(),
+                        (false, false, _) => tr!(NavUpdate).to_string(),
                     };
                     let button = if coming {
                         let time = ui.input(|input| input.time);
@@ -820,8 +897,8 @@ impl App {
                         nav_button(ui, Icon::Update, &label, true, 0)
                     };
                     let hint = match coming {
-                        true => format!("Version {} of this app is on its way. The app starts again by itself when it is done. Your picks stay as they are.", offer.version),
-                        false => format!("Version {} of this app is out. One click downloads it and starts the app again. Your picks stay as they are.", offer.version),
+                        true => tr!(UpdateComingHint, version = offer.version),
+                        false => tr!(UpdateOutHint, version = offer.version),
                     };
                     update = button.on_hover_text(hint).clicked() && !coming;
                 }
@@ -847,8 +924,8 @@ impl App {
                 }
                 let switch = egui::Button::new(facts.switch_label()).min_size(vec2(0.0, 40.0));
                 let hint = match facts.brings_back() {
-                    true => "Pick again what you had picked before going back to normal Dota. Play puts it in the game.",
-                    false => "Take every change out of the game's files and put your picks away. They are kept, to be brought back.",
+                    true => tr!(BringBackHint),
+                    false => tr!(BackToNormalHint),
                 };
                 let switch = ui.add_enabled(facts.can_switch(), switch).on_hover_text(hint).on_disabled_hover_text(facts.why_no_switch());
                 if switch.clicked() {
@@ -893,15 +970,15 @@ impl App {
                 ui.painter().galley(rect.min, text, color);
                 ui.add_space(2.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    close |= ui.button(if banner.update { "Later" } else { "Close" }).clicked();
-                    update = banner.update && ui.button("Update").on_hover_text("Download the new version and start the app again").clicked();
-                    undo = banner.undo.is_some() && ui.button("Undo").on_hover_text("Put those picks back").clicked();
+                    close |= ui.button(if banner.update { tr!(Later) } else { tr!(Close) }).clicked();
+                    update = banner.update && ui.button(tr!(Update)).on_hover_text(tr!(UpdateHint)).clicked();
+                    undo = banner.undo.is_some() && ui.button(tr!(Undo)).on_hover_text(tr!(UndoHint)).clicked();
                     if let Some(details) = &banner.details {
-                        if ui.button("Copy details").on_hover_text(COPY_HINT).clicked() {
+                        if ui.button(tr!(CopyDetails)).on_hover_text(tr!(CopyHint)).clicked() {
                             copied = Some(report::without_the_profile(details));
                         }
-                        if ui.button("Report").on_hover_text(REPORT_HINT).clicked() {
-                            report_at = Some(report::address(&report::title_of(&banner.text), Some(details)));
+                        if ui.button(tr!(Report)).on_hover_text(tr!(ReportHint)).clicked() {
+                            report_at = Some(report::address(&report::title_of(banner.title.as_deref().unwrap_or(&banner.text)), Some(details)));
                         }
                     }
                 });
@@ -933,9 +1010,9 @@ impl App {
         let version = updater.offer().map(|offer| offer.version.as_str()).unwrap_or_default();
         let come = updater.progress();
         let what = match (updater.is_installed(), come) {
-            (true, _) => format!("Starting version {version}…"),
-            (false, Some(come)) if come >= 1.0 => format!("Putting version {version} in place…"),
-            (false, _) => format!("Downloading version {version}…"),
+            (true, _) => tr!(StartingVersion, version),
+            (false, Some(come)) if come >= 1.0 => tr!(PuttingVersionInPlace, version),
+            (false, _) => tr!(DownloadingVersion, version),
         };
         let now = ctx.input(|input| input.time);
         if come.is_none() {
@@ -953,7 +1030,7 @@ impl App {
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new(what).strong());
-                        ui.label(dim("The app starts again by itself when it is done. Your picks stay as they are.").small());
+                        ui.label(dim(tr!(ComingNote)).small());
                     });
                 });
             });
@@ -979,9 +1056,9 @@ impl App {
                     self.forget_preset(place);
                 } else if answer.share {
                     let picks = self.loadout.picks().to_vec();
-                    self.share(ui.ctx(), None, &picks, format!("your {}", picks_in_words(picks.len())));
+                    self.share(ui.ctx(), None, &picks, tr!(SharedMine, count = picks.len()));
                 } else if let Some(preset) = answer.share_preset.and_then(|place| self.presets.get(place)).cloned() {
-                    self.share(ui.ctx(), Some(&preset.name), &preset.picks, format!("the preset \"{}\"", preset.name));
+                    self.share(ui.ctx(), Some(&preset.name), &preset.picks, tr!(SharedPreset, name = preset.name));
                 } else if answer.take_code {
                     self.share_open = true;
                 }
@@ -1007,22 +1084,22 @@ impl App {
             ui.add_space(ui.available_height() * 0.3);
             let Some(failure) = &self.load_failure else {
                 ui.spinner();
-                ui.label(dim("Reading your game's files…"));
+                ui.label(dim(tr!(ReadingFiles)));
                 return;
             };
-            ui.label(theme::title("The game's files could not be read", 20.0));
+            ui.label(theme::title(tr!(NotReadTitle), 20.0));
             ui.add_space(4.0);
-            ui.label("This can happen while Steam is updating Dota 2. Let it finish, then try again.");
+            ui.label(tr!(NotReadWhy));
             ui.add_space(10.0);
-            let again = ui.add(primary("Try again")).clicked();
+            let again = ui.add(primary(tr!(TryAgain))).clicked();
             ui.add_space(16.0);
             ui.label(dim(&failure.sentence).small());
-            copy_details = ui.button("Copy details").on_hover_text(COPY_HINT).clicked();
-            report = ui.button("Report this problem").on_hover_text(REPORT_HINT).clicked();
+            copy_details = ui.button(tr!(CopyDetails)).on_hover_text(tr!(CopyHint)).clicked();
+            report = ui.button(tr!(ReportThis)).on_hover_text(tr!(ReportHint)).clicked();
             if again {
                 self.load_failure = None;
                 if let Some(worker) = &self.worker {
-                    worker.send(Job::Load);
+                    worker.send(Job::Load { language: self.game_language().to_string() });
                 }
             }
         });
@@ -1055,7 +1132,7 @@ impl App {
         let hero_id = Some(hero.id.as_str());
         let mut share_hero = false;
         ui.horizontal(|ui| {
-            if ui.button("<  All heroes").clicked() {
+            if ui.button(tr!(AllHeroes)).clicked() {
                 self.hero = None;
                 self.item_search.clear();
             }
@@ -1065,23 +1142,23 @@ impl App {
             ui.add_space(4.0);
             ui.label(theme::title(&hero.name, 24.0));
             if let Some(attribute) = hero.attribute {
-                ui.label(dim(attribute.name()).small());
+                ui.label(dim(crate::lang::words::attribute(attribute)).small());
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let any = self.loadout.of(hero_id).next().is_some();
-                let reset = ui.add_enabled(any, egui::Button::new("Reset hero"));
-                if reset.on_hover_text("Take off every pick for this hero").clicked() {
+                let reset = ui.add_enabled(any, egui::Button::new(tr!(ResetHero)));
+                if reset.on_hover_text(tr!(ResetHeroHint)).clicked() {
                     self.loadout.clear_owner(hero_id);
                     self.picks_changed = true;
                 }
-                let share = ui.add_enabled(any, egui::Button::new("Share"));
-                share_hero = share.on_hover_text(views::picks::SHARE_HINT).on_disabled_hover_text("Pick something for this hero first").clicked();
+                let share = ui.add_enabled(any, egui::Button::new(tr!(Share)));
+                share_hero = share.on_hover_text(tr!(ShareHint)).on_disabled_hover_text(tr!(ShareHeroFirst)).clicked();
             });
         });
         if share_hero {
             let picks: Vec<Pick> = self.loadout.of(hero_id).cloned().collect();
-            let what = format!("{}'s {}", hero.name, picks_in_words(picks.len()));
-            self.share(ui.ctx(), Some(&hero.name), &picks, what);
+            let said = tr!(SharedHero, hero = hero.name, count = picks.len());
+            self.share(ui.ctx(), Some(&hero.name), &picks, said);
         }
         ui.add_space(8.0);
         let page = Page {
@@ -1093,6 +1170,7 @@ impl App {
             search: &mut self.item_search,
             rarities: &catalog.rarities,
             asked: &mut self.rarities_asked,
+            english: &catalog.english,
         };
         self.picks_changed |= views::loadout::show(ui, page);
     }
@@ -1100,9 +1178,9 @@ impl App {
     fn world_page(&mut self, ui: &mut Ui, catalog: &Catalog) {
         let any = self.loadout.of(None).next().is_some();
         let mut reset = false;
-        title_bar(ui, "The world", None, None, |ui| {
-            let button = ui.add_enabled(any, egui::Button::new("Reset the world"));
-            reset = button.on_hover_text("Take off every pick that is not a hero's").clicked();
+        title_bar(ui, tr!(TheWorld), None, None, |ui| {
+            let button = ui.add_enabled(any, egui::Button::new(tr!(ResetWorld)));
+            reset = button.on_hover_text(tr!(ResetWorldHint)).clicked();
         });
         if reset {
             self.loadout.clear_owner(None);
@@ -1118,6 +1196,7 @@ impl App {
             search: &mut self.item_search,
             rarities: &catalog.rarities,
             asked: &mut self.rarities_asked,
+            english: &catalog.english,
         };
         self.picks_changed |= views::loadout::show(ui, page);
     }
@@ -1140,14 +1219,25 @@ impl App {
             rank: self.settings.draft_rank,
             role: self.settings.draft_role,
             style: self.settings.draft_style,
+            mine: &self.settings.draft_heroes,
+            all_heroes: self.settings.draft_all_heroes,
             now,
         };
         let answer = views::draft::show(ui, view);
-        if answer.rank.is_some() || answer.role.is_some() || answer.style.is_some() {
+        if answer.rank.is_some() || answer.role.is_some() || answer.style.is_some() || answer.all_heroes.is_some() {
             self.settings.draft_rank = answer.rank.unwrap_or(self.settings.draft_rank);
             self.settings.draft_role = answer.role.unwrap_or(self.settings.draft_role);
             self.settings.draft_style = answer.style.unwrap_or(self.settings.draft_style);
+            self.settings.draft_all_heroes = answer.all_heroes.unwrap_or(self.settings.draft_all_heroes);
             self.save_settings();
+        }
+        if let Some(line) = answer.suggest {
+            self.copy(ui.ctx(), &line);
+            self.banner = Some(Banner::new(Tone::Good, tr!(CopiedForTeam, line)));
+        }
+        if answer.open_pool {
+            self.settings_open = true;
+            self.to_pool = true;
         }
         if answer.try_again {
             self.numbers.fetch(ui.ctx());
@@ -1168,7 +1258,7 @@ impl App {
 
     fn open_source(&mut self) {
         if !self.open_page(views::draft::SOURCE_PAGE) {
-            self.banner = Some(Banner::new(Tone::Plain, format!("The page could not be opened. It is at {}", views::draft::SOURCE_PAGE)));
+            self.banner = Some(Banner::new(Tone::Plain, tr!(PageNotOpened, address = views::draft::SOURCE_PAGE)));
         }
     }
 
@@ -1219,14 +1309,14 @@ impl App {
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.25);
-                ui.label(theme::title("Dota 2 was not found", 24.0));
+                ui.label(theme::title(tr!(NotFoundTitle), 24.0));
                 ui.add_space(6.0);
-                ui.label(dim("Paste the path of your Dota 2 folder here. In Steam: right-click Dota 2, Manage, Browse local files."));
+                ui.label(dim(tr!(NotFoundHow)));
                 ui.add_space(10.0);
                 let hint = r"C:\Program Files (x86)\Steam\steamapps\common\dota 2 beta";
                 ui.add(egui::TextEdit::singleline(&mut self.folder_text).hint_text(hint).desired_width(560.0));
                 ui.add_space(6.0);
-                if ui.add(primary("Use this folder")).clicked() {
+                if ui.add(primary(tr!(UseFolder))).clicked() {
                     let folder = PathBuf::from(self.folder_text.trim().trim_matches('"'));
                     match DotaInstall::at(&folder) {
                         Ok(dota) => {
@@ -1234,7 +1324,7 @@ impl App {
                             self.save_settings();
                             self.connect(dota, ui.ctx());
                         }
-                        Err(error) => self.find_error = Some(error.to_string()),
+                        Err(error) => self.find_error = Some(crate::lang::words::error(&error, &folder)),
                     }
                 }
                 if let Some(error) = &self.find_error {
@@ -1254,14 +1344,14 @@ fn said(ui: &mut Ui, facts: &Facts) {
         (ui.painter().layout_no_wrap(words.to_string(), FontId::proportional(theme::SMALL + 0.5), color), color)
     });
     let before = badge.as_ref().map_or(24.0, |(words, _)| words.size().x + 32.0);
-    let lay_out = |text: &str, size: f32, color: Color32| {
+    let lay_out = |text: &str, size: f32, color: Color32, rows: usize| {
         let mut job = LayoutJob::simple(text.to_string(), FontId::proportional(size), color, (width - before).max(80.0));
-        job.wrap.max_rows = 2;
+        job.wrap.max_rows = rows;
         job.wrap.overflow_character = Some('…');
         ui.painter().layout_job(job)
     };
-    let sentence = lay_out(&sentence, 16.0, theme::text());
-    let tip = facts.tip().map(|tip| lay_out(tip, theme::SMALL, theme::text_dim()));
+    let sentence = lay_out(&sentence, 16.0, theme::text(), 3);
+    let tip = facts.tip().map(|tip| lay_out(tip, theme::SMALL, theme::text_dim(), 2));
     let first_line = sentence.rows.first().map_or(sentence.size().y, |placed| placed.row.height());
     let height = sentence.size().y + tip.as_ref().map_or(0.0, |tip| tip.size().y + 2.0);
 
@@ -1369,8 +1459,23 @@ fn tone_color(tone: Tone) -> Color32 {
     }
 }
 
-fn tidies(in_use: bool, tried: bool, busy: bool, may_write: bool) -> bool {
-    !in_use && !tried && !busy && may_write
+const MOST_MENDS: u32 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AfterAnUpdate {
+    Wait,
+    PutBack,
+    Normal,
+}
+
+fn after_an_update(picks: bool, catalog_is_new: bool, given_up: bool, tries: u32) -> AfterAnUpdate {
+    if !picks || tries >= MOST_MENDS || given_up {
+        AfterAnUpdate::Normal
+    } else if catalog_is_new {
+        AfterAnUpdate::PutBack
+    } else {
+        AfterAnUpdate::Wait
+    }
 }
 
 const MOST_READS_AGAIN: u32 = 3;
@@ -1379,35 +1484,21 @@ fn reads_again(read_at: &str, build: &str, steam_busy: bool, tries: u32) -> bool
     read_at != build && !steam_busy && tries < MOST_READS_AGAIN
 }
 
-fn picks_in_words(count: usize) -> String {
-    match count {
-        1 => "1 pick".to_string(),
-        many => format!("{many} picks"),
-    }
-}
-
-fn items_in_words(count: usize) -> String {
-    match count {
-        1 => "one item".to_string(),
-        many => format!("{many} items"),
-    }
-}
-
 fn taken_in_words(picked: usize, left_out: usize, were_away: usize) -> String {
     let picked = match picked {
-        1 => "The code's pick is picked".to_string(),
-        many => format!("The code's {many} picks are picked"),
-    };
-    let without = match left_out {
-        0 => String::new(),
-        gone => format!(", without {} that your game does not have", items_in_words(gone)),
+        1 => tr!(TakenOne).to_string(),
+        many => tr!(TakenMany, count = many),
     };
     let rest = match were_away {
-        0 => "Your other picks stay as they were.",
-        1 => "The pick you had put away is gone.",
-        _ => "The picks you had put away are gone.",
+        0 => tr!(TakenOthersStay),
+        1 => tr!(TakenAwayOneGone),
+        _ => tr!(TakenAwayGone),
     };
-    format!("{picked}{without}. {rest}")
+    match left_out {
+        0 => tr!(TakenAll, picked, rest),
+        1 => tr!(TakenWithoutOne, picked, rest),
+        gone => tr!(TakenWithout, picked, count = gone, rest),
+    }
 }
 
 fn version_before(updated_from: Option<&str>, settings: &Settings, picture_only: bool) -> Option<String> {
@@ -1453,12 +1544,14 @@ mod tests {
     }
 
     #[test]
-    fn a_half_undone_game_is_put_right_once_and_never_while_dota_runs() {
-        assert!(tidies(false, false, false, true));
-        assert!(!tidies(true, false, false, true), "nothing is written while Dota runs, or while Steam puts an update in place");
-        assert!(!tidies(false, true, false, true), "once, until the game is found otherwise");
-        assert!(!tidies(false, false, true, true), "not in the middle of Play or of going back");
-        assert!(!tidies(false, false, false, false), "a test window leaves the real game alone");
+    fn the_picks_go_back_in_after_a_dota_update_once_the_new_builds_files_are_read() {
+        use AfterAnUpdate::{Normal, PutBack, Wait};
+        assert_eq!(after_an_update(true, false, false, 0), Wait, "what can be picked is read for the new build first");
+        assert_eq!(after_an_update(true, true, false, 0), PutBack);
+        assert_eq!(after_an_update(true, true, false, MOST_MENDS - 1), PutBack, "tried again where going back to normal did not work either");
+        assert_eq!(after_an_update(true, true, false, MOST_MENDS), Normal, "and not for ever");
+        assert_eq!(after_an_update(true, false, true, 0), Normal, "the new build's files could not be read");
+        assert_eq!(after_an_update(false, true, false, 0), Normal, "no picks, or put away: back to normal, as before");
     }
 
     #[test]

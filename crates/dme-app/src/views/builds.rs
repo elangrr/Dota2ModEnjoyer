@@ -1,26 +1,16 @@
-use dme_core::builds::{self, Bought, Build, Builds, GameTexts, Order, Other, POINT_LEVELS, ProItem, STARTING_GOLD, Talent};
+use dme_core::builds::{self, Bought, Build, Builds, GameTexts, NeutralBuild, NeutralTier, Order, Other, POINT_LEVELS, ProItem, STARTING_GOLD, Talent};
 use dme_core::catalog::{Catalog, Hero};
 use dme_core::draft::{Rank, Role};
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{self, Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
-use super::draft::{Asked, LOOK, Line, RANKS_WIDE, ROLES_WIDE, SOURCE_PAGE, credit_of, list_box, list_line, painted, waiting};
+use super::draft::{Asked, Fetched, LOOK, Line, RANKS_WIDE, ROLES_WIDE, SOURCE_PAGE, credit_of, list_box, list_line, painted, waiting};
 use super::tiles::{self, Tile};
 use super::{dim, heroes, title_bar};
+use crate::lang::{number, words};
 use crate::pictures::Pictures;
 use crate::theme;
 use crate::worker::Failure;
-
-const NOTE: &str = "What the players of a hero buy and skill, added up from the matches of your rank. \
-     \"Go to build\" on the Draft page opens the build of your own hero there, in your role. Or type a hero's name here. \
-     Every role can be chosen; where too few play the hero in it, the build of the role it is played in most is shown, and the page says so. \
-     \"Start\" is what is bought before the match begins, as much of what most players start with as the 600 gold a hero starts with pays for: an item that is bought three times is there three times. \
-     \"Core items\" are what most of the hero's players buy, in the order they buy it, each with its minute. \
-     They also have what most pros who play the hero in that role buy, such as the Bottle of a mid: under those, how many of 100 pros buy it. \
-     \"Other items\" are bought by fewer, for the match at hand. With a draft on the Draft page, an item that is bought more often against one of the enemy's heroes moves up, turns green and shows that hero. \
-     \"Skills\" says where each skill point goes, level by level, and comes from matches of Divine and Immortal players, as does what is bought against whom. \
-     Under each item is how many of the hero's players buy it; rest the pointer on anything for more. \
-     A build is what most players do, not the only way to play.";
 
 const LABEL: f32 = 92.0;
 const ITEM: egui::Vec2 = vec2(44.0, 32.0);
@@ -33,6 +23,9 @@ const TALENT: f32 = 22.0;
 const BETWEEN_TALENTS: f32 = 3.0;
 const GROWS: f32 = 244.0;
 const STAYS: f32 = 92.0;
+const NEUTRAL_GROWS: f32 = 40.0;
+const NEUTRAL_STAYS: f32 = 12.0;
+const TIER_WIDE: f32 = 40.0;
 const MOST_LARGER: f32 = 1.75;
 const SCROLL_BAR: f32 = 14.0;
 
@@ -56,7 +49,7 @@ impl Chosen {
 }
 
 fn in_its_place(hero: &str, asked: Role, shown: Role) -> Option<String> {
-    (asked != shown).then(|| format!("Too few play {hero} as {} in this rank for a build of its own. This is the build of {}, the role {hero} is played in most.", asked.name(), shown.name()))
+    (asked != shown).then(|| tr!(InItsPlace, hero, asked = words::role(asked), shown = words::role(shown)))
 }
 
 pub struct View<'a> {
@@ -83,7 +76,7 @@ pub struct Answer {
 pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
     let View { catalog, pictures, chosen, builds, fetching, failure, texts, rank, enemies, now } = view;
     let mut answer = Answer::default();
-    title_bar(ui, "Builds", Some(NOTE), Some((&mut chosen.search, "Type a hero's name")), |_| {});
+    title_bar(ui, tr!(BuildsTitle), Some(tr!(BuildsNote)), Some((&mut chosen.search, tr!(HeroNameHint))), |_| {});
 
     let wanted = chosen.search.trim().to_lowercase();
     if !wanted.is_empty() {
@@ -95,7 +88,7 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
         return answer;
     };
     let Some(builds) = builds else {
-        match waiting(ui, fetching, failure, "builds", "") {
+        match waiting(ui, fetching, failure, Fetched::Builds, "") {
             Some(Asked::Again) => answer.try_again = true,
             Some(Asked::CopyDetails) => answer.copy_details = true,
             None => {}
@@ -106,7 +99,7 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.2).min(60.0));
             ui.spinner();
-            ui.label(dim("Reading your game's files…"));
+            ui.label(dim(tr!(ReadingFiles)));
         });
         return answer;
     };
@@ -117,7 +110,7 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
     head(ui, pictures, hero, asked, role, rank, chosen, &mut answer);
     let Some(build) = role.and_then(|role| builds.of(&hero.id, rank, role)) else {
         ui.add_space(8.0);
-        ui.label(dim(format!("The numbers have no build for {} in this rank. Try another rank.", hero.name)));
+        ui.label(dim(tr!(NoBuild, hero = hero.name)));
         return answer;
     };
 
@@ -130,26 +123,28 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
     let order = builds.order(&hero.id, build.role);
     let own = texts.talents(&hero.id);
     let start = build.starting(texts);
-    let start_note = format!("before the match\n{} of {} gold", Build::starting_cost(&start, texts), STARTING_GOLD);
-    let larger = ((ui.available_height() - STAYS) / GROWS).clamp(1.0, MOST_LARGER);
+    let start_note = tr!(StartNote, cost = Build::starting_cost(&start, texts), gold = STARTING_GOLD);
+    let neutrals = builds.neutral_tiers(&hero.id, build.role, texts);
+    let (grows, stays) = if neutrals.is_some() { (GROWS + NEUTRAL_GROWS, STAYS + NEUTRAL_STAYS) } else { (GROWS, STAYS) };
+    let larger = ((ui.available_height() - stays) / grows).clamp(1.0, MOST_LARGER);
     let item = (ITEM * larger).round();
     let line = item.y + under(item);
     egui::ScrollArea::vertical().id_salt("build").auto_shrink(false).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = (5.0 * larger).round();
         ui.add_space(2.0);
-        part(ui, "Start", &start_note, line, |ui| {
+        part(ui, tr!(PartStart), &start_note, line, |ui| {
             for bought in &start {
                 let shown = Shown { item: &bought.item, copies: bought.copies, corner: None, under: format!("{:.0}%", build.share(bought.matches)), ink: theme::text_dim(), face: None };
                 let Some(tile) = item_tile(ui, pictures, item, &shown) else { break };
                 tile.on_hover_ui(|ui| said(ui, &texts.item_name(&bought.item), &item_words(build, bought)));
             }
         });
-        part(ui, "Core items", "in the order they are bought", line, |ui| {
+        part(ui, tr!(PartCore), tr!(PartCoreNote), line, |ui| {
             let item = fitted(item, core.len(), ui.available_width() - SCROLL_BAR);
             for one in &core {
                 let shown = match one {
-                    Core::Ours(bought) => Shown { item: &bought.item, copies: 1, corner: Some(format!("{} min", bought.minute)), under: format!("{:.0}%", build.share(bought.matches)), ink: theme::text_dim(), face: None },
-                    Core::Pros(pro) => Shown { item: &pro.item, copies: 1, corner: Some(format!("{} min", pro.minute)), under: format!("{:.0}%", pro.share), ink: theme::text_dim(), face: None },
+                    Core::Ours(bought) => Shown { item: &bought.item, copies: 1, corner: Some(tr!(Minutes, minute = bought.minute)), under: format!("{:.0}%", build.share(bought.matches)), ink: theme::text_dim(), face: None },
+                    Core::Pros(pro) => Shown { item: &pro.item, copies: 1, corner: Some(tr!(Minutes, minute = pro.minute)), under: format!("{:.0}%", pro.share), ink: theme::text_dim(), face: None },
                 };
                 let Some(tile) = item_tile(ui, pictures, item, &shown) else { break };
                 match one {
@@ -159,10 +154,10 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
                 };
             }
             if core.is_empty() {
-                ui.label(dim("No item is bought by enough of its players to be one of the core.").small());
+                ui.label(dim(tr!(NoCore)).small());
             }
         });
-        part(ui, "Other items", if against.is_empty() { "for the match at hand" } else { "against this draft" }, line, |ui| {
+        part(ui, tr!(PartOther), if against.is_empty() { tr!(PartOtherNote) } else { tr!(PartOtherDraft) }, line, |ui| {
             let name_of = |id: &str| catalog.any_hero(id).map_or_else(|| id.to_string(), |hero| hero.name.clone());
             for other in &others {
                 let face = other.against.first().and_then(|(enemy, _)| catalog.any_hero(enemy)).and_then(|enemy| enemy.picture.as_deref());
@@ -173,31 +168,41 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
                 tile.on_hover_ui(|ui| said(ui, &texts.item_name(&other.item.item), &other_words(build, other, &usually, &name_of)));
             }
             if others.is_empty() {
-                ui.label(dim("Nothing else is bought often enough to say.").small());
+                ui.label(dim(tr!(NoOther)).small());
             }
         });
-        part(ui, "Skills", "level by level", (POINT * larger).round() + OVER, |ui| points(ui, pictures, texts, own, order, larger));
+        if let Some((neutral, tiers)) = &neutrals {
+            let note = match neutral.role {
+                Some(_) => tr!(NeutralNote, players = neutral.players, patch = builds.neutral_patch),
+                None => tr!(NeutralNoteAny, players = neutral.players, patch = builds.neutral_patch),
+            };
+            part(ui, tr!(PartNeutral), &note, line, |ui| neutral_line(ui, pictures, texts, item, &hero.name, neutral, tiers, &builds.neutral_patch));
+        }
+        part(ui, tr!(PartSkills), tr!(PartSkillsNote), (POINT * larger).round() + OVER, |ui| points(ui, pictures, texts, own, order, larger));
         if !own.is_empty() {
             let high = (TALENT * larger).round();
             let counted = own.iter().any(|talent| build.talent(&talent.id).is_some_and(|taken| taken.matches > 0));
-            let note = if counted { "how many take each" } else { "the numbers do not count them" };
-            part(ui, "Talents", note, 4.0 * high + 3.0 * BETWEEN_TALENTS, |ui| talents(ui, own, build, high, counted));
+            let note = if counted { tr!(TalentsCounted) } else { tr!(TalentsNotCounted) };
+            part(ui, tr!(PartTalents), note, 4.0 * high + 3.0 * BETWEEN_TALENTS, |ui| talents(ui, own, build, high, counted));
         }
         ui.horizontal(|ui| {
-            ui.label(dim(format!("From {} matches.", with_spaces(build.matches))).small());
+            ui.label(dim(tr!(FromMatches, count = with_spaces(build.matches))).small());
             let source = match builds.pro_source.trim() {
                 "" => builds.source.clone(),
-                pros => format!("{} and {pros}", builds.source),
+                pros => tr!(SourcesAnd, first = builds.source, second = pros),
             };
             let credit = ui.add(egui::Button::new(dim(credit_of(&source, &builds.patch, builds.age_in_days(now))).small()).frame(false));
             let mut from = match builds.sampled {
                 0 => String::new(),
-                sampled => format!("The order of the skill points and what is bought against whom are from {} single matches of Divine and Immortal players. ", with_spaces(sampled)),
+                sampled => tr!(FromSampled, count = with_spaces(sampled)),
             };
             if builds.pro_matches > 0 {
-                from.push_str(&format!("What pros buy is from {} recent pro matches, from {}. ", with_spaces(builds.pro_matches), builds.pro_source));
+                from.push_str(&tr!(FromPros, count = with_spaces(builds.pro_matches), source = builds.pro_source));
             }
-            answer.open_source = credit.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("{from}Opens {SOURCE_PAGE}")).clicked();
+            if builds.neutral_matches > 0 {
+                from.push_str(&tr!(FromNeutrals, count = with_spaces(builds.neutral_matches), patch = builds.neutral_patch, source = builds.neutral_source));
+            }
+            answer.open_source = credit.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("{from}{}", tr!(Opens, address = SOURCE_PAGE))).clicked();
         });
     });
     answer
@@ -212,7 +217,7 @@ fn head(ui: &mut Ui, pictures: &mut Pictures, hero: &Hero, asked: Option<Role>, 
         ui.label(theme::title(&hero.name, 22.0));
         ui.add_space(6.0);
         if let Some(role) = asked {
-            let open = list_box(ui, pictures, &Line::of_role(role), ROLES_WIDE).on_hover_text("The role the build is for. A role the hero is hardly played in shows the build of the role it is played in most.");
+            let open = list_box(ui, pictures, &Line::of_role(role), ROLES_WIDE).on_hover_text(tr!(RoleHint));
             egui::Popup::menu(&open).show(|ui| {
                 ui.set_width(ROLES_WIDE);
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -223,7 +228,7 @@ fn head(ui: &mut Ui, pictures: &mut Pictures, hero: &Hero, asked: Option<Role>, 
                 }
             });
         }
-        let open = list_box(ui, pictures, &Line::of_rank(rank), RANKS_WIDE).on_hover_text("Your rank. Builds are added up for two ranks together.");
+        let open = list_box(ui, pictures, &Line::of_rank(rank), RANKS_WIDE).on_hover_text(tr!(RankHint));
         egui::Popup::menu(&open).show(|ui| {
             ui.set_width(RANKS_WIDE);
             ui.spacing_mut().item_spacing.y = 2.0;
@@ -343,28 +348,74 @@ fn item_tile(ui: &mut Ui, pictures: &mut Pictures, size: egui::Vec2, shown: &Sho
     Some(response)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn neutral_line(ui: &mut Ui, pictures: &mut Pictures, texts: &GameTexts, size: egui::Vec2, hero: &str, neutral: &NeutralBuild, tiers: &[NeutralTier<'_>], patch: &str) {
+    let shown = |tier: &NeutralTier<'_>| tier.trinkets.len() + tier.enhancements.len().min(1);
+    let count: usize = tiers.iter().map(shown).sum();
+    let tier_wide = tiers.iter().map(|tier| ui.painter().layout_no_wrap(tr!(Tier, tier = tier.tier), theme::heavy(12.0), theme::accent_text()).size().x).fold(TIER_WIDE, f32::max);
+    let room = ui.available_width() - SCROLL_BAR - tiers.len() as f32 * (tier_wide + GAP);
+    let size = fitted(size, count, room);
+    for tier in tiers {
+        let (rect, response) = ui.allocate_exact_size(vec2(tier_wide, size.y + under(size)), Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter();
+            painter.text(pos2(rect.right(), rect.top() + 2.0), Align2::RIGHT_TOP, tr!(Tier, tier = tier.tier), theme::heavy(12.0), theme::accent_text());
+            painter.text(pos2(rect.right(), rect.top() + 18.0), Align2::RIGHT_TOP, tr!(Minutes, minute = tier.minute), FontId::proportional(11.0), theme::text_dim());
+        }
+        response.on_hover_ui(|ui| said(ui, &tr!(Tier, tier = tier.tier), &tier_words(hero, neutral, tier, patch)));
+        for (name, share) in &tier.trinkets {
+            let shown = Shown { item: name, copies: 1, corner: None, under: format!("{share:.0}%"), ink: theme::text_dim(), face: None };
+            let Some(tile) = item_tile(ui, pictures, size, &shown) else { return };
+            tile.on_hover_ui(|ui| said(ui, &texts.item_name(name), &neutral_words(hero, neutral, tier, *share, true, patch)));
+        }
+        if let Some((name, share)) = tier.enhancements.first() {
+            let shown = Shown { item: name, copies: 1, corner: None, under: format!("{share:.0}%"), ink: theme::text_dim(), face: None };
+            let Some(tile) = item_tile(ui, pictures, size, &shown) else { return };
+            tile.on_hover_ui(|ui| said(ui, &texts.item_name(name), &neutral_words(hero, neutral, tier, *share, false, patch)));
+        }
+    }
+}
+
+fn neutral_pros(hero: &str, neutral: &NeutralBuild) -> String {
+    match neutral.role {
+        Some(role) => tr!(NeutralPros, hero, role = words::as_played(role)),
+        None => tr!(NeutralProsAny, hero),
+    }
+}
+
+fn neutral_words(hero: &str, neutral: &NeutralBuild, tier: &NeutralTier<'_>, share: f32, trinket: bool, patch: &str) -> String {
+    let (share, pros) = (format!("{share:.0}"), neutral_pros(hero, neutral));
+    match trinket {
+        true => tr!(TrinketWords, share, tier = tier.tier, players = neutral.players, pros, reached = tier.reached, patch),
+        false => tr!(EnhancementWords, share, tier = tier.tier, players = neutral.players, pros, reached = tier.reached, patch),
+    }
+}
+
+fn tier_words(hero: &str, neutral: &NeutralBuild, tier: &NeutralTier<'_>, patch: &str) -> String {
+    let mut words = tr!(TierWords, minute = tier.minute, players = neutral.players, pros = neutral_pros(hero, neutral), reached = tier.reached, patch);
+    if tier.kept > 0 {
+        words.push_str(&tr!(TierKept, count = tier.kept));
+    }
+    words
+}
+
 fn item_words(build: &Build, item: &Bought) -> String {
-    let share = build.share(item.matches);
+    let share = format!("{:.0}", build.share(item.matches));
     let bought = match (item.minute, item.copies) {
-        (0, copies) if copies > 1 => format!("Bought {copies} times at the start, in {share:.0} of 100 matches."),
-        (0, _) => format!("Bought at the start, in {share:.0} of 100 matches."),
-        (minute, _) => format!("Bought in {share:.0} of 100 matches, around minute {minute}."),
+        (0, copies) if copies > 1 => tr!(BoughtStartTimes, copies, share),
+        (0, _) => tr!(BoughtStart, share),
+        (minute, _) => tr!(BoughtAt, share, minute),
     };
     match builds::win_rate(item.matches, item.wins) {
-        Some(wins) => format!("{bought} Those who buy it win {wins:.1}% of their matches."),
+        Some(wins) => tr!(BoughtWins, bought, wins = number(f64::from(wins), 1)),
         None => bought,
     }
 }
 
 fn pro_words(hero: &str, build: &Build, pro: &ProItem, players: u64) -> String {
-    let pros = format!(
-        "Most pros who play {hero} {} buy it: {:.0} of 100 of the {players} who did in recent pro matches, around minute {}.",
-        build.role.as_played(),
-        pro.share,
-        pro.minute
-    );
+    let pros = tr!(ProWords, hero, role = words::as_played(build.role), share = format!("{:.0}", pro.share), players, minute = pro.minute);
     match build.items.iter().find(|item| item.item.eq_ignore_ascii_case(&pro.item)) {
-        Some(item) => format!("{pros} Of the players of your rank, {:.0} of 100 buy it.", build.share(item.matches)),
+        Some(item) => tr!(ProWordsRank, pros, share = format!("{:.0}", build.share(item.matches))),
         None => pros,
     }
 }
@@ -372,15 +423,17 @@ fn pro_words(hero: &str, build: &Build, pro: &ProItem, players: u64) -> String {
 fn other_words(build: &Build, other: &Other<'_>, usually: &[(&str, f32)], name_of: &dyn Fn(&str) -> String) -> String {
     let mut words = item_words(build, other.item);
     for (enemy, times) in &other.against {
-        words.push_str(&format!(" Against {} it is bought {times:.1} times as often.", name_of(enemy)));
+        words.push_str(&tr!(AgainstTimes, hero = name_of(enemy), times = number(f64::from(*times), 1)));
     }
     if !other.against.is_empty() {
-        words.push_str(&format!(" That makes about {:.0} of 100 in this match.", other.share));
+        words.push_str(&tr!(InThisMatch, share = format!("{:.0}", other.share)));
     }
-    let more: Vec<String> = usually.iter().filter(|(enemy, _)| !other.against.iter().any(|(named, _)| named.eq_ignore_ascii_case(enemy))).take(3).map(|(enemy, times)| format!("{} ({times:.1} times)", name_of(enemy))).collect();
+    let more: Vec<String> = usually.iter().filter(|(enemy, _)| !other.against.iter().any(|(named, _)| named.eq_ignore_ascii_case(enemy))).take(3).map(|(enemy, times)| tr!(HeroTimes, hero = name_of(enemy), times = number(f64::from(*times), 1))).collect();
     if !more.is_empty() {
-        let also = if other.against.is_empty() { "" } else { " also" };
-        words.push_str(&format!(" It is{also} bought more often against {}.", in_a_list(&more)));
+        match other.against.is_empty() {
+            true => words.push_str(&tr!(MoreOftenAgainst, heroes = in_a_list(&more))),
+            false => words.push_str(&tr!(AlsoMoreOftenAgainst, heroes = in_a_list(&more))),
+        }
     }
     words
 }
@@ -389,13 +442,13 @@ fn in_a_list(names: &[String]) -> String {
     match names {
         [] => String::new(),
         [one] => one.clone(),
-        [before @ .., last] => format!("{} and {last}", before.join(", ")),
+        [before @ .., last] => tr!(ListAnd, first = before.join(", "), last),
     }
 }
 
 fn points(ui: &mut Ui, pictures: &mut Pictures, texts: &GameTexts, own: &[Talent], order: Option<&Order>, larger: f32) {
     let Some(order) = order.filter(|order| !order.skills.is_empty()) else {
-        ui.label(dim("The numbers have no order of skill points for this role.").small());
+        ui.label(dim(tr!(NoOrder)).small());
         return;
     };
     const BETWEEN: f32 = 3.0;
@@ -420,7 +473,7 @@ fn points(ui: &mut Ui, pictures: &mut Pictures, texts: &GameTexts, own: &[Talent
                 None => tiles::fill_with(painter, pictures, Some(&builds::skill_picture(skill)), square, 6, 1.0),
             }
         }
-        response.on_hover_text(format!("Level {level}: {what}"));
+        response.on_hover_text(tr!(LevelPoint, level, what));
     }
 }
 
@@ -428,9 +481,9 @@ fn point_of(texts: &GameTexts, own: &[Talent], skill: &str) -> (String, Option<u
     match own.iter().position(|talent| talent.id.eq_ignore_ascii_case(skill)) {
         Some(place) => {
             let tier = 10 + 5 * (place as u32 / 2);
-            (format!("the talent of level {tier}, {}", own[place].text), Some(tier))
+            (tr!(TalentOfLevel, tier, talent = own[place].text), Some(tier))
         }
-        None if skill.to_ascii_lowercase().starts_with("special_bonus") => ("a talent".to_string(), Some(0)),
+        None if skill.to_ascii_lowercase().starts_with("special_bonus") => (tr!(ATalent).to_string(), Some(0)),
         None => (texts.skill_name(skill), None),
     }
 }
@@ -458,7 +511,7 @@ fn talents(ui: &mut Ui, own: &[Talent], build: &Build, high: f32, counted: bool)
                     let letters = 12.5 + 2.5 * (high / TALENT - 1.0);
                     let shown = match (counted, new(talent)) {
                         (false, _) => String::new(),
-                        (true, true) => "new".to_string(),
+                        (true, true) => tr!(NewMark).to_string(),
                         (true, false) => format!("{share:.0}%"),
                     };
                     let number = painter.layout_no_wrap(shown, theme::heavy(letters - 0.5), if more { theme::accent_text() } else { theme::text_dim() });
@@ -471,8 +524,8 @@ fn talents(ui: &mut Ui, own: &[Talent], build: &Build, high: f32, counted: bool)
                     painter.galley(pos2(room.left() + 9.0, room.center().y - text.size().y / 2.0), text, theme::text());
                 }
                 let words = match (counted, new(talent)) {
-                    (false, _) => "The numbers do not say how many take it.".to_string(),
-                    (true, true) => NEW_TALENT.to_string(),
+                    (false, _) => tr!(TalentNotCounted).to_string(),
+                    (true, true) => tr!(NewTalent).to_string(),
                     (true, false) => talent_words(build, talent),
                 };
                 ui.interact(room, ui.make_persistent_id(("talent", tier, place)), Sense::hover()).on_hover_ui(|ui| said(ui, &talent.text, &words));
@@ -484,13 +537,12 @@ fn talents(ui: &mut Ui, own: &[Talent], build: &Build, high: f32, counted: bool)
     });
 }
 
-const NEW_TALENT: &str = "New in this patch. The numbers are from before it, so they do not say how many take it yet.";
-
 fn talent_words(build: &Build, talent: &Talent) -> String {
-    let Some(taken) = build.talent(&talent.id).filter(|taken| build.share(taken.matches) >= 0.5) else { return "Hardly anybody takes it.".to_string() };
+    let Some(taken) = build.talent(&talent.id).filter(|taken| build.share(taken.matches) >= 0.5) else { return tr!(HardlyAnybody).to_string() };
+    let share = format!("{:.0}", build.share(taken.matches));
     match builds::win_rate(taken.matches, taken.wins) {
-        Some(wins) => format!("{:.0} of 100 take it. They win {wins:.1}% of their matches.", build.share(taken.matches)),
-        None => format!("{:.0} of 100 take it.", build.share(taken.matches)),
+        Some(wins) => tr!(TakeItWins, share, wins = number(f64::from(wins), 1)),
+        None => tr!(TakeIt, share),
     }
 }
 
@@ -509,8 +561,8 @@ fn with_spaces(number: u64) -> String {
 fn fitting(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, chosen: &mut Chosen, wanted: &str) {
     let fitting = heroes::found(catalog.all_heroes(), wanted);
     ui.horizontal(|ui| {
-        ui.label(theme::title("Heroes that fit", 16.0));
-        ui.label(dim(if fitting.is_empty() { "No hero goes by that name." } else { "Click one, or press Enter for the first, to see its build." }).small());
+        ui.label(theme::title(tr!(HeroesThatFit), 16.0));
+        ui.label(dim(if fitting.is_empty() { tr!(NoHeroNamed) } else { tr!(ClickForBuild) }).small());
     });
     let mut picked = None;
     if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
@@ -533,9 +585,9 @@ fn fitting(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, chosen: &mut
 fn nobody(ui: &mut Ui) {
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() * 0.25).min(90.0));
-        ui.label(theme::title("Whose build?", 20.0));
+        ui.label(theme::title(tr!(WhoseBuild), 20.0));
         ui.add_space(4.0);
-        ui.label(dim("Type a hero's name. Or finish a draft on the Draft page: \"Go to build\" there opens the build of your own hero."));
+        ui.label(dim(tr!(WhoseBuildHow)));
     });
 }
 
@@ -658,6 +710,19 @@ mod tests {
             Some("Too few play Crystal Maiden as Carry in this rank for a build of its own. This is the build of Hard support, the role Crystal Maiden is played in most.")
         );
         assert_eq!(in_its_place("Axe", Role::Offlane, Role::Offlane), None);
+    }
+
+    #[test]
+    fn a_neutral_item_says_how_many_pros_take_it_and_who_they_are() {
+        let neutral = NeutralBuild { role: Some(Role::Carry), players: 12, tiers: Vec::new() };
+        let tier = NeutralTier { tier: 2, minute: 15, reached: 9, kept: 2, trinkets: vec![("item_brick", 44.4)], enhancements: Vec::new() };
+        assert_eq!(neutral_words("Slark", &neutral, &tier, 44.4, true, "7.42"), "44 of 100 took it as their trinket of tier 2: of the 12 pros who played Slark as carry, the 9 who got that far, in pro matches of patch 7.42.");
+        assert_eq!(
+            tier_words("Slark", &neutral, &tier, "7.42"),
+            "Opens at minute 15. Of the 12 pros who played Slark as carry, 9 made something of it, in pro matches of patch 7.42. 2 of them kept the trinket they had and took only a new enhancement."
+        );
+        let any = NeutralBuild { role: None, ..neutral };
+        assert!(tier_words("Slark", &any, &NeutralTier { kept: 0, ..tier }, "7.42").ends_with("pros who played Slark in any role (too few played it in this one), 9 made something of it, in pro matches of patch 7.42."));
     }
 
     #[test]

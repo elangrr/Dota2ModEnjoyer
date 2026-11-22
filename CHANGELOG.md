@@ -2,6 +2,17 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.5.0
+
+- After a Dota update, the app puts your picks back in by itself once Steam is done, so you no longer have to press Play first. Keep the app open, or open it after the update.
+- New in Settings, "My Hero Pool": choose the heroes you play, three to begin with and more if you like. Your own list on the Draft page then shows only them, and the heroes it suggests to ban are those worst for them.
+- Before the first pick, the Draft page suggests heroes to ban. You can mark any hero as banned, and it stays out of every list until "New draft".
+- With nothing picked, the Draft page lists the best heroes this week for your rank and role, and marks the ones rising or falling since last week.
+- New "Suggest to my team" button on the three best heroes of your list on the Draft page: it copies a line for Dota's chat, such as "Invoker is a good pick against the enemy".
+- The Builds page shows which neutral items pros take in each tier, from pro matches of the new patch. Heroes few pros have played yet show none, and more appear each week.
+- The app speaks Russian now, and names heroes and items as your Dota does. It follows the language of Windows, and you can choose it at the top of Settings.
+- Some items, such as Revenant's Brooch, now show the game's own name.
+
 ## 0.4.3
 
 - After a Dota update, the app reads the game's files again by itself. Left open through an update, it used to show some pictures empty and some names wrong until it was started again.

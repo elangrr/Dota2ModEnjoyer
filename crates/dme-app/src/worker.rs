@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use dme_core::apply::{EffectsFor, Pick};
 use dme_core::catalog::Catalog;
-use dme_core::engine::{Engine, ModState, Ready, Restored, Status};
+use dme_core::engine::{Engine, Mended, ModState, Ready, Restored, Status};
 use dme_core::loadout::same_picks;
 use dme_core::vpk::Archive;
 use dme_core::{launch, process};
@@ -17,13 +17,12 @@ use crate::crash;
 const WATCH: Duration = Duration::from_millis(1500);
 const LOOK_AGAIN: u32 = 6;
 
-pub const WENT_WRONG: &str = "Something went wrong inside the app, and it stopped what it was doing. Try again. If it happens again, please report it.";
-
 pub enum Job {
-    Load,
+    Load { language: String },
     Play { picks: Vec<Pick>, effects_for: EffectsFor, start: bool, low_end: bool },
     Restore,
     Tidy,
+    Mend { picks: Vec<Pick>, effects_for: EffectsFor },
 }
 
 pub enum Reply {
@@ -32,7 +31,14 @@ pub enum Reply {
     Played(Result<Played, Failure>),
     Restored(Result<Restored, Failure>),
     Tidied(Result<Restored, Failure>),
+    Mended(Result<Mend, Failure>),
     Stopped(Failure),
+}
+
+pub enum Mend {
+    Back,
+    Later,
+    Normal(Failure),
 }
 
 pub struct Loaded {
@@ -50,6 +56,7 @@ pub struct GameState {
     pub package_is_current: bool,
     pub steam_busy: bool,
     pub build: String,
+    pub undone: bool,
 }
 
 impl GameState {
@@ -61,6 +68,7 @@ impl GameState {
 impl From<Status> for GameState {
     fn from(status: Status) -> GameState {
         GameState {
+            undone: status.undone_by_an_update(),
             running: status.running,
             mods: status.state,
             applied: status.picks,
@@ -80,7 +88,14 @@ pub struct Played {
 #[derive(Clone, Debug)]
 pub struct Failure {
     pub sentence: String,
+    pub english: String,
     pub details: String,
+}
+
+impl Failure {
+    pub fn went_wrong(details: String) -> Failure {
+        Failure { sentence: tr!(WentWrong).to_string(), english: tr_en!(WentWrong).to_string(), details }
+    }
 }
 
 pub struct Worker {
@@ -110,7 +125,7 @@ impl Worker {
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) if !self.told_gone.replace(true) => {
                 let details = format!("While working on the game's files, the thread for it stopped.\n{}", crash::last().unwrap_or_default());
-                Some(Reply::Stopped(Failure { sentence: WENT_WRONG.to_string(), details }))
+                Some(Reply::Stopped(Failure::went_wrong(details)))
             }
             Err(TryRecvError::Disconnected) => None,
         }
@@ -131,8 +146,8 @@ fn run(engine: &Engine, jobs: &Receiver<Job>, replies: &Sender<Reply>, ctx: &egu
 
     loop {
         match jobs.recv_timeout(WATCH) {
-            Ok(Job::Load) => {
-                let _ = replies.send(Reply::Loaded(guarded(engine, "reading the game's files", || load(engine))));
+            Ok(Job::Load { language }) => {
+                let _ = replies.send(Reply::Loaded(guarded(engine, "reading the game's files", || load(engine, &language))));
             }
             Ok(Job::Play { picks, effects_for, start, low_end }) => {
                 let played = guarded(engine, "putting the picks in the game", || play(engine, &picks, &effects_for, start, low_end));
@@ -147,6 +162,20 @@ fn run(engine: &Engine, jobs: &Receiver<Job>, replies: &Sender<Reply>, ctx: &egu
             Ok(Job::Tidy) => {
                 let tidied = guarded(engine, "putting a game that an update left half undone back to normal", || engine.restore());
                 let _ = replies.send(Reply::Tidied(tidied));
+                tell_state(&mut running);
+            }
+            Ok(Job::Mend { picks, effects_for }) => {
+                let doing = "putting the picks back in after a Dota update";
+                let mended = guarded(engine, doing, || engine.mend(&picks, &effects_for)).map(|mended| match mended {
+                    Mended::Back(_) => Mend::Back,
+                    Mended::Later => Mend::Later,
+                    Mended::Normal { why, .. } => {
+                        let Failure { english, details, .. } = failure(engine, doing, &why);
+                        Mend::Normal(Failure { sentence: tr!(MendFailed).to_string(), english: tr_en!(MendFailed).to_string(), details: format!("{english}
+{details}") })
+                    }
+                });
+                let _ = replies.send(Reply::Mended(mended));
                 tell_state(&mut running);
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -166,14 +195,14 @@ fn run(engine: &Engine, jobs: &Receiver<Job>, replies: &Sender<Reply>, ctx: &egu
 fn guarded<T>(engine: &Engine, doing: &str, work: impl FnOnce() -> dme_core::Result<T>) -> Result<T, Failure> {
     match catch_unwind(AssertUnwindSafe(work)) {
         Ok(done) => done.map_err(|error| failure(engine, doing, &error)),
-        Err(_) => Err(Failure { sentence: WENT_WRONG.to_string(), details: format!("While {doing}:\n{}", crash::last().unwrap_or_default()) }),
+        Err(_) => Err(Failure::went_wrong(format!("While {doing}:\n{}", crash::last().unwrap_or_default()))),
     }
 }
 
-fn load(engine: &Engine) -> dme_core::Result<Loaded> {
+fn load(engine: &Engine, language: &str) -> dme_core::Result<Loaded> {
     let build = engine.dota.version().map(|version| version.build).unwrap_or_default();
     let archive = Arc::new(Archive::open(&engine.dota.game_archive())?);
-    let catalog = Arc::new(Catalog::load(&archive)?);
+    let catalog = Arc::new(Catalog::load_in(&archive, language, &crate::lang::words::CatalogWords)?);
     Ok(Loaded { catalog, archive, build })
 }
 
@@ -189,7 +218,8 @@ fn play(engine: &Engine, picks: &[Pick], effects_for: &EffectsFor, start: bool, 
 fn failure(engine: &Engine, doing: &str, error: &dme_core::Error) -> Failure {
     let build = engine.dota.version().map_or_else(|_| "unknown".to_string(), |version| version.build);
     Failure {
-        sentence: error.plain(engine.dota.root()),
+        sentence: crate::lang::words::error(error, engine.dota.root()),
+        english: error.plain(engine.dota.root()),
         details: format!(
             "Dota 2 Mod Enjoyer {}\nWhile {doing}: {error}\n{error:?}\nDota 2 build {build} in {}\nData in {}",
             env!("CARGO_PKG_VERSION"),
@@ -220,7 +250,7 @@ mod tests {
             let worked = scope.spawn(|| guarded(&engine, "putting the picks in the game", || -> dme_core::Result<()> { panic!("a test of what happens") }));
             worked.join().expect("the thread goes on").unwrap_err()
         });
-        assert_eq!(failure.sentence, WENT_WRONG);
+        assert_eq!(failure.sentence, tr!(WentWrong));
         assert!(failure.details.starts_with("While putting the picks in the game:\n"), "{}", failure.details);
         assert!(failure.details.contains("a test of what happens"), "{}", failure.details);
         assert!(!dir.path().join(crash::FILE).exists(), "the app goes on: that is no crash");
@@ -237,7 +267,7 @@ mod tests {
         let (outbox, replies) = mpsc::channel::<Reply>();
         drop(outbox);
         let worker = Worker { jobs, replies, told_gone: Cell::new(false) };
-        assert!(matches!(worker.poll(), Some(Reply::Stopped(failure)) if failure.sentence == WENT_WRONG));
+        assert!(matches!(worker.poll(), Some(Reply::Stopped(failure)) if failure.sentence == tr!(WentWrong)));
         assert!(worker.poll().is_none());
     }
 }

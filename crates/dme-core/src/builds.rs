@@ -17,9 +17,9 @@ pub const FORMAT: u32 = 2;
 
 const WHAT: &str = "the builds";
 
-const NAMES_FILE: &str = "resource/localization/abilities_english.txt";
 const ITEMS_FILE: &str = "scripts/npc/items.txt";
 const SKILLS_FILE: &str = "scripts/npc/npc_abilities.txt";
+const NEUTRALS_FILE: &str = "scripts/npc/neutral_items.txt";
 
 pub const STARTING_GOLD: u32 = 600;
 
@@ -68,6 +68,38 @@ pub struct ProBuild {
     pub role: Role,
     pub players: u64,
     pub items: Vec<ProItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NeutralBuild {
+    pub role: Option<Role>,
+    pub players: u64,
+    pub tiers: Vec<NeutralTaken>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NeutralTaken {
+    pub tier: u32,
+    pub reached: u64,
+    pub kept: u64,
+    pub trinkets: Vec<(String, u64)>,
+    pub enhancements: Vec<(String, u64)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NeutralTier<'b> {
+    pub tier: u32,
+    pub minute: u32,
+    pub reached: u64,
+    pub kept: u64,
+    pub trinkets: Vec<(&'b str, f32)>,
+    pub enhancements: Vec<(&'b str, f32)>,
+}
+
+impl NeutralTaken {
+    pub fn share(&self, count: u64) -> f32 {
+        if self.reached == 0 { 0.0 } else { (count as f64 / self.reached as f64 * 100.0).min(100.0) as f32 }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,6 +194,42 @@ struct File {
     against: HashMap<String, Vec<(usize, u32)>>,
     #[serde(default)]
     pros: ProsInFile,
+    #[serde(default)]
+    neutrals: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct NeutralsInFile {
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    patch: String,
+    #[serde(default)]
+    matches: u64,
+    names: Vec<String>,
+    heroes: HashMap<String, Vec<(usize, u64, Vec<NeutralTierInFile>)>>,
+}
+
+type NeutralTierInFile = (u32, u64, u64, Vec<(usize, u64)>, Vec<(usize, u64)>);
+
+const ANY_ROLE: usize = 5;
+
+type NeutralsRead = (String, String, u64, HashMap<String, Vec<NeutralBuild>>);
+
+fn neutrals_from(value: serde_json::Value) -> Option<NeutralsRead> {
+    let file: NeutralsInFile = serde_json::from_value(value).ok()?;
+    let named = |entries: &[(usize, u64)]| entries.iter().map(|(place, count)| Some((file.names.get(*place)?.clone(), *count))).collect::<Option<Vec<_>>>();
+    let mut heroes = HashMap::new();
+    for (hero, in_file) in &file.heroes {
+        let mut of_hero = Vec::new();
+        for (role, players, tiers) in in_file {
+            let role = if *role == ANY_ROLE { None } else { Some(*Role::ALL.get(*role)?) };
+            let tiers = tiers.iter().map(|(tier, reached, kept, trinkets, enhancements)| Some(NeutralTaken { tier: *tier, reached: *reached, kept: *kept, trinkets: named(trinkets)?, enhancements: named(enhancements)? })).collect::<Option<Vec<_>>>()?;
+            of_hero.push(NeutralBuild { role, players: *players, tiers });
+        }
+        heroes.insert(hero.to_ascii_lowercase(), of_hero);
+    }
+    Some((file.source, file.patch, file.matches, heroes))
 }
 
 #[derive(Deserialize, Default)]
@@ -201,6 +269,10 @@ pub struct Builds {
     pub pro_source: String,
     pub pro_matches: u64,
     pros: HashMap<String, Vec<ProBuild>>,
+    pub neutral_source: String,
+    pub neutral_patch: String,
+    pub neutral_matches: u64,
+    neutrals: HashMap<String, Vec<NeutralBuild>>,
 }
 
 impl Builds {
@@ -276,7 +348,8 @@ impl Builds {
             pros.insert(hero.to_ascii_lowercase(), of_hero);
         }
         let (pro_source, pro_matches) = (file.pros.source, file.pros.matches);
-        Ok(Builds { made: file.made, source: file.source, patch: file.patch, sampled: file.sampled, heroes, orders, against, pro_source, pro_matches, pros })
+        let (neutral_source, neutral_patch, neutral_matches, neutrals) = file.neutrals.and_then(neutrals_from).unwrap_or_default();
+        Ok(Builds { made: file.made, source: file.source, patch: file.patch, sampled: file.sampled, heroes, orders, against, pro_source, pro_matches, pros, neutral_source, neutral_patch, neutral_matches, neutrals })
     }
 
     pub fn age_in_days(&self, now: u64) -> u64 {
@@ -361,6 +434,30 @@ impl Builds {
     pub fn all_pro_builds(&self) -> impl Iterator<Item = (&str, &ProBuild)> {
         self.pros.iter().flat_map(|(hero, builds)| builds.iter().map(move |pro| (hero.as_str(), pro)))
     }
+
+    pub fn neutral_build(&self, hero: &str, role: Role) -> Option<&NeutralBuild> {
+        let of_hero = self.neutrals.get(&hero.to_ascii_lowercase())?;
+        of_hero.iter().find(|neutral| neutral.role == Some(role)).or_else(|| of_hero.iter().find(|neutral| neutral.role.is_none()))
+    }
+
+    pub fn neutral_tiers<'b>(&'b self, hero: &str, role: Role, texts: &GameTexts) -> Option<(&'b NeutralBuild, Vec<NeutralTier<'b>>)> {
+        let neutral = self.neutral_build(hero, role)?;
+        let shown: Vec<NeutralTier<'b>> = neutral
+            .tiers
+            .iter()
+            .filter_map(|taken| {
+                let game = texts.neutral_tiers.iter().find(|tier| tier.tier == taken.tier)?;
+                let kept = |entries: &'b [(String, u64)], known: &[String]| -> Vec<(&'b str, f32)> { entries.iter().filter(|(name, _)| known.iter().any(|known| known.eq_ignore_ascii_case(name))).map(|(name, count)| (name.as_str(), taken.share(*count))).collect() };
+                let (trinkets, enhancements) = (kept(&taken.trinkets, &game.trinkets), kept(&taken.enhancements, &game.enhancements));
+                (!trinkets.is_empty() || !enhancements.is_empty()).then_some(NeutralTier { tier: taken.tier, minute: game.minute, reached: taken.reached, kept: taken.kept, trinkets, enhancements })
+            })
+            .collect();
+        (!shown.is_empty()).then_some((neutral, shown))
+    }
+
+    pub fn all_neutral_builds(&self) -> impl Iterator<Item = (&str, &NeutralBuild)> {
+        self.neutrals.iter().flat_map(|(hero, builds)| builds.iter().map(move |neutral| (hero.as_str(), neutral)))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,6 +473,44 @@ pub struct GameTexts {
     parts: HashMap<String, Vec<String>>,
     costs: HashMap<String, u32>,
     unsold: HashSet<String>,
+    neutral_tiers: Vec<GameNeutralTier>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GameNeutralTier {
+    pub tier: u32,
+    pub minute: u32,
+    pub trinkets: Vec<String>,
+    pub enhancements: Vec<String>,
+}
+
+pub fn neutral_tiers(file: &[u8]) -> Vec<GameNeutralTier> {
+    if file.is_empty() || kv::validate(file, "a file of the game's").is_err() {
+        return Vec::new();
+    }
+    let Some(listed) = Block::document(file).block("neutral_items").and_then(|items| items.block("neutral_tiers")) else { return Vec::new() };
+    let names = |block: Option<Block<'_>>| -> Vec<String> {
+        let mut names: Vec<String> = block.into_iter().flat_map(|block| block.pairs()).filter_map(|pair| pair.value.as_block()).flat_map(|inner| inner.pairs()).map(|pair| String::from_utf8_lossy(pair.key).trim().to_ascii_lowercase()).collect();
+        names.sort();
+        names.dedup();
+        names
+    };
+    let mut tiers: Vec<GameNeutralTier> = listed
+        .pairs()
+        .filter_map(|pair| {
+            let tier = std::str::from_utf8(pair.key).ok()?.trim().parse().ok()?;
+            let body = pair.value.as_block()?;
+            let start = String::from_utf8_lossy(body.str("start_time").unwrap_or(b"0:00")).to_string();
+            let minute = start.split(':').next()?.trim().parse().ok()?;
+            let pools = body.block("item_pools");
+            let mut trinkets: Vec<String> = pools.into_iter().flat_map(|pools| pools.pairs()).filter_map(|pool| pool.value.as_block()?.block("items")).flat_map(|items| items.pairs()).map(|item| String::from_utf8_lossy(item.key).trim().to_ascii_lowercase()).collect();
+            trinkets.sort();
+            trinkets.dedup();
+            Some(GameNeutralTier { tier, minute, trinkets, enhancements: names(body.block("enhancements")) })
+        })
+        .collect();
+    tiers.sort_by_key(|tier| tier.tier);
+    tiers
 }
 
 impl std::fmt::Debug for GameTexts {
@@ -386,11 +521,19 @@ impl std::fmt::Debug for GameTexts {
 
 impl GameTexts {
     pub fn read(archive: &Archive) -> GameTexts {
+        GameTexts::read_in(archive, "english")
+    }
+
+    pub fn read_in(archive: &Archive, language: &str) -> GameTexts {
         let file = |path: &str| archive.read(path).ok().flatten().unwrap_or_default();
+        let mut names = Names::parse(&file(&crate::catalog::names_file("abilities", language)));
+        if language != "english" {
+            names.extend(Names::parse(&file(&crate::catalog::names_file("abilities", "english"))));
+        }
         let mut paths: Vec<String> = archive.entries().iter().map(|entry| archive.path_of(entry)).filter(|path| path.to_ascii_lowercase().starts_with(HERO_FILES)).collect();
         paths.sort();
         let heroes: Vec<Vec<u8>> = paths.iter().map(|path| file(path)).collect();
-        GameTexts::from_files(Names::parse(&file(NAMES_FILE)), &heroes, &file(ITEMS_FILE), &file(SKILLS_FILE))
+        GameTexts { neutral_tiers: neutral_tiers(&file(NEUTRALS_FILE)), ..GameTexts::from_files(names, &heroes, &file(ITEMS_FILE), &file(SKILLS_FILE)) }
     }
 
     pub fn from_files(names: Names, heroes: &[Vec<u8>], items: &[u8], skills: &[u8]) -> GameTexts {
@@ -444,7 +587,7 @@ impl GameTexts {
                 parts.insert(whole, of_it);
             }
         }
-        GameTexts { names, talents, parts, costs, unsold }
+        GameTexts { names, talents, parts, costs, unsold, neutral_tiers: Vec::new() }
     }
 
     pub fn can_be_bought(&self, item: &str) -> bool {
@@ -456,15 +599,24 @@ impl GameTexts {
     }
 
     pub fn item_name(&self, item: &str) -> String {
-        self.names.get(&format!("DOTA_Tooltip_Ability_{item}")).map_or_else(|| in_words(item.strip_prefix("item_").unwrap_or(item)), str::to_string)
+        self.named(item).map_or_else(|| in_words(item.strip_prefix("item_").unwrap_or(item)), str::to_string)
     }
 
     pub fn skill_name(&self, skill: &str) -> String {
-        self.names.get(&format!("DOTA_Tooltip_ability_{skill}")).map_or_else(|| in_words(skill), str::to_string)
+        self.named(skill).map_or_else(|| in_words(skill), str::to_string)
     }
 
     pub fn names(&self, item_or_skill: &str) -> bool {
-        self.names.get(&format!("DOTA_Tooltip_ability_{item_or_skill}")).is_some()
+        self.named(item_or_skill).is_some()
+    }
+
+    fn named(&self, item_or_skill: &str) -> Option<&str> {
+        let token = format!("DOTA_Tooltip_ability_{item_or_skill}");
+        self.names.get(&token).or_else(|| self.names.get(&format!("{token}:n")))
+    }
+
+    pub fn neutral_tiers(&self) -> &[GameNeutralTier] {
+        &self.neutral_tiers
     }
 
     pub fn talents(&self, hero: &str) -> &[Talent] {
@@ -859,10 +1011,79 @@ mod tests {
 
     #[test]
     fn files_that_cannot_be_read_add_nothing() {
+        assert!(neutral_tiers(b"").is_empty() && neutral_tiers(b"{{{").is_empty() && neutral_tiers(b"\"neutral_items\" { }").is_empty());
         let texts = GameTexts::from_files(Names::default(), &[b"\"DOTAHeroes\" { \"broken".to_vec(), Vec::new()], b"{{{", b"nonsense {");
         assert!(texts.talents(PA).is_empty());
         assert!(!texts.is_part_of("item_pers", "item_bfury"));
         assert_eq!(texts.item_name("item_blink"), "Blink");
+    }
+
+    const NEUTRALS: &str = r##""neutral_items" { "madstone_limits" { "madstone_no_limit_time" "65:00" } "neutral_tiers" {
+        "1" { "start_time" "0:00" "item_pools" { "pool_a" { "options" "1" "items" { "item_pogo_stick" "1" "item_chipped_vest" "1" } } }
+            "enhancements" { "global" { "item_enhancement_quickened" "1" } "agility" { "item_enhancement_alert" "1" } "universal" { "item_enhancement_alert" "1" } } }
+        "2" { "start_time" "15:00" "item_pools" { "pool_a" { "items" { "item_brick" "1" } } "pool_b" { "items" { "item_Defiant_Shell" "1" } } }
+            "enhancements" { "global" { "item_enhancement_quickened" "2" } } }
+    } }"##;
+
+    fn with_neutrals() -> serde_json::Value {
+        let mut file = file();
+        file["neutrals"] = json!({
+            "source": "OpenDota", "patch": "7.42", "matches": 40,
+            "names": ["item_pogo_stick", "item_enhancement_alert", "item_old_trinket", "item_brick", "item_defiant_shell"],
+            "heroes": { PA: [
+                [0, 10, [[1, 10, 0, [[0, 7], [2, 2]], [[1, 9]]], [2, 8, 2, [[3, 4], [4, 2]], []], [3, 5, 0, [[0, 5]], []]]],
+                [5, 13, [[1, 13, 0, [[0, 10]], [[1, 13]]]]],
+            ] },
+        });
+        file
+    }
+
+    #[test]
+    fn the_neutral_items_pros_take_are_those_the_game_has_in_each_tier() {
+        let tiers = neutral_tiers(NEUTRALS.as_bytes());
+        assert_eq!(tiers.iter().map(|tier| (tier.tier, tier.minute)).collect::<Vec<_>>(), [(1, 0), (2, 15)]);
+        assert_eq!(tiers[0].trinkets, ["item_chipped_vest", "item_pogo_stick"]);
+        assert_eq!(tiers[0].enhancements, ["item_enhancement_alert", "item_enhancement_quickened"], "of every attribute, each once");
+        assert_eq!(tiers[1].trinkets, ["item_brick", "item_defiant_shell"], "of every pool");
+
+        let builds = read(&with_neutrals()).unwrap();
+        assert_eq!((builds.neutral_source.as_str(), builds.neutral_patch.as_str(), builds.neutral_matches), ("OpenDota", "7.42", 40));
+        assert_eq!(builds.neutral_build(PA, Role::Carry).map(|neutral| (neutral.role, neutral.players)), Some((Some(Role::Carry), 10)));
+        assert_eq!(builds.neutral_build("NPC_DOTA_HERO_PHANTOM_ASSASSIN", Role::Mid).map(|neutral| (neutral.role, neutral.players)), Some((None, 13)));
+        assert!(builds.neutral_build("npc_dota_hero_axe", Role::Carry).is_none());
+        assert_eq!(builds.all_neutral_builds().count(), 2);
+
+        let texts = GameTexts { neutral_tiers: tiers, ..texts() };
+        let (neutral, shown) = builds.neutral_tiers(PA, Role::Carry, &texts).unwrap();
+        assert_eq!(neutral.tiers.len(), 3);
+        assert_eq!(
+            shown,
+            [
+                NeutralTier { tier: 1, minute: 0, reached: 10, kept: 0, trinkets: vec![("item_pogo_stick", 70.0)], enhancements: vec![("item_enhancement_alert", 90.0)] },
+                NeutralTier { tier: 2, minute: 15, reached: 8, kept: 2, trinkets: vec![("item_brick", 50.0), ("item_defiant_shell", 25.0)], enhancements: vec![] },
+            ]
+        );
+        assert!(builds.neutral_tiers(PA, Role::Carry, &self::texts()).is_none());
+        assert!(read(&file()).unwrap().neutral_build(PA, Role::Carry).is_none());
+    }
+
+    #[test]
+    fn neutral_items_that_are_not_what_this_version_reads_leave_the_rest_of_the_file_whole() {
+        for broken in [json!("nonsense"), json!({ "names": [], "heroes": { PA: [[0, 10, [[1, 10, 0, [[0, 7]], []]]]] } }), json!({ "names": ["item_x"], "heroes": { PA: [[7, 10, []]] } })] {
+            let mut file = with_neutrals();
+            file["neutrals"] = broken;
+            let builds = read(&file).unwrap();
+            assert!(builds.neutral_build(PA, Role::Carry).is_none() && builds.neutral_matches == 0);
+            assert!(builds.of(PA, Rank::Archon, Role::Carry).is_some());
+        }
+    }
+
+    #[test]
+    fn an_item_whose_name_the_game_keeps_under_n_has_it() {
+        let names = r##""lang" { "Tokens" { "dota_tooltip_ability_item_pogo_stick:n" "Tumbler's Toy" "DOTA_Tooltip_Ability_item_blink" "Blink Dagger" } }"##;
+        let texts = GameTexts::from_files(Names::parse(names.as_bytes()), &[], b"", b"");
+        assert_eq!((texts.item_name("item_pogo_stick"), texts.item_name("item_blink")), ("Tumbler's Toy".to_string(), "Blink Dagger".to_string()));
+        assert!(texts.names("item_pogo_stick"));
     }
 
     #[test]

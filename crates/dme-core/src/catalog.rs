@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::apply::{self, Pick};
@@ -23,6 +24,7 @@ pub struct Catalog {
     pub rarities: Vec<Rarity>,
     pub lost_files: Vec<String>,
     pub moved_files: Vec<(String, String)>,
+    pub english: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,32 +124,82 @@ pub struct StyleEntry {
     pub picture: Option<String>,
 }
 
-pub const NAME_FILES: [&str; 3] = [
-    "resource/localization/items_english.txt",
-    "resource/localization/dota_english.txt",
-    "resource/localization/abilities_english.txt",
-];
+pub const NAME_FILES: [&str; 3] = ["items", "dota", "abilities"];
 
-pub fn read_names(archive: &Archive) -> Names {
+pub fn names_file(file: &str, language: &str) -> String {
+    format!("resource/localization/{file}_{language}.txt")
+}
+
+pub fn read_names(archive: &Archive, language: &str) -> Names {
     let mut names = Names::default();
-    for file in NAME_FILES {
-        if let Ok(Some(bytes)) = archive.read(file) {
-            names.extend(Names::parse(&bytes));
+    let languages = if language == "english" { vec!["english"] } else { vec![language, "english"] };
+    for language in languages {
+        for file in NAME_FILES {
+            if let Ok(Some(bytes)) = archive.read(&names_file(file, language)) {
+                names.extend(Names::parse(&bytes));
+            }
         }
     }
     names
 }
 
+pub trait Words: Sync {
+    fn persona(&self, slot: &str) -> String {
+        format!("Persona {slot}")
+    }
+    fn effects_of(&self, ability: &str, persona: bool) -> String {
+        if persona { format!("Persona {ability} effects") } else { format!("{ability} effects") }
+    }
+    fn level(&self, number: u32) -> String {
+        format!("Level {number}")
+    }
+    fn style(&self, number: u32) -> String {
+        format!("Style {number}")
+    }
+    fn no_emblem(&self) -> String {
+        "No emblem".to_string()
+    }
+    fn trees(&self) -> String {
+        "Trees".to_string()
+    }
+    fn own_trees(&self) -> String {
+        "The map's own trees".to_string()
+    }
+    fn map_as_it_is(&self) -> String {
+        "The map as it is".to_string()
+    }
+    fn event_kind(&self, kind: &effects::Kind, _game_name: Option<&str>) -> String {
+        kind.name.to_string()
+    }
+    fn tree_kind(&self, kind: &trees::Kind) -> String {
+        kind.name.to_string()
+    }
+}
+
+pub struct English;
+
+impl Words for English {}
+
 impl Catalog {
     pub fn load(archive: &Archive) -> Result<Catalog> {
+        Catalog::load_in(archive, "english", &English)
+    }
+
+    pub fn load_in(archive: &Archive, language: &str, words: &dyn Words) -> Result<Catalog> {
         let bytes = archive
             .read(ITEMS_GAME)?
             .ok_or_else(|| Error::format("the game's archive", format!("{ITEMS_GAME} is missing")))?;
         let game = ItemsGame::parse(&bytes)?;
-        Ok(Catalog::build(&game, &read_names(archive), archive))
+        let names = read_names(archive, language);
+        let english = (language != "english").then(|| read_names(archive, "english"));
+        Ok(Catalog::build_in(&game, &names, english.as_ref(), archive, words))
     }
 
     pub fn build(game: &ItemsGame<'_>, names: &Names, archive: &Archive) -> Catalog {
+        Catalog::build_in(game, names, None, archive, &English)
+    }
+
+    pub fn build_in(game: &ItemsGame<'_>, names: &Names, english: Option<&Names>, archive: &Archive, words: &dyn Words) -> Catalog {
         let rarities: Vec<Rarity> = game
             .rarities()
             .iter()
@@ -173,7 +225,7 @@ impl Catalog {
         for_heroes.sort_by_key(|effect| effect.for_couriers);
 
         let wholeness = Wholeness::new(archive);
-        let reader = Reader { game, names, archive, rarity_places, hero_files: HeroFiles::read(archive), for_heroes, for_couriers, wholeness };
+        let reader = Reader { game, names, english, english_found: RefCell::default(), words, archive, rarity_places, hero_files: HeroFiles::read(archive), for_heroes, for_couriers, wholeness };
         let (mut heroes, mut plain_heroes): (Vec<Hero>, Vec<Hero>) = game.heroes().into_iter().map(|hero| reader.hero(hero)).partition(|hero| !hero.slots.is_empty() || !hero.sets.is_empty());
         heroes.sort_by_cached_key(|hero| hero.name.to_lowercase());
         plain_heroes.sort_by_cached_key(|hero| hero.name.to_lowercase());
@@ -187,8 +239,9 @@ impl Catalog {
         world.extend(reader.trees_slot());
         world.extend(reader.map_slot());
         let (lost_files, moved_files) = (reader.wholeness.gone(), reader.wholeness.stand_ins());
+        let english = reader.english_found.take();
         drop(reader);
-        Catalog { heroes, every_hero, plain_heroes, world, rarities, lost_files, moved_files }
+        Catalog { heroes, every_hero, plain_heroes, world, rarities, lost_files, moved_files, english }
     }
 
     pub fn hero(&self, id: &str) -> Option<&Hero> {
@@ -319,6 +372,9 @@ impl Entry {
 struct Reader<'g, 'a> {
     game: &'g ItemsGame<'a>,
     names: &'g Names,
+    english: Option<&'g Names>,
+    english_found: RefCell<HashMap<String, String>>,
+    words: &'g dyn Words,
     archive: &'g Archive,
     rarity_places: HashMap<String, usize>,
     hero_files: HeroFiles,
@@ -341,6 +397,11 @@ impl Reader<'_, '_> {
         let short = items::hero_short_name(id).replace('_', " ");
         if !short.eq_ignore_ascii_case(&name) && !aliases.iter().any(|alias| alias.eq_ignore_ascii_case(&short)) {
             aliases.push(short);
+        }
+        if let Some(english) = self.english.and_then(|english| english.get(&format!("{id}:n"))).map(|english| plain(english).to_string())
+            && english != name
+        {
+            aliases.push(english);
         }
         Hero { id: id.to_string(), name, aliases, attribute: self.hero_files.attribute(id), picture: self.picture(&format!("heroes/{id}")), sets, slots }
     }
@@ -392,7 +453,9 @@ impl Reader<'_, '_> {
             return None;
         }
         items.sort_by_cached_key(|entry| (entry.name.to_lowercase(), entry.id.parse::<u64>().unwrap_or(u64::MAX)));
-        Some(Slot { id: kind.slot(), name: kind.name.to_string(), default: self.nothing(kind.name, picture), items, effects: Vec::new(), shared_with: Vec::new() })
+        let game_name = kind.item.and_then(|item| self.names.get(&format!("DOTA_Tooltip_ability_{item}"))).map(plain);
+        let name = self.words.event_kind(kind, game_name);
+        Some(Slot { id: kind.slot(), name: name.clone(), default: self.nothing(&name, picture), items, effects: Vec::new(), shared_with: Vec::new() })
     }
 
     fn nothing(&self, name: &str, picture: Option<String>) -> Entry {
@@ -422,14 +485,14 @@ impl Reader<'_, '_> {
         }
         items.sort_by_cached_key(|entry| (entry.name.to_lowercase(), entry.id.parse::<u64>().unwrap_or(u64::MAX)));
         let name = self.general_name(effects::EMBLEM_SLOT).unwrap_or_else(|| title(effects::EMBLEM_SLOT));
-        Some(Slot { id: effects::EMBLEM_SLOT.to_string(), name, default: self.nothing("No emblem", None), items, effects: Vec::new(), shared_with: Vec::new() })
+        Some(Slot { id: effects::EMBLEM_SLOT.to_string(), name, default: self.nothing(&self.words.no_emblem(), None), items, effects: Vec::new(), shared_with: Vec::new() })
     }
 
     fn trees_slot(&self) -> Option<Slot> {
-        let entry = |kind: &trees::Kind| Entry { id: kind.id.to_string(), ..self.nothing(kind.name, self.picture(kind.picture)) };
+        let entry = |kind: &trees::Kind| Entry { id: kind.id.to_string(), ..self.nothing(&self.words.tree_kind(kind), self.picture(kind.picture)) };
         let items: Vec<Entry> = trees::KINDS.iter().filter(|kind| kind.is_there(self.archive)).map(entry).collect();
-        let default = self.nothing("The map's own trees", self.picture(NORMAL_MAP_PICTURE));
-        (!items.is_empty()).then(|| Slot { id: trees::SLOT.to_string(), name: "Trees".to_string(), default, items, effects: Vec::new(), shared_with: Vec::new() })
+        let default = self.nothing(&self.words.own_trees(), self.picture(NORMAL_MAP_PICTURE));
+        (!items.is_empty()).then(|| Slot { id: trees::SLOT.to_string(), name: self.words.trees(), default, items, effects: Vec::new(), shared_with: Vec::new() })
     }
 
     fn map_slot(&self) -> Option<Slot> {
@@ -447,7 +510,7 @@ impl Reader<'_, '_> {
         }
         items.sort_by_cached_key(|entry| (entry.name.to_lowercase(), entry.id.parse::<u64>().unwrap_or(u64::MAX)));
         let name = self.general_name(map_effect::SLOT).unwrap_or_else(|| title(map_effect::SLOT));
-        let default = self.nothing("The map as it is", self.picture(NORMAL_MAP_PICTURE));
+        let default = self.nothing(&self.words.map_as_it_is(), self.picture(NORMAL_MAP_PICTURE));
         Some(Slot { id: map_effect::SLOT.to_string(), name, default, items, effects: Vec::new(), shared_with: Vec::new() })
     }
 
@@ -493,7 +556,7 @@ impl Reader<'_, '_> {
         let levels = effects::variants(event, kind);
         let shown = levels.iter().enumerate().filter(|(_, level)| has_its_files(level));
         let shown: Vec<(usize, &effects::Variant<'_>)> = shown.collect();
-        let styles: Vec<StyleEntry> = shown.iter().map(|(place, _)| StyleEntry { index: *place as u32, name: format!("Level {}", place + 1), picture: None }).collect();
+        let styles: Vec<StyleEntry> = shown.iter().map(|(place, _)| StyleEntry { index: *place as u32, name: self.words.level(*place as u32 + 1), picture: None }).collect();
         let first = styles.first()?.index;
         let lacking = shown.iter().any(|(_, level)| !self.is_whole(&level.blocks));
         Some(Entry {
@@ -512,7 +575,7 @@ impl Reader<'_, '_> {
                 let of_the_hero = self.slot_name(hero, base);
                 match own {
                     Some(name) if name != of_the_hero => name,
-                    _ => format!("Persona {}", self.general_name(slot).unwrap_or(of_the_hero)),
+                    _ => self.words.persona(&self.general_name(slot).unwrap_or(of_the_hero)),
                 }
             }
             None => own.or_else(|| self.general_name(slot)).unwrap_or_else(|| title(slot)),
@@ -546,7 +609,6 @@ impl Reader<'_, '_> {
             Some(name) => plain(name).to_string(),
             None => title(ability.strip_prefix(items::hero_short_name(hero)).unwrap_or(ability)),
         };
-        let whose = if effects.whose.is_empty() { "" } else { "Persona " };
         let default = Entry {
             id: String::new(),
             name: ability_name.clone(),
@@ -556,7 +618,7 @@ impl Reader<'_, '_> {
             worn_in: None,
             gaps: Vec::new(),
         };
-        Some(Slot { id: slot.to_ascii_lowercase(), name: format!("{whose}{ability_name} effects"), default, items, effects: Vec::new(), shared_with: Vec::new() })
+        Some(Slot { id: slot.to_ascii_lowercase(), name: self.words.effects_of(&ability_name, !effects.whose.is_empty()), default, items, effects: Vec::new(), shared_with: Vec::new() })
     }
 
     fn effects_entry(&self, hero: &str, item: &Item<'_>, number: u32) -> Option<Entry> {
@@ -591,6 +653,7 @@ impl Reader<'_, '_> {
             Some(name) => plain(name).to_string(),
             None => title(set.key),
         };
+        self.note_english(set.key, set.name_token, &name);
         let own_picture = set.portrait.and_then(|image| self.picture(&format!("{image}_small")).or_else(|| self.picture(image)));
         let picture = own_picture.or_else(|| self.item_picture(first));
         let bundle = set.bundle.and_then(|name| self.game.item_named(name));
@@ -656,17 +719,26 @@ impl Reader<'_, '_> {
         });
         let name = match style.name_token.and_then(|token| self.names.get(token)) {
             Some(name) => plain(name).to_string(),
-            None => format!("Style {}", style.index + 1),
+            None => self.words.style(style.index + 1),
         };
         let picture = icon.and_then(|image| self.picture(image)).or_else(|| item_picture.map(str::to_string));
         StyleEntry { index: style.index, name, picture }
     }
 
     fn item_name(&self, item: &Item<'_>) -> String {
-        let shown = item.block.str("item_name").and_then(text).and_then(|token| self.names.get(token));
-        match shown {
+        let token = item.block.str("item_name").and_then(text);
+        let name = match token.and_then(|token| self.names.get(token)) {
             Some(name) => plain(name).to_string(),
             None => kv::unescape(item.name.unwrap_or(item.id).as_bytes()),
+        };
+        self.note_english(item.id, token, &name);
+        name
+    }
+
+    fn note_english(&self, key: &str, token: Option<&str>, shown: &str) {
+        let Some(english) = self.english.and_then(|english| english.get(token?)).map(plain) else { return };
+        if english != shown {
+            self.english_found.borrow_mut().insert(key.to_string(), english.to_string());
         }
     }
 

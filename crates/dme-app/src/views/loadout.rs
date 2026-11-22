@@ -31,6 +31,7 @@ pub struct Page<'a> {
     pub search: &'a mut String,
     pub rarities: &'a [Rarity],
     pub asked: &'a mut BTreeSet<usize>,
+    pub english: &'a std::collections::HashMap<String, String>,
 }
 
 pub fn show(ui: &mut Ui, mut page: Page<'_>) -> bool {
@@ -49,6 +50,10 @@ pub fn show(ui: &mut Ui, mut page: Page<'_>) -> bool {
 impl<'a> Page<'a> {
     fn hero_id(&self) -> Option<&'a str> {
         self.hero.map(|hero| hero.id.as_str())
+    }
+
+    fn fits(&self, key: &str, name: &str, wanted: &str) -> bool {
+        fits(name, wanted) || self.english.get(key).is_some_and(|english| fits(english, wanted))
     }
 
     fn open_a_row_that_exists(&mut self) {
@@ -74,17 +79,17 @@ impl<'a> Page<'a> {
                 let any = self.loadout.of(hero_id).next().is_some();
                 let warning = worn.and_then(|set| set_gaps_note(set, self.slots));
                 let look = RowLook {
-                    label: "Whole set",
+                    label: tr!(WholeSet),
                     value: match worn {
                         Some(set) => &set.name,
-                        None if any => "Mixed pieces",
-                        None => "Default look",
+                        None if any => tr!(MixedPieces),
+                        None => tr!(DefaultLook),
                     },
                     picked: any,
                     picture: worn.and_then(|set| set.picture.as_deref()).or(hero.picture.as_deref()),
                     band: worn.and_then(|set| rarity::color(self.rarities, set.rarity)),
                     open: *self.row == Row::Sets,
-                    clear_hint: "Back to the default look",
+                    clear_hint: tr!(BackToDefaultLook),
                     warning: warning.as_deref(),
                 };
                 let answer = row(ui, self.pictures, &look);
@@ -108,7 +113,7 @@ impl<'a> Page<'a> {
                 let picked = pick.and_then(|pick| Some((pick, slot.entry(&pick.item)?)));
                 let (value, picture) = match picked {
                     Some((pick, entry)) => in_words(slot, pick, entry),
-                    None => ("Default".to_string(), slot.default.picture.as_deref()),
+                    None => (tr!(Default).to_string(), slot.default.picture.as_deref()),
                 };
                 let warning = picked.and_then(|(_, entry)| gaps_note(&entry.gaps));
                 let look = RowLook {
@@ -118,7 +123,7 @@ impl<'a> Page<'a> {
                     picture,
                     band: picked.and_then(|(_, entry)| rarity::color(self.rarities, entry.rarity)),
                     open: matches!(&*self.row, Row::Slot(id) if *id == slot.id),
-                    clear_hint: "Back to the default",
+                    clear_hint: tr!(BackToDefault),
                     warning: warning.as_deref(),
                 };
                 let answer = row(ui, self.pictures, &look);
@@ -143,15 +148,15 @@ impl<'a> Page<'a> {
     }
 
     fn sets(&mut self, ui: &mut Ui, hero: &Hero) -> bool {
-        title_bar(ui, "Whole sets", None, Some((&mut *self.search, "Type to find a set")), |_| {});
+        title_bar(ui, tr!(WholeSets), None, Some((&mut *self.search, tr!(FindSetHint))), |_| {});
         rarity::chips(ui, self.rarities, &hero.sets.iter().filter_map(|set| set.rarity).collect(), self.asked);
 
         let wanted = self.search.trim().to_lowercase();
-        let named: Vec<&Set> = hero.sets.iter().filter(|set| fits(&set.name, &wanted)).collect();
+        let named: Vec<&Set> = hero.sets.iter().filter(|set| self.fits(&set.key, &set.name, &wanted)).collect();
         let shown: Vec<&Set> = named.iter().copied().filter(|set| rarity::wanted(self.asked, set.rarity)).collect();
         let default_first = wanted.is_empty();
         if shown.is_empty() {
-            ui.label(dim(if named.is_empty() { "No set has that in its name." } else { "No set here is of a rarity you chose." }));
+            ui.label(dim(if named.is_empty() { tr!(NoSetNamed) } else { tr!(NoSetOfRarity) }));
             if !default_first {
                 return false;
             }
@@ -162,7 +167,7 @@ impl<'a> Page<'a> {
         let mut changed = false;
         tiles::grid(ui, ("sets", &hero.id), shown.len() + usize::from(default_first), SET_LOOK, |ui, index, look| {
             if default_first && index == 0 {
-                let tile = Tile { picture: hero.picture.as_deref(), name: "Default look", note: None, badge: None, band: None, picked: bare, faint: true, warning: None, detail: None, mark: None };
+                let tile = Tile { picture: hero.picture.as_deref(), name: tr!(DefaultLook), note: None, badge: None, band: None, picked: bare, faint: true, warning: None, detail: None, mark: None };
                 if tiles::tile(ui, self.pictures, look, &tile).clicked() && !bare {
                     self.loadout.clear_owner(hero_id);
                     changed = true;
@@ -210,7 +215,7 @@ impl<'a> Page<'a> {
             () if !slot.shared_with.is_empty() && note_of(slot).is_none() => Some(shared_note(slot)),
             () => note_of(slot).map(str::to_string),
         };
-        title_bar(ui, &slot.name, note.as_deref().filter(|_| !in_the_open), Some((&mut *self.search, "Type to search")), |_| {});
+        title_bar(ui, &slot.name, note.as_deref().filter(|_| !in_the_open), Some((&mut *self.search, tr!(SearchHint))), |_| {});
         if let Some(note) = note.filter(|_| in_the_open) {
             ui.label(dim(note));
             ui.add_space(6.0);
@@ -219,7 +224,7 @@ impl<'a> Page<'a> {
         if for_heroes && let Some(why) = reaching_nobody(self.loadout) {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(why).color(theme::warn()).size(theme::SMALL));
-                let every = ui.button("Give it to every hero").on_hover_text("Every hero gets the effects of events and the emblem. Settings can change it again.");
+                let every = ui.button(tr!(GiveEveryHero)).on_hover_text(tr!(GiveEveryHeroHint));
                 if every.clicked() {
                     self.loadout.set_effects_for(EffectsFor::Every);
                     changed = true;
@@ -232,7 +237,7 @@ impl<'a> Page<'a> {
         if let (Some(pick), Some(entry)) = (&current, current_entry) {
             if !entry.styles.is_empty() {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(dim(if slot.is_for_an_event() { "Level" } else { "Style" }));
+                    ui.label(dim(if slot.is_for_an_event() { tr!(Level) } else { tr!(Style) }));
                     for style in &entry.styles {
                         let chosen = pick.style == style.index;
                         if ui.selectable_label(chosen, style.name.as_str()).clicked() && !chosen {
@@ -254,11 +259,11 @@ impl<'a> Page<'a> {
         }
 
         let wanted = self.search.trim().to_lowercase();
-        let named: Vec<&Entry> = slot.items.iter().filter(|entry| fits(&entry.name, &wanted)).collect();
+        let named: Vec<&Entry> = slot.items.iter().filter(|entry| self.fits(&entry.id, &entry.name, &wanted)).collect();
         let shown: Vec<&Entry> = named.iter().copied().filter(|entry| rarity::wanted(self.asked, entry.rarity)).collect();
         let default_first = wanted.is_empty();
         if shown.is_empty() {
-            ui.label(dim(if named.is_empty() { "Nothing here has that in its name." } else { "Nothing here is of a rarity you chose." }));
+            ui.label(dim(if named.is_empty() { tr!(NothingNamed) } else { tr!(NothingOfRarity) }));
             if !default_first {
                 return changed;
             }
@@ -267,7 +272,7 @@ impl<'a> Page<'a> {
         tiles::grid(ui, ("items", hero_id, &slot.id), shown.len() + usize::from(default_first), ITEM_LOOK, |ui, index, look| {
             if default_first && index == 0 {
                 let picked = current.is_none();
-                let tile = Tile { picture: slot.default.picture.as_deref(), name: "Default", note: None, badge: None, band: None, picked, faint: true, warning: None, detail: None, mark: None };
+                let tile = Tile { picture: slot.default.picture.as_deref(), name: tr!(Default), note: None, badge: None, band: None, picked, faint: true, warning: None, detail: None, mark: None };
                 if tiles::tile(ui, self.pictures, look, &tile).clicked() && current.is_some() {
                     self.loadout.clear(hero_id, &slot.id);
                     changed = true;
@@ -312,11 +317,11 @@ impl<'a> Page<'a> {
 pub(super) fn in_words<'a>(slot: &'a Slot, pick: &Pick, entry: &'a Entry) -> (String, Option<&'a str>) {
     let (style, picture) = entry.in_style(pick.style);
     let mut value = match style.filter(|_| pick.style > 0) {
-        Some(style) => format!("{} ({style})", entry.name),
+        Some(style) => tr!(InStyle, item = entry.name, style),
         None => entry.name.clone(),
     };
     if let Some(effect) = pick.effect.and_then(|id| slot.effect(id)) {
-        value = format!("{value} + {}", effect.name);
+        value = tr!(WithEffect, item = value, effect = effect.name);
     }
     (value, picture)
 }
@@ -324,7 +329,7 @@ pub(super) fn in_words<'a>(slot: &'a Slot, pick: &Pick, entry: &'a Entry) -> (St
 fn pieces_of(set: &Set, slots: &[Slot]) -> Vec<String> {
     let piece = |pick: &Pick| {
         let slot = slots.iter().find(|slot| slot.id == pick.slot)?;
-        Some(format!("{}: {}", slot.name, slot.entry(&pick.item)?.name))
+        Some(tr!(Piece, slot = slot.name, item = slot.entry(&pick.item)?.name))
     };
     set.pieces.iter().filter_map(piece).collect()
 }
@@ -337,7 +342,7 @@ pub(crate) fn make_way(loadout: &mut Loadout, slot: &Slot) {
 
 fn shared_note(slot: &Slot) -> String {
     let names: Vec<&str> = slot.shared_with.iter().map(|other| other.name.as_str()).collect();
-    format!("The game has one default here for several heroes. What you pick shows on all of them, and only one of them can have a pick: {}.", names.join(", "))
+    tr!(SharedDefault, heroes = names.join(", "))
 }
 
 fn pick_of(hero: Option<&str>, slot: &Slot, entry: &Entry, before: Option<&Pick>) -> Pick {
@@ -355,12 +360,12 @@ fn effect_row(ui: &mut Ui, slot: &Slot, pick: &Pick, on_a_hero: bool) -> Option<
     }
     let mut changed = None;
     let effect = pick.effect.and_then(|id| slot.effect(id));
-    let label = |name: &str, for_couriers: bool| if on_a_hero && for_couriers { format!("{name} (courier)") } else { name.to_string() };
+    let label = |name: &str, for_couriers: bool| if on_a_hero && for_couriers { tr!(ForCouriers, effect = name) } else { name.to_string() };
     ui.horizontal(|ui| {
-        ui.label(dim("Effect"));
-        let shown = effect.map_or("None".to_string(), |effect| label(&effect.name, effect.for_couriers));
+        ui.label(dim(tr!(Effect)));
+        let shown = effect.map_or(tr!(NoEffect).to_string(), |effect| label(&effect.name, effect.for_couriers));
         egui::ComboBox::from_id_salt(("effect", &slot.id)).selected_text(shown).width(240.0).height(320.0).show_ui(ui, |ui| {
-            if ui.selectable_label(effect.is_none(), "None").clicked() && effect.is_some() {
+            if ui.selectable_label(effect.is_none(), tr!(NoEffect)).clicked() && effect.is_some() {
                 changed = Some(pick.clone().with_effect(None));
             }
             for choice in &slot.effects {
@@ -372,21 +377,19 @@ fn effect_row(ui: &mut Ui, slot: &Slot, pick: &Pick, on_a_hero: bool) -> Option<
         });
     });
     if on_a_hero && effect.is_some_and(|effect| effect.for_couriers) {
-        ui.label(dim(COURIER_EFFECT_NOTE).small());
+        ui.label(dim(tr!(CourierEffectNote)).small());
     }
     ui.add_space(4.0);
     changed
 }
 
-const COURIER_EFFECT_NOTE: &str = "An experiment: this effect is made for couriers. On a hero it may sit lower or look smaller than it does on a courier.";
-
 pub(super) fn gaps_note(gaps: &[Gap]) -> Option<String> {
     let said: Vec<&str> = gaps
         .iter()
         .map(|gap| match gap {
-            Gap::Files => "Dota no longer has some of the files this is made of, so a part of it is missing for everybody.",
-            Gap::ArcanaLevel => "Some of its effects go by the arcana's level, which Dota's servers give only to the player who owns it, so they may not show.",
-            Gap::Checkered => "Buggy: its fog of war may look like a checkerboard.",
+            Gap::Files => tr!(GapFiles),
+            Gap::ArcanaLevel => tr!(GapArcana),
+            Gap::Checkered => tr!(GapCheckered),
         })
         .collect();
     (!said.is_empty()).then(|| said.join(" "))
@@ -404,7 +407,7 @@ pub(super) fn set_gaps_note(set: &Set, slots: &[Slot]) -> Option<String> {
             None => said.push((vec![name], note)),
         }
     }
-    let lines: Vec<String> = said.iter().map(|(names, note)| format!("{}: {note}", names.join(", "))).collect();
+    let lines: Vec<String> = said.iter().map(|(names, note)| tr!(Piece, slot = names.join(", "), item = note)).collect();
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
@@ -413,34 +416,31 @@ fn worn_set<'a>(hero: &'a Hero, loadout: &Loadout) -> Option<&'a Set> {
 }
 
 fn pieces_note(pieces: usize) -> String {
-    match pieces {
-        1 => "1 piece".to_string(),
-        many => format!("{many} pieces"),
-    }
+    tr!(Pieces, count = pieces)
 }
 
 fn group_name(group: Group) -> &'static str {
     match group {
-        Group::Worn => "Worn",
-        Group::Effects => "Ability effects",
-        Group::Persona => "Persona",
-        Group::PersonaEffects => "Persona's ability effects",
-        Group::Events => "Effects",
-        Group::Experiments => "Experiments",
+        Group::Worn => tr!(GroupWorn),
+        Group::Effects => tr!(GroupEffects),
+        Group::Persona => tr!(GroupPersona),
+        Group::PersonaEffects => tr!(GroupPersonaEffects),
+        Group::Events => tr!(GroupEvents),
+        Group::Experiments => tr!(GroupExperiments),
     }
 }
 
 fn note_of(slot: &Slot) -> Option<&'static str> {
     if slot.id == dme_core::apply::PERSONA_SELECTOR {
-        Some(PERSONA_NOTE)
+        Some(tr!(PersonaNote))
     } else if slot.is_for_an_event() {
-        Some(EVENT_NOTE)
+        Some(tr!(EventNote))
     } else if slot.is_for_an_emblem() {
-        Some(EMBLEM_NOTE)
+        Some(tr!(EmblemNote))
     } else if slot.is_for_trees() {
-        Some(TREES_NOTE)
+        Some(tr!(TreesNote))
     } else if slot.is_for_the_map() {
-        Some(MAP_NOTE)
+        Some(tr!(MapNote))
     } else {
         None
     }
@@ -449,30 +449,15 @@ fn note_of(slot: &Slot) -> Option<&'static str> {
 fn reaching_nobody(loadout: &Loadout) -> Option<&'static str> {
     match loadout.effects_for() {
         _ if loadout.effects_for().reaches_anyone(loadout.picks()) => None,
-        EffectsFor::These(_) => Some("No hero gets this yet. It goes on the heroes you choose in Settings, and you have chosen none."),
-        _ => Some("No hero gets this yet. It goes on the heroes you picked something for, and nothing is picked for a hero."),
+        EffectsFor::These(_) => Some(tr!(NobodyChosen)),
+        _ => Some(tr!(NobodyPicked)),
     }
 }
 
-const EVENT_NOTE: &str = "Use the effect an event had for this. It goes on the heroes you picked something for; Settings can make that every hero, or heroes you choose. \
-     A hero shows it as long as one of its slots in Dota is on its default item.";
-
-const EMBLEM_NOTE: &str = "Put the glow of an event's emblem around the heroes you picked something for; Settings can make that every hero, or heroes you choose. \
-     It rides on one default item of each hero, so a hero may not show it if you wear items of your own on it in Dota.";
-
-const PERSONA_NOTE: &str = "An experiment: a persona is put on the hero's own items, so it shows without your owning it. \
-     It takes the place of what the hero wears, so picks for those slots are taken off. In Dota, unequip the hero's own items for it to show.";
-
-const TREES_NOTE: &str = "An experiment. Puts the leaves of one of Valve's seasonal terrains on the trees of the normal map. \
-     If a tree looks wrong in Dota, pick Default here.";
-
-const MAP_NOTE: &str = "An experiment. Draws the whole map the way one of Valve's events did. If the game looks wrong, pick Default here.";
-
 fn effects_note(picked: Option<&Entry>) -> String {
-    const WHAT: &str = "Use the effects an item has for this ability, whatever your hero wears.";
     match picked.and_then(|entry| entry.worn_in.as_deref()) {
-        Some(slot) => format!("{WHAT} If they do not show in Dota, unequip your own item in the {slot} slot there."),
-        None => WHAT.to_string(),
+        Some(slot) => tr!(AbilityEffectsNoteWorn, slot),
+        None => tr!(AbilityEffectsNote).to_string(),
     }
 }
 
@@ -486,7 +471,7 @@ fn caption(ui: &mut Ui, text: &str) {
 }
 
 fn styles_note(styles: usize, of_an_event: bool) -> Option<String> {
-    (styles > 1).then(|| format!("{styles} {}", if of_an_event { "levels" } else { "styles" }))
+    (styles > 1).then(|| if of_an_event { tr!(Levels, count = styles) } else { tr!(Styles, count = styles) })
 }
 
 pub(super) struct RowLook<'a> {
@@ -709,6 +694,7 @@ mod tests {
                 search: &mut search,
                 rarities: &[],
                 asked: &mut BTreeSet::new(),
+                english: &Default::default(),
             };
             page.open_a_row_that_exists();
             row

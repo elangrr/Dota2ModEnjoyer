@@ -697,6 +697,18 @@ fn builds(dota: &DotaInstall, file: &Path, hero: Option<&str>) -> Result<()> {
     skills.extend(builds.all_orders().flat_map(|(_, order)| order.skills.iter().map(String::as_str)).filter(|skill| !is_talent(skill)));
     items.extend(builds.all_against().map(|(_, item, _)| item));
     items.extend(builds.all_pro_builds().flat_map(|(_, pro)| pro.items.iter().map(|item| item.item.as_str())));
+    let mut out_of_tier = BTreeSet::new();
+    for (_, neutral) in builds.all_neutral_builds() {
+        for taken in &neutral.tiers {
+            let game = texts.neutral_tiers().iter().find(|tier| tier.tier == taken.tier);
+            for (name, _) in taken.trinkets.iter().chain(&taken.enhancements) {
+                items.insert(name.as_str());
+                if !game.is_some_and(|game| game.trinkets.iter().chain(&game.enhancements).any(|known| known.eq_ignore_ascii_case(name))) {
+                    out_of_tier.insert(format!("tier {}: {name}", taken.tier));
+                }
+            }
+        }
+    }
     let heroes: Vec<&str> = builds.all().map(|(id, _)| id).collect();
     println!("{count} builds of {} heroes, patch {}, naming {} items and {} skills", heroes.len(), builds.patch, items.len(), skills.len());
     let (orders, against) = (builds.all_orders().count(), builds.all_against().count());
@@ -721,6 +733,17 @@ fn builds(dota: &DotaInstall, file: &Path, hero: Option<&str>) -> Result<()> {
         with_pros.len(),
         bottles.into_iter().collect::<Vec<_>>().join(", ")
     );
+    let every_role = builds.all_neutral_builds().filter(|(_, neutral)| neutral.role.is_none()).count();
+    println!(
+        "neutral items: {} roles of {} heroes, {every_role} of them of every role, from {} pro matches of patch {}, from {}; the game has {} tiers ({})",
+        builds.all_neutral_builds().count() - every_role,
+        builds.all_neutral_builds().map(|(id, _)| id).collect::<BTreeSet<_>>().len(),
+        builds.neutral_matches,
+        builds.neutral_patch,
+        builds.neutral_source,
+        texts.neutral_tiers().len(),
+        texts.neutral_tiers().iter().map(|tier| format!("{} at minute {}: {} trinkets, {} enhancements", tier.tier, tier.minute, tier.trinkets.len(), tier.enhancements.len())).collect::<Vec<_>>().join("; ")
+    );
     let (all, known) = (&builds, &texts);
     let no_order: BTreeSet<String> = all.all().flat_map(|(id, of_hero)| of_hero.iter().filter(move |build| all.order(id, build.role).is_none()).map(move |build| format!("{id} {}", build.role.name()))).collect();
     let odd_points: BTreeSet<String> = builds
@@ -739,6 +762,7 @@ fn builds(dota: &DotaInstall, file: &Path, hero: Option<&str>) -> Result<()> {
     list("talents with an amount the game's files do not give", unsaid);
     list("talents that are taken and are not among the hero's eight", strangers.into_iter().collect());
     list("roles with a build and no order of skills", no_order.into_iter().collect());
+    list("neutral items the game does not have in their tier, left out", out_of_tier.into_iter().collect());
     list("points of an order in a talent that is not among the hero's eight", odd_points.into_iter().collect());
 
     let Some(hero) = hero else { return Ok(()) };
@@ -765,6 +789,14 @@ fn builds(dota: &DotaInstall, file: &Path, hero: Option<&str>) -> Result<()> {
             }
             println!("  others: {}", bought(&builds.others(&id, build, &texts, &[]).iter().map(|other| other.item).collect::<Vec<_>>()));
         }
+    }
+    for role in dme_core::draft::Role::ALL {
+        let Some((neutral, tiers)) = builds.neutral_tiers(&id, role, &texts) else { continue };
+        let said = |taken: &[(&str, f32)]| taken.iter().map(|(name, share)| format!("{} {share:.0}%", texts.item_name(name))).collect::<Vec<_>>().join(", ");
+        let tiers: Vec<String> = tiers.iter().map(|tier| format!("tier {} (minute {}, {} pros, {} kept their trinket): {}; {}", tier.tier, tier.minute, tier.reached, tier.kept, said(&tier.trinkets), said(&tier.enhancements))).collect();
+        let of = neutral.role.map_or_else(|| "every role".to_string(), |role| role.name().to_string());
+        println!("
+neutral items, {}, of {of}, from {} pros: {}", role.name(), neutral.players, tiers.join(" | "));
     }
     for role in dme_core::draft::Role::ALL {
         let Some(order) = builds.order(&id, role) else { continue };

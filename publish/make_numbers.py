@@ -3,6 +3,8 @@
 draft.json: how well each hero does in each of the five roles, for each of the eight ranks,
 how well it does against and beside each other hero, for each pair of ranks, and how its lanes
 go in each role, against the heroes it meets there and beside the one it shares them with.
+And the newest week and the week before it, each by itself, to say which heroes are rising
+and which falling.
 
 builds.json: what the players of each hero buy and skill, in each role the hero is played in,
 for each pair of ranks: the items they start with, the items they go on to buy and when,
@@ -11,7 +13,8 @@ Immortal players, some hundreds for each hero and role: the order the skill poin
 in, point by point, and which items are bought more often against which enemy hero. And from
 OpenDota (https://www.opendota.com), the pro matches of the patch, and of the four weeks
 before now where the patch is newer than that: what the pros who play a hero in each role
-buy, such as the Bottle that nearly every pro mid buys.
+buy, such as the Bottle that nearly every pro mid buys. And from OpenDota's pro matches of the
+newest patch alone: which neutral items, trinkets and enhancements, pros take in each tier.
 
     python publish/make_numbers.py <folder to write the two files in>
     python publish/make_numbers.py --check        # tries the sums below on made-up numbers
@@ -19,8 +22,9 @@ buy, such as the Bottle that nearly every pro mid buys.
 The numbers are STRATZ's (https://stratz.com), asked for through its API with a token that a
 Steam login there gives. The token is read from the environment variable STRATZ_TOKEN or, where
 that is not set, from the file .dme/stratz.key in the home folder. It goes nowhere but to
-STRATZ, and never into the file that is written. OpenDota is asked without a token, one
-question in all. Where it cannot be reached, the file is written without what pros buy.
+STRATZ, and never into the file that is written. OpenDota is asked without a token, two
+questions in all. Where it cannot be reached, the file is written without what pros buy and
+without neutral items.
 
 About sixty questions are asked for draft.json, each for all heroes at once. For
 builds.json one is asked for each hero and pair of ranks, about five hundred, and one for
@@ -81,6 +85,20 @@ LEAST_HEROES = 100
 # BUILDS_LIMIT in builds.rs). A larger file is not written: every app that is out would refuse it.
 LIMITS = {"draft.json": 4 * 1024 * 1024, "builds.json": 8 * 1024 * 1024}
 
+# A file of builds with less than this is not written, and nothing at all is: STRATZ gave
+# hollow answers (on 2026-11-22, in the middle of a patch, the totals of a hero in a role came
+# back with a few matches or none, and single matches without their player), and last week's
+# files are better than one whose builds are mostly missing. The file of 2026-11-18 had 127
+# heroes, 1,056 builds of 299 heroes in a role, a skill order for 276 of those, and items
+# bought against 88 heroes: these are about two thirds of that, or less.
+LEAST_BUILDS = 700
+LEAST_HERO_ROLES = 200
+LEAST_ORDERS = 150
+LEAST_AGAINST = 40
+# A build that has this part of its players' talents, and its items, is not hollow.
+LEAST_WITH_TALENTS = 0.8
+LEAST_ITEMS = 10
+
 # A build is made for a role that has at least this part of a hero's matches in a pair of
 # ranks, for no more than this many roles, and only from at least this many matches.
 PLAYED_SHARE = 0.10
@@ -134,6 +152,26 @@ PRO_LEAST_DAYS = 28
 # Storm Spirits by its numbers, where pros, and ranked players by OpenDota's records, buy one
 # nearly always. What pros buy (OpenDota) is what says whether to have it.
 LOST_BY_STRATZ = {"item_bottle"}
+
+# Neutral items: what pros take in each tier, from OpenDota's pro matches of the newest patch
+# alone, since a patch changes the trinkets of each tier (7.42 brought four new ones and made
+# Revenant's Brooch a trinket). A hero in a role is said where at least LEAST_NEUTRAL_PROS pros
+# played it so, as for what pros buy; where fewer did, the hero in any role, where at least as
+# many played it. A tier is said where at least LEAST_NEUTRAL_TIER of them got as far, and a
+# trinket or enhancement where at least NEUTRAL_SHARE of those took it, and two at the least:
+# one pro is nobody to go by. No more than MOST_TRINKETS and MOST_ENHANCEMENTS of each tier.
+# The newest patch's pro matches are counted over no more than NEUTRAL_MOST_DAYS, which only
+# bounds the question.
+LEAST_NEUTRAL_PROS = 8
+LEAST_NEUTRAL_TIER = 5
+NEUTRAL_SHARE = 0.15
+MOST_TRINKETS, MOST_ENHANCEMENTS = 3, 2
+NEUTRAL_TIERS = 4
+NEUTRAL_MOST_DAYS = 180
+# The role of a hero's neutral items that are of every role it was played in.
+ANY_ROLE = 5
+# What OpenDota calls a neutral item where the game's files call it otherwise.
+OPENDOTA_NEUTRALS = {"guardian_shell": "defiant_shell"}
 
 
 def token():
@@ -459,6 +497,120 @@ def pro_builds(began, now):
     return matches, heroes
 
 
+def neutral_rows(now):
+    """What pros took in each tier of neutral items, in OpenDota's pro matches of the newest
+    patch: the rows of one question, which `neutrals_of` makes sense of. Where OpenDota cannot
+    be asked, says so and gives none.
+
+    The newest patch is that of OpenDota's newest pro match (its table `match_patch`, which
+    names each match's patch by when it was played: "7.42", without the letters of the small
+    patches after it). STRATZ names a patch only some days after it came out.
+
+    A player's `neutral_item_history` has what was made at each tier, in order: the first is
+    of tier 1, the second of tier 2, and so on, each with the trinket that was taken and its
+    enhancement. One without a trinket kept the one before and took only a new enhancement.
+    What comes after the fourth is made again at tier 4, and is not counted. The roles are told
+    apart as for what pros buy (`pro_builds`)."""
+    sql = """
+        WITH newest AS (
+            SELECT mp.patch FROM match_patch mp
+            WHERE mp.match_id = (SELECT match_id FROM matches WHERE start_time < %(now)d ORDER BY start_time DESC LIMIT 1)
+        ), games AS (
+            SELECT m.match_id FROM matches m JOIN match_patch mp USING (match_id) JOIN newest n ON mp.patch = n.patch
+            WHERE m.start_time >= %(since)d AND m.start_time < %(now)d
+        ), players AS (
+            SELECT pm.match_id, pm.player_slot, pm.player_slot < 128 AS radiant, pm.lane_role, pm.hero_id,
+                pm.neutral_item_history AS history, COALESCE(pm.lh_t[11], 0) AS lh10
+            FROM player_matches pm JOIN games USING (match_id)
+            WHERE pm.neutral_item_history IS NOT NULL
+        ), placed AS (
+            SELECT *, row_number() OVER (PARTITION BY match_id, radiant, lane_role ORDER BY lh10 DESC, player_slot) AS place
+            FROM players
+        ), roled AS (
+            SELECT hero_id, history,
+                CASE WHEN lane_role = 1 AND place = 1 THEN 0 WHEN lane_role = 2 AND place = 1 THEN 1
+                    WHEN lane_role = 3 AND place = 1 THEN 2 WHEN lane_role = 3 AND place = 2 THEN 3
+                    WHEN lane_role = 1 AND place = 2 THEN 4 END AS role
+            FROM placed
+        ), made AS (
+            SELECT r.hero_id, r.role, h.tier, COALESCE(h.made->>'item_neutral', '') AS trinket,
+                COALESCE(h.made->>'item_neutral_enhancement', '') AS enhancement
+            FROM roled r, unnest(r.history) WITH ORDINALITY AS h(made, tier)
+            WHERE h.tier <= %(tiers)d
+        )
+        SELECT 'm' AS kind, 0 AS hero_id, 0 AS role, 0 AS tier, (SELECT patch FROM newest) AS name, count(*) AS count FROM games
+        UNION ALL
+        SELECT 'p', hero_id, CASE WHEN GROUPING(role) = 1 THEN %(any)d ELSE role END, 0, '', count(*)
+        FROM roled GROUP BY GROUPING SETS ((hero_id, role), (hero_id)) HAVING GROUPING(role) = 1 OR role IS NOT NULL
+        UNION ALL
+        SELECT 't', hero_id, CASE WHEN GROUPING(role) = 1 THEN %(any)d ELSE role END, tier, trinket, count(*)
+        FROM made GROUP BY GROUPING SETS ((hero_id, role, tier, trinket), (hero_id, tier, trinket)) HAVING GROUPING(role) = 1 OR role IS NOT NULL
+        UNION ALL
+        SELECT 'e', hero_id, CASE WHEN GROUPING(role) = 1 THEN %(any)d ELSE role END, tier, enhancement, count(*)
+        FROM made WHERE enhancement <> '' GROUP BY GROUPING SETS ((hero_id, role, tier, enhancement), (hero_id, tier, enhancement)) HAVING GROUPING(role) = 1 OR role IS NOT NULL
+    """ % {"now": now, "since": now - NEUTRAL_MOST_DAYS * 24 * 3600, "tiers": NEUTRAL_TIERS, "any": ANY_ROLE}
+    try:
+        asked = urllib.request.Request(PRO_API + urllib.parse.quote(" ".join(sql.split())), headers={"User-Agent": "make-numbers/1.0"})
+        with urllib.request.urlopen(asked, timeout=180) as answer:
+            said = json.load(answer)
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        print(f"  OpenDota could not be asked ({error}): the file has no neutral items")
+        return []
+    if said.get("err") or not isinstance(said.get("rows"), list):
+        print(f"  OpenDota did not like the question ({said.get('err')}): the file has no neutral items")
+        return []
+    return said["rows"]
+
+
+def neutrals_of(rows):
+    """The pros' neutral items, made of the rows of `neutral_rows`: the patch, how many pro
+    matches, the names of the trinkets and enhancements, by the names the game's files know
+    them by, and for each hero, by its number, the roles enough pros played it in, each with
+    how many and its tiers. ANY_ROLE stands for every role together, which is there where
+    some role of the hero is not. A tier is its number, how many got as far, how many of
+    those kept the trinket they had, and the trinkets and the enhancements taken, each by its
+    place in the names and how many took it, the most taken first."""
+    patch, matches = "", 0
+    players, reached, taken = {}, collections.Counter(), {}
+    for row in rows:
+        kind, hero, role, tier, name, count = row["kind"], int(row["hero_id"]), int(row["role"]), int(row["tier"]), row["name"] or "", int(row["count"])
+        if kind == "m":
+            patch, matches = name, count
+        elif kind == "p":
+            players[(hero, role)] = count
+        elif kind == "t" and not name:
+            # Kept the trinket of the tier before, and took only a new enhancement.
+            reached[(hero, role, tier)] += count
+            taken.setdefault((hero, role, tier), {"kept": 0, "t": [], "e": []})["kept"] += count
+        elif kind in ("t", "e") and name:
+            if kind == "t":
+                reached[(hero, role, tier)] += count
+            name = "item_" + OPENDOTA_NEUTRALS.get(name, name)
+            taken.setdefault((hero, role, tier), {"kept": 0, "t": [], "e": []})[kind].append((name, count))
+    names, heroes = [], {}
+    for hero in sorted({hero for hero, _ in players}):
+        roles = [role for role in range(ANY_ROLE) if players.get((hero, role), 0) >= LEAST_NEUTRAL_PROS]
+        # The hero in any role, for the roles too few pros played it in for their own.
+        if len(roles) < ANY_ROLE and players.get((hero, ANY_ROLE), 0) >= LEAST_NEUTRAL_PROS:
+            roles.append(ANY_ROLE)
+        for role in roles:
+            tiers = []
+            for tier in range(1, NEUTRAL_TIERS + 1):
+                got = reached[(hero, role, tier)]
+                if got < LEAST_NEUTRAL_TIER:
+                    continue
+                of_tier = taken.get((hero, role, tier), {"kept": 0, "t": [], "e": []})
+
+                def most(entries, at_most):
+                    enough = [(name, count) for name, count in entries if count >= 2 and count >= NEUTRAL_SHARE * got]
+                    return [[place_of(names, name), count] for name, count in sorted(enough, key=lambda entry: (-entry[1], entry[0]))[:at_most]]
+
+                tiers.append([tier, got, of_tier["kept"], most(of_tier["t"], MOST_TRINKETS), most(of_tier["e"], MOST_ENHANCEMENTS)])
+            if tiers:
+                heroes.setdefault(hero, []).append([role, players[(hero, role)], tiers])
+    return {"source": "OpenDota", "patch": patch, "matches": matches, "names": names, "heroes": heroes}
+
+
 def sample_of(asker, hero, role):
     """Single matches of a hero in a role, of Divine and Immortal players: for each the
     heroes of the other team, the skills in the order they got their points, and the items
@@ -610,6 +762,11 @@ def make_builds(asker, now, numbers, heroes, few, patch):
             pro_heroes.setdefault(name_of(hero), []).append([role, players, said])
     print(f"  what pros buy: {sum(len(roles) for roles in pro_heroes.values())} roles of {len(pro_heroes)} heroes, from {pro_matches:,} pro matches")
 
+    # The neutral items pros take, of the newest patch alone, for the heroes the file knows.
+    neutrals = neutrals_of(neutral_rows(now))
+    neutrals["heroes"] = {name_of(hero): of_it for hero, of_it in neutrals["heroes"].items() if hero in heroes}
+    print(f"  neutral items: {sum(len(roles) for roles in neutrals['heroes'].values())} roles of {len(neutrals['heroes'])} heroes, from {neutrals['matches']:,} pro matches of {neutrals['patch'] or 'no patch'}")
+
     return {
         "format": 2,
         "made": now,
@@ -624,7 +781,32 @@ def make_builds(asker, now, numbers, heroes, few, patch):
         "orders": {name_of(hero): of_it for hero, of_it in orders.items()},
         "against": against,
         "pros": {"source": "OpenDota", "matches": pro_matches, "heroes": pro_heroes},
+        # A key the apps of 0.4.3 and before do not know, and pass over: the file stays of format 2.
+        "neutrals": neutrals,
     }
+
+
+def hollow(builds):
+    """What a file of builds lacks to be written, in a sentence, or None where it lacks
+    nothing (LEAST_BUILDS and the numbers after it)."""
+    made = [made for of_hero in builds["heroes"].values() for made in of_hero]
+    full = [made for made in made if made["talents"] and len(made["items"]) >= LEAST_ITEMS]
+    hero_roles = {(hero, made["role"]) for hero, of_hero in builds["heroes"].items() for made in of_hero}
+    orders = sum(len(of_hero) for of_hero in builds["orders"].values())
+    missing = []
+    if len(builds["heroes"]) < LEAST_HEROES:
+        missing.append(f"builds of {len(builds['heroes'])} heroes, where at least {LEAST_HEROES} are wanted")
+    if len(made) < LEAST_BUILDS:
+        missing.append(f"{len(made)} builds, where at least {LEAST_BUILDS} are wanted")
+    if len(hero_roles) < LEAST_HERO_ROLES:
+        missing.append(f"builds of {len(hero_roles)} heroes in a role, where at least {LEAST_HERO_ROLES} are wanted")
+    if len(full) < LEAST_WITH_TALENTS * len(made):
+        missing.append(f"talents and {LEAST_ITEMS} items in {len(full)} of {len(made)} builds")
+    if orders < LEAST_ORDERS:
+        missing.append(f"a skill order for {orders} heroes in a role, where at least {LEAST_ORDERS} are wanted")
+    if len(builds["against"]) < LEAST_AGAINST:
+        missing.append(f"items bought against {len(builds['against'])} heroes, where at least {LEAST_AGAINST} are wanted")
+    return "; ".join(missing) or None
 
 
 def place_of(names, name):
@@ -644,7 +826,7 @@ def make(asker, now):
     if not weeks:
         sys.exit("STRATZ has no whole week of matches to add up")
 
-    ranks, pairs = [], []
+    ranks, pairs, weekly = [], [], []
     heroes = None
     for pair, its_ranks in PAIRS:
         # Hero against hero and hero beside hero, a week at a time, added up.
@@ -676,17 +858,12 @@ def make(asker, now):
                 for place, role in enumerate(ROLES)
             )
             answer = asker.ask("{ heroStats { %s } }" % parts)["heroStats"]
-            played, won = [], []
-            for place in range(len(ROLES)):
-                sums = {hero: [0, 0] for hero in heroes}
-                for row in answer["r%d" % place] or []:
-                    if row["week"] in weeks and row["heroId"] in sums:
-                        sums[row["heroId"]][0] += row["matchCount"]
-                        sums[row["heroId"]][1] += row["winCount"]
-                played.append([sums[hero][0] for hero in heroes])
-                won.append([sums[hero][1] for hero in heroes])
-            ranks.append({"played": played, "won": won})
-            print(f"  {rank}: {sum(map(sum, played)):,} ranked matches of a hero with a role")
+            rows = [answer["r%d" % place] or [] for place in range(len(ROLES))]
+            ranks.append(by_role(rows, heroes, weeks))
+            print(f"  {rank}: {sum(map(sum, ranks[-1]['played'])):,} ranked matches of a hero with a role")
+            # The same answer has every week by itself: the newest of those added up and the
+            # week before it are kept apart, to say which heroes are rising and which falling.
+            weekly.append([by_role(rows, heroes, [week]) for week in (weeks[0], weeks[0] - WEEK)])
 
     if heroes is None or len(heroes) < LEAST_HEROES:
         sys.exit("STRATZ named too few heroes: nothing was written")
@@ -701,8 +878,24 @@ def make(asker, now):
         "ranks": ranks,
         "pairs": pairs,
         "lanes": lanes,
+        "weekly": {"weeks": [weeks[0], weeks[0] - WEEK], "ranks": weekly},
     }
     return numbers, heroes, patch
+
+
+def by_role(rows, heroes, weeks):
+    """Each hero's matches and wins in each role, added up over `weeks`, from STRATZ's rows of
+    one rank: a list of rows for each role, each row a hero's matches and wins in one week."""
+    played, won = [], []
+    for of_role in rows:
+        sums = {hero: [0, 0] for hero in heroes}
+        for row in of_role:
+            if row["week"] in weeks and row["heroId"] in sums:
+                sums[row["heroId"]][0] += row["matchCount"]
+                sums[row["heroId"]][1] += row["winCount"]
+        played.append([sums[hero][0] for hero in heroes])
+        won.append([sums[hero][1] for hero in heroes])
+    return {"played": played, "won": won}
 
 
 def lane_sums(row):
@@ -853,6 +1046,18 @@ def check():
     assert patches_of(versions, [10 * WEEK, 9 * WEEK]) == "7.41f and 7.42", "a week a patch came in is of both"
     assert patches_of(versions, [11 * WEEK]) == "7.42"
     assert patches_of(versions, [10 * WEEK, 2 * WEEK]) == "7.41e to 7.42"
+    # Matches by role: added up over the weeks asked for, and a week by itself the same way.
+    # Hero 9 is not in the file; hero 2 was not played in the week before.
+    rows = [
+        [{"week": 10 * WEEK, "heroId": 1, "matchCount": 100, "winCount": 60}, {"week": 9 * WEEK, "heroId": 1, "matchCount": 80, "winCount": 40},
+         {"week": 8 * WEEK, "heroId": 1, "matchCount": 50, "winCount": 25}, {"week": 10 * WEEK, "heroId": 9, "matchCount": 70, "winCount": 30}],
+        [{"week": 10 * WEEK, "heroId": 2, "matchCount": 30, "winCount": 10}],
+    ]
+    assert by_role(rows, [1, 2], [10 * WEEK, 9 * WEEK]) == {"played": [[180, 0], [0, 30]], "won": [[100, 0], [0, 10]]}
+    assert by_role(rows, [1, 2], [10 * WEEK]) == {"played": [[100, 0], [0, 30]], "won": [[60, 0], [0, 10]]}, "the newest week by itself"
+    assert by_role(rows, [1, 2], [9 * WEEK]) == {"played": [[80, 0], [0, 0]], "won": [[40, 0], [0, 0]]}, "the week before by itself"
+    assert by_role([[], []], [1, 2], [10 * WEEK]) == {"played": [[0, 0], [0, 0]], "won": [[0, 0], [0, 0]]}
+
     # Pro matches: those of the patch, and in its first weeks those of the weeks before it too.
     assert pros_since(3 * WEEK, now) == 3 * WEEK, "a patch that is old enough: its own matches"
     assert pros_since(now - 2 * day, now) == now - PRO_LEAST_DAYS * day, "a patch of two days: the last four weeks"
@@ -912,6 +1117,48 @@ def check():
     numbers = {"ranks": [played(600, 0, 0), played(300, 80, 20), played(0, 0, 0), played(0, 0, 0)]}
     assert roles_played(numbers, 0, 0) == [0], "the carry, and not the mid of 8 matches in 100"
     assert roles_played(numbers, 1, 0) == [], "no matches, no roles"
+
+    # A file of builds as last week's: 125 heroes, each with builds in three roles for two
+    # pairs of ranks, skill orders for two of the roles, items bought against 80 heroes.
+    def builds_of(heroes=125, roles=3, pairs=2, orders=2, against=80, talents=True, items=20):
+        made = {"matches": 5000, "start": [[0, 1, 4000, 2000]], "items": [[1, 10, 3000, 1500]] * items, "talents": [[0, 3000, 1500]] if talents else []}
+        return {
+            "heroes": {f"h{hero}": [{"role": role, "pair": pair, **made} for role in range(roles) for pair in range(pairs)] for hero in range(heroes)},
+            "orders": {f"h{hero}": [[role, 500, [0, 1, 2]] for role in range(orders)] for hero in range(heroes)},
+            "against": {f"h{hero}": [[1, 150]] for hero in range(against)},
+        }
+
+    assert hollow(builds_of()) is None, "a file as last week's is written"
+    few_heroes = hollow(builds_of(roles=1, pairs=2, heroes=30))
+    assert "of 30 heroes," in few_heroes and "60 builds," in few_heroes and "of 30 heroes in a role" in few_heroes, "builds of a few heroes alone"
+    assert "125 heroes in a role" in hollow(builds_of(roles=1, pairs=4)), "every hero in one role alone"
+    assert "skill order for 0" in hollow(builds_of(orders=0)), "single matches without their player give no orders"
+    assert "against 0 heroes" in hollow(builds_of(against=0)), "nor what is bought against whom"
+    assert "talents and 10 items in 0 of 750" in hollow(builds_of(talents=False)), "builds without their talents"
+    assert "in 0 of 750" in hollow(builds_of(items=3)), "builds with three items"
+
+    # Neutral items. Hero 1: 10 pros as carry and 3 as mid. All 13 made tier 1, 6 of the
+    # carries tier 2, and 4 tier 3, which is too few to say.
+    def row(kind, hero, role, tier, name, count):
+        return {"kind": kind, "hero_id": hero, "role": role, "tier": tier, "name": name, "count": str(count)}
+
+    rows = [row("m", 0, 0, 0, "7.42", 40), row("p", 1, 0, 0, "", 10), row("p", 1, 1, 0, "", 3), row("p", 1, ANY_ROLE, 0, "", 13), row("p", 2, 4, 0, "", 5), row("p", 2, ANY_ROLE, 0, "", 5)]
+    rows += [row("t", 1, 0, 1, "pogo_stick", 7), row("t", 1, 0, 1, "guardian_shell", 2), row("t", 1, 0, 1, "chipped_vest", 1), row("e", 1, 0, 1, "enhancement_alert", 9), row("e", 1, 0, 1, "enhancement_vital", 1)]
+    rows += [row("t", 1, 0, 2, "brick", 4), row("t", 1, 0, 2, "", 2), row("e", 1, 0, 2, "enhancement_alert", 6), row("t", 1, 0, 3, "balmhook", 4)]
+    rows += [row("t", 1, ANY_ROLE, 1, "pogo_stick", 10), row("t", 1, ANY_ROLE, 1, "guardian_shell", 3), row("e", 1, ANY_ROLE, 1, "enhancement_alert", 13)]
+    made = neutrals_of(rows)
+    assert (made["patch"], made["matches"], made["source"]) == ("7.42", 40, "OpenDota")
+    assert list(made["heroes"]) == [1], "hero 2: too few pros in any role"
+    carry, any_role = made["heroes"][1]
+    names = made["names"]
+    assert carry[:2] == [0, 10] and any_role[:2] == [ANY_ROLE, 13], "the carry's own, and every role for the mid of 3 pros"
+    tier_1, tier_2 = carry[2]
+    assert [names[place] for place, _ in tier_1[3]] == ["item_pogo_stick", "item_defiant_shell"], "the game's own names, the most taken first; one pro is nobody to go by"
+    assert tier_1[:3] == [1, 10, 0] and [names[place] for place, _ in tier_1[4]] == ["item_enhancement_alert"]
+    assert tier_2[:3] == [2, 6, 2] and tier_2[3] == [[names.index("item_brick"), 4]], "2 of the 6 kept the trinket they had"
+    assert len(carry[2]) == 2, "tier 3: 4 pros got as far, too few"
+    empty = neutrals_of([])
+    assert empty["heroes"] == {} and empty["matches"] == 0 and empty["names"] == [], "nothing asked, nothing said"
     print("The sums are right.")
 
 
@@ -940,6 +1187,12 @@ def main():
     few = int(os.environ.get("DME_FEW_HEROES") or 0)
     builds = make_builds(asker, now, numbers, heroes, few, patch)
     count = sum(len(of_hero) for of_hero in builds["heroes"].values())
+    lacks = hollow(builds)
+    if lacks and not few:
+        # draft.json goes too: a run that ends here publishes neither (publish/server/update_numbers.sh),
+        # and draft.json alone would take builds.json off the branch the apps read.
+        os.remove(os.path.join(folder, "draft.json"))
+        sys.exit(f"STRATZ's builds are hollow ({lacks}): nothing was written")
     print(write(folder, "builds.json", builds) + f", {count} builds of {len(builds['heroes'])} heroes, {builds['sampled']:,} single matches, {asker.asked} questions asked in all")
 
 

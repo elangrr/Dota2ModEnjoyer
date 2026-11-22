@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::apply::{self, Change, EffectsFor, Pick};
 use crate::dota::{DotaInstall, GameVersion, MOD_FOLDER};
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, VERIFY_HINT};
 use crate::heroes::HeroFiles;
 use crate::items::ItemsGame;
 use crate::loadout::{Loadout, same_picks};
@@ -19,8 +19,6 @@ pub const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 const REWRITE_RULES: u32 = 12;
 
 const BRANCH_FILE: &str = "gameinfo_branchspecific.gi";
-const VERIFY_HINT: &str =
-    "In Steam, right-click Dota 2, choose Properties, Installed Files, \"Verify integrity of game files\", then try again.";
 
 #[derive(Clone, Debug)]
 pub struct Engine {
@@ -41,7 +39,15 @@ pub struct Restored {
     pub gameinfo_restored: bool,
     pub signatures_restored: bool,
     pub package_removed: bool,
-    pub notes: Vec<String>,
+    pub notes: Vec<Note>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Note {
+    #[error("gameinfo_branchspecific.gi still differs from the file Valve shipped; this app did not make that change. {VERIFY_HINT}")]
+    BranchNotValves,
+    #[error("dota.signatures has extra lines that belong to another tool's change; they were left alone.")]
+    OtherToolsLines,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +76,21 @@ pub struct Status {
     pub effects_for: EffectsFor,
     pub package_is_current: bool,
     pub steam_busy: bool,
+    pub applied_build: String,
+}
+
+impl Status {
+    pub fn undone_by_an_update(&self) -> bool {
+        let other_build = !self.picks.is_empty() && !self.applied_build.is_empty() && self.applied_build != self.version.build;
+        self.state.is_half_undone() || (other_build && matches!(self.state, ModState::Off | ModState::NeedsRepair(_)))
+    }
+}
+
+#[derive(Debug)]
+pub enum Mended {
+    Later,
+    Back(Applied),
+    Normal { why: Error, restored: Restored },
 }
 
 #[derive(Debug)]
@@ -120,6 +141,22 @@ impl Engine {
         self.apply_for(picks, effects_for).map(Ready::Applied)
     }
 
+    pub fn mend(&self, picks: &[Pick], effects_for: &EffectsFor) -> Result<Mended> {
+        if picks.is_empty() {
+            return Err(Error::Refused("there are no picks to put back".to_string()));
+        }
+        let status = self.status()?;
+        let in_use = self.refuse_while_running && status.running;
+        if !status.undone_by_an_update() || in_use || status.steam_busy {
+            return Ok(Mended::Later);
+        }
+        match self.apply_for(picks, effects_for) {
+            Ok(applied) => Ok(Mended::Back(applied)),
+            Err(Error::DotaRunning) => Ok(Mended::Later),
+            Err(why) => self.restore().map(|restored| Mended::Normal { why, restored }),
+        }
+    }
+
     pub fn loadout_file(&self) -> PathBuf {
         self.data_dir.join("picks.json")
     }
@@ -153,10 +190,7 @@ impl Engine {
         missing.models.retain(|file| !is_there(file));
         missing.others.retain(|file| !is_there(file));
         if !missing.models.is_empty() {
-            return Err(Error::Refused(format!(
-                "this copy of Dota does not have the models these picks need: {}",
-                missing.models.join(", ")
-            )));
+            return Err(Error::MissingModels(missing.models));
         }
         let compiled = |model: &str| format!("{}_c", resource::normal(model));
         let moved_data = |path: &str| moved.iter().find(|(known, _)| known == path).map(|(_, data)| data.clone());
@@ -234,9 +268,7 @@ impl Engine {
 
         let files = self.read_game_files()?;
         if !files.branch_is_valves {
-            return Err(Error::Refused(format!(
-                "{BRANCH_FILE} is not the file Valve shipped, so something else has changed it. {VERIFY_HINT}"
-            )));
+            return Err(Error::NotValves);
         }
         let declared_path = files.declared_path.as_deref().unwrap_or_default();
         let gameinfo = read_text(&self.dota.gameinfo())?;
@@ -272,19 +304,14 @@ impl Engine {
             done.gameinfo_restored = true;
         }
         if !files.branch_is_valves {
-            done.notes.push(format!(
-                "{BRANCH_FILE} still differs from the file Valve shipped; this app did not make that change. {VERIFY_HINT}"
-            ));
+            done.notes.push(Note::BranchNotValves);
         }
         if files.has_extra_lines {
             if files.has_our_lines || files.branch_is_valves {
                 fsutil::write_atomic(&self.dota.signatures(), files.valve_signatures.as_bytes())?;
                 done.signatures_restored = true;
             } else {
-                done.notes.push(
-                    "dota.signatures has extra lines that belong to another tool's change; they were left alone."
-                        .to_string(),
-                );
+                done.notes.push(Note::OtherToolsLines);
             }
         }
         done.package_removed = fsutil::remove_dir_all_if_exists(&self.dota.mod_dir())?;
@@ -322,6 +349,7 @@ impl Engine {
             running: process::is_dota_running(),
             steam_busy: self.dota.steam_is_busy(),
             state,
+            applied_build: saved.game_build,
             picks: saved.picks,
             effects_for: saved.effects_for,
         })
@@ -767,6 +795,84 @@ mod tests {
         assert_eq!((read(fake.engine.dota.signatures()), read(fake.engine.dota.gameinfo_branch())), (fake.signatures.clone(), BRANCH_TEXT.to_string()));
     }
 
+    fn update_to(fake: &Fake, build: &str, game_files: &[&str]) {
+        let dota = &fake.engine.dota;
+        std::fs::write(dota.steam_inf(), format!("ClientVersion={build}
+VersionDate=Nov 20 2026
+")).unwrap();
+        std::fs::write(dota.signatures(), &fake.signatures).unwrap();
+        let mut files = vec![PackFile { path: ITEMS_GAME, data: SAMPLE.as_bytes() }];
+        files.extend(game_files.iter().map(|&path| PackFile { path, data: b"compiled of the new build" }));
+        std::fs::write(dota.game_archive(), vpk::build(&files).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_picks_are_put_back_in_a_game_that_a_dota_update_left_half_undone() {
+        let fake = fake_install(&FILES);
+        let dota = &fake.engine.dota;
+        fake.engine.apply(&picks()).unwrap();
+        let edited = (read(dota.signatures()), read(dota.gameinfo_branch()));
+        assert!(!fake.engine.status().unwrap().undone_by_an_update(), "the picks are in the game as Play put them");
+        assert!(matches!(fake.engine.mend(&picks(), &EffectsFor::Every).unwrap(), Mended::Later), "nothing to put back");
+
+        update_to(&fake, "6974", &FILES);
+        let status = fake.engine.status().unwrap();
+        assert!(status.state.is_half_undone() && status.undone_by_an_update());
+        let Mended::Back(applied) = fake.engine.mend(&picks(), &EffectsFor::Every).unwrap() else { panic!("the picks are put back") };
+        assert_eq!(applied.changes.len(), 3);
+        let status = fake.engine.status().unwrap();
+        assert_eq!(status.state, ModState::On);
+        assert!(status.package_is_current && status.applied_build == "6974" && !status.undone_by_an_update());
+        assert_eq!((read(dota.signatures()), read(dota.gameinfo_branch())), edited, "both files edited again, as Play edits them");
+        let package = Archive::open(&dota.mod_package()).unwrap();
+        let models = package.entries().iter().filter(|entry| package.path_of(entry).ends_with(".vmdl_c")).map(|entry| package.read_entry(entry).unwrap()).collect::<Vec<_>>();
+        assert!(!models.is_empty() && models.iter().all(|data| data == b"compiled of the new build"));
+
+        let backup = fake.engine.data_dir.join("backup").join("6974");
+        assert_eq!(read(backup.join("dota.signatures")), fake.signatures);
+        assert_eq!(read(backup.join(BRANCH_FILE)), BRANCH_TEXT);
+        fake.engine.restore().unwrap();
+        assert_eq!((read(dota.signatures()), read(dota.gameinfo_branch())), (fake.signatures.clone(), BRANCH_TEXT.to_string()));
+    }
+
+    #[test]
+    fn the_picks_are_put_back_where_an_update_changed_both_files_but_not_where_steam_verified_them() {
+        let fake = fake_install(&FILES);
+        let dota = &fake.engine.dota;
+        fake.engine.apply(&picks()).unwrap();
+
+        std::fs::write(dota.signatures(), &fake.signatures).unwrap();
+        std::fs::write(dota.gameinfo_branch(), BRANCH_TEXT).unwrap();
+        assert!(matches!(state(&fake), ModState::NeedsRepair(_)) && !state(&fake).is_half_undone());
+        assert!(!fake.engine.status().unwrap().undone_by_an_update());
+        assert!(matches!(fake.engine.mend(&picks(), &EffectsFor::Every).unwrap(), Mended::Later));
+
+        update_to(&fake, "6974", &FILES);
+        assert!(fake.engine.status().unwrap().undone_by_an_update());
+        assert!(matches!(fake.engine.mend(&picks(), &EffectsFor::Every).unwrap(), Mended::Back(_)));
+        assert_eq!(state(&fake), ModState::On);
+
+        fake.engine.restore().unwrap();
+        update_to(&fake, "6975", &FILES);
+        assert!(!fake.engine.status().unwrap().undone_by_an_update());
+    }
+
+    #[test]
+    fn a_game_that_the_picks_cannot_be_put_back_in_is_put_back_to_normal() {
+        let fake = fake_install(&FILES);
+        let dota = &fake.engine.dota;
+        fake.engine.apply(&picks()).unwrap();
+        update_to(&fake, "6974", &[]);
+        assert!(state(&fake).is_half_undone());
+        let Mended::Normal { why, restored } = fake.engine.mend(&picks(), &EffectsFor::Every).unwrap() else { panic!("put back to normal") };
+        assert!(why.to_string().contains("models"), "{why}");
+        assert!(restored.gameinfo_restored && restored.package_removed);
+        assert_eq!(state(&fake), ModState::Off, "never left half undone");
+        assert_eq!((read(dota.signatures()), read(dota.gameinfo_branch())), (fake.signatures.clone(), BRANCH_TEXT.to_string()));
+        assert!(!fake.engine.status().unwrap().undone_by_an_update(), "and not tried again");
+        assert!(fake.engine.mend(&[], &EffectsFor::Every).is_err(), "with no picks, going back to normal is what is wanted");
+    }
+
     #[test]
     fn a_file_changed_by_something_else_is_not_touched() {
         let fake = fake_install(&FILES);
@@ -775,7 +881,7 @@ mod tests {
         std::fs::write(dota.gameinfo_branch(), &foreign).unwrap();
 
         assert!(matches!(state(&fake), ModState::ChangedByOther(_)));
-        assert!(matches!(fake.engine.apply(&picks()), Err(Error::Refused(_))));
+        assert!(matches!(fake.engine.apply(&picks()), Err(Error::NotValves)));
         assert_eq!(read(dota.gameinfo_branch()), foreign);
         assert_eq!(read(dota.signatures()), fake.signatures);
         assert!(!dota.mod_dir().exists());
@@ -811,7 +917,7 @@ mod tests {
         let fake = fake_install(&FILES[..2]);
         let dota = &fake.engine.dota;
         let error = fake.engine.apply(&picks()).unwrap_err();
-        assert!(matches!(&error, Error::Refused(text) if text.contains("vanguard_misc.vmdl")), "{error}");
+        assert!(matches!(&error, Error::MissingModels(models) if models.iter().any(|model| model.contains("vanguard_misc.vmdl"))), "{error}");
         assert_eq!(read(dota.gameinfo_branch()), BRANCH_TEXT);
         assert_eq!(read(dota.signatures()), fake.signatures);
         assert!(!dota.mod_dir().exists());

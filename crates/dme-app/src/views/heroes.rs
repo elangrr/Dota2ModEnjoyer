@@ -30,14 +30,14 @@ impl Filter {
             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
             for attribute in Attribute::ALL {
                 let on = self.attribute == Some(attribute);
-                if rarity::pill(ui, attribute.name(), color_of(attribute), on).clicked() {
+                if rarity::pill(ui, crate::lang::words::attribute(attribute), color_of(attribute), on).clicked() {
                     self.attribute = (!on).then_some(attribute);
                 }
             }
-            if (any_picks || self.picked) && rarity::pill(ui, "With picks", crate::theme::accent(), self.picked).clicked() {
+            if (any_picks || self.picked) && rarity::pill(ui, tr!(WithPicks), crate::theme::accent(), self.picked).clicked() {
                 self.picked = !self.picked;
             }
-            if *self != Filter::default() && ui.add(egui::Button::new(dim("Show all")).frame(false)).clicked() {
+            if *self != Filter::default() && ui.add(egui::Button::new(dim(tr!(ShowAll))).frame(false)).clicked() {
                 *self = Filter::default();
             }
         });
@@ -86,7 +86,7 @@ impl Found {
 }
 
 pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &Loadout, pictures: &mut Pictures, search: &mut String, found: &mut Found, filter: &mut Filter) -> Option<Open> {
-    title_bar(ui, "Pick a hero", None, Some((search, "Find a hero or an item")), |_| {});
+    title_bar(ui, tr!(PickAHero), None, Some((search, tr!(FindHint))), |_| {});
     filter.chips(ui, !loadout.is_empty());
 
     let wanted = search.trim().to_lowercase();
@@ -96,9 +96,9 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &Loadout, pictures: &mut Pi
     if heroes.is_empty() && found.hits.is_empty() {
         let few = wanted.chars().count() < LETTERS_FOR_ITEMS;
         ui.label(dim(match (named.is_empty(), few) {
-            (false, _) => "No hero here is of the kind you chose.",
-            (true, true) => "No hero goes by that name. Type a letter more to look for items.",
-            (true, false) => "No hero, item or set has that in its name.",
+            (false, _) => tr!(NoHeroOfKind),
+            (true, true) => tr!(NoHeroTypeMore),
+            (true, false) => tr!(NothingHasThat),
         }));
         return None;
     }
@@ -133,10 +133,10 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &Loadout, pictures: &mut Pi
 
     egui::ScrollArea::vertical().id_salt("found").auto_shrink(false).show(ui, |ui| {
         if !heroes.is_empty() {
-            heading(ui, "Heroes");
+            heading(ui, tr!(HeroesHeading));
             tiles::flow(ui, heroes.len(), LOOK, |ui, index, look| clicked = hero_tile(ui, index, look, pictures).or(clicked.take()));
         }
-        heading(ui, "Items and sets");
+        heading(ui, tr!(ItemsAndSets));
         tiles::flow(ui, found.hits.len(), FOUND_LOOK, |ui, index, look| {
             let hit = &found.hits[index];
             let detail = Detail { rarity: rarity::named(&catalog.rarities, hit.rarity), looks: Vec::new(), facts: vec![hit.place.clone()] };
@@ -158,7 +158,7 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &Loadout, pictures: &mut Pi
         });
         if found.more {
             ui.add_space(6.0);
-            ui.label(dim(format!("These are the first {MOST_FOUND}. Type more of the name to find fewer.")));
+            ui.label(dim(tr!(FirstFound, count = MOST_FOUND)));
         }
     });
     clicked
@@ -179,16 +179,16 @@ pub(super) fn found<'c>(heroes: impl IntoIterator<Item = &'c Hero>, wanted: &str
 fn hits(catalog: &Catalog, wanted: &str, most: usize) -> (Vec<Hit>, bool) {
     let mut hits = Vec::new();
     let in_slots = |hero: Option<&Hero>, slots: &[Slot], hits: &mut Vec<Hit>| {
-        let owner = hero.map_or("World", |hero| hero.name.as_str());
+        let owner = hero.map_or(tr!(WorldOwner), |hero| hero.name.as_str());
         for slot in slots {
-            for entry in slot.items.iter().filter(|entry| fits(&entry.name, wanted)) {
+            for entry in slot.items.iter().filter(|entry| fits_either(catalog, &entry.id, &entry.name, wanted)) {
                 hits.push(Hit {
                     hero: hero.map(|hero| hero.id.clone()),
                     row: Row::Slot(slot.id.clone()),
                     name: entry.name.clone(),
                     picture: entry.picture.clone(),
                     rarity: entry.rarity,
-                    place: format!("{owner} · {}", slot.name),
+                    place: tr!(FoundAt, owner, slot = slot.name),
                     warning: gaps_note(&entry.gaps),
                 });
             }
@@ -199,14 +199,14 @@ fn hits(catalog: &Catalog, wanted: &str, most: usize) -> (Vec<Hit>, bool) {
         if hits.len() > most {
             break;
         }
-        for set in hero.sets.iter().filter(|set| fits(&set.name, wanted)) {
+        for set in hero.sets.iter().filter(|set| fits_either(catalog, &set.key, &set.name, wanted)) {
             hits.push(Hit {
                 hero: Some(hero.id.clone()),
                 row: Row::Sets,
                 name: set.name.clone(),
                 picture: set.picture.clone(),
                 rarity: set.rarity,
-                place: format!("{} · Set", hero.name),
+                place: tr!(FoundSet, hero = hero.name),
                 warning: set_gaps_note(set, &hero.slots),
             });
         }
@@ -218,11 +218,11 @@ fn hits(catalog: &Catalog, wanted: &str, most: usize) -> (Vec<Hit>, bool) {
 }
 
 fn picks_note(picks: usize) -> Option<String> {
-    match picks {
-        0 => None,
-        1 => Some("1 pick".to_string()),
-        many => Some(format!("{many} picks")),
-    }
+    (picks > 0).then(|| tr!(PickCount, count = picks))
+}
+
+pub(super) fn fits_either(catalog: &Catalog, key: &str, name: &str, wanted: &str) -> bool {
+    fits(name, wanted) || catalog.english.get(key).is_some_and(|english| fits(english, wanted))
 }
 
 #[cfg(test)]

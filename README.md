@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/931e5e43d3b87d14dd126a9fbf5ab2853ae20e2b6b3b796566194b55fa294826"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2069%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 69 scanners flag it" height="40"></a><!-- /virustotal -->
+  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/5c9482ed8d7ec9924441f6f09549225d73963b6cbb68a9c587f682e0eea6facb"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
   &nbsp;
   <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
@@ -29,6 +29,9 @@ The first time, Windows may say "Windows protected your PC", because the file is
 a paid certificate. Click **More info**, then **Run anyway**.
 
 Only you see your picks, and you do not need to own the items.
+
+The app speaks English and Russian (Русский). It follows the language of Windows, and you can
+change it at the top of Settings.
 
 ## Screenshots
 
@@ -66,15 +69,22 @@ mid, or the enemy's offlaner and soft support for a carry, and suggests heroes t
 lane more often. For a carry or an offlaner, the enemy core in the lane counts more than the
 support.
 
+In Settings, under **My Hero Pool**, you choose the heroes you play, and your own list then
+shows only those. Before the first pick the page names heroes to ban, and with nothing picked
+it lists the best heroes this week for your role, with the ones rising and falling. **Suggest
+to my team**, beside the three best heroes of your list, copies a line for Dota's chat, such as
+"Invoker is a good pick against the enemy".
+
 ![The Draft page, with the heroes for the last pick in mid](assets/screens/draft.jpg)
 
 **Builds** shows on one screen what players of a hero buy and skill in your rank and role. Core
 items come in the order they are bought, with how many of 100 players buy each. Other items
 move up when they are bought more often against the enemy heroes of your draft. Skills has a
-point for every level. Talents show how many players take each side. **Go to build** on the
-Draft page opens your own hero's.
+point for every level. Talents show how many players take each side. Neutral items show what
+pros take in each tier of the newest patch, for the heroes enough pros have played. **Go to
+build** on the Draft page opens your own hero's.
 
-![The Builds page, with Juggernaut as a carry](assets/screens/builds.jpg)
+![The Builds page, with Slark as a carry](assets/screens/builds.jpg)
 
 Both pages work with Dota closed and never read your game. Their numbers are added up from
 millions of public matches by [STRATZ](https://stratz.com), and what pros buy comes from
@@ -88,8 +98,9 @@ The app updates itself. When a new version is out, an **Update** button shows on
 click downloads it and starts it again, and your picks stay. [CHANGELOG.md](CHANGELOG.md) lists
 what each version changed.
 
-After a Dota update, start Dota with **Play** in the app. Steam updates Dota by itself, and that
-undoes half of the app's changes until Play puts them back.
+After a Dota update, the app puts your picks back in by itself. Keep it open, or open it after
+the update. Once Steam is done and Dota is closed, it puts them back and tells you so. If you
+start Dota from Steam before that, close it, and the app puts them back.
 
 ## Troubleshooting
 
@@ -142,6 +153,7 @@ link opens the full result for that file. A release that Microsoft's scanner fla
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.5.0 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/5c9482ed8d7ec9924441f6f09549225d73963b6cbb68a9c587f682e0eea6facb) | [1 of 70 scanners flag it](https://www.virustotal.com/gui/file/bedd95c6fb62d976dae4893aaff05c47f4165eaa64dd518ee0c0f7096aa78f4e) |
 | 0.4.3 | [2 of 69 scanners flag it](https://www.virustotal.com/gui/file/931e5e43d3b87d14dd126a9fbf5ab2853ae20e2b6b3b796566194b55fa294826) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/277135a736edf2c54ea397a892a2134d0458c7583591b9c8a13cc25f072683b6) |
 | 0.4.2 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/fbf1b73db1a1b64d870718a7629c2b731eb76d1ee765873232af3fa6d22ea503) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/423fccffb74a826886ed2e2d32276d8ff8632651db29f98fc9c8b69d4e8fee31) |
 | 0.4.1 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/02f0bbe2c5ef23511e0fdbf139466593d1d8201d84a0f98a2473407742a3fb4e) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/55cb557aa17c40acf6ee8177ccad6cfed4b79a3d86779720b80a78771c4870a7) |

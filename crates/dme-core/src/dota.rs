@@ -41,11 +41,7 @@ impl DotaInstall {
                 }
             }
         }
-        Err(Error::DotaNotFound(if looked_in.is_empty() {
-            "Steam itself was not found on this computer.".to_string()
-        } else {
-            format!("Looked in: {}", looked_in.join("; "))
-        }))
+        Err(Error::DotaNotFound(looked_in))
     }
 
     pub fn root(&self) -> &Path {

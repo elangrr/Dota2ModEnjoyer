@@ -178,7 +178,7 @@ impl GameData {
         let items_game = archive
             .read(ITEMS_GAME)?
             .with_context(|| format!("{ITEMS_GAME} is not in the game's archive"))?;
-        Ok(GameData { items_game, names: catalog::read_names(&archive), heroes: HeroFiles::read(&archive) })
+        Ok(GameData { items_game, names: catalog::read_names(&archive, "english"), heroes: HeroFiles::read(&archive) })
     }
 
     fn ability_name(&self, hero: &str, slot: &str) -> Option<&str> {
@@ -324,10 +324,24 @@ fn status(engine: &Engine) -> Result<()> {
         ModState::ChangedByOther(why) => format!("not usable: {why}"),
     };
     println!("Mods:     {mods}");
+    if status.steam_busy {
+        println!("Steam:    busy with Dota's files, such as with an update. Nothing should be written until it is done.");
+    }
+    let saved = engine.loadout();
+    if status.undone_by_an_update() {
+        let how = if status.state.is_half_undone() { "half of" } else { "all but the package of" };
+        let then = if !saved.is_empty() {
+            "The app, while it is open, puts the picks back in by itself once Dota is closed and Steam is done; `dme play` puts them back now, and starts Dota."
+        } else if status.state.is_half_undone() {
+            "No picks are in use, so the app, while it is open, puts the game back to normal by itself once Dota is closed and Steam is done; so does `dme restore`."
+        } else {
+            "No picks are in use, and nothing loads the package that is left."
+        };
+        println!("Update:   a Dota update undid {how} what Play did. {then}");
+    }
     for pick in &status.picks {
         println!("Pick:     {}", written(pick));
     }
-    let saved = engine.loadout();
     if !saved.effects_for().is_usual() {
         println!("Effects:  the effects of events and an emblem go on {}", effects_for_words(saved.effects_for()));
     }

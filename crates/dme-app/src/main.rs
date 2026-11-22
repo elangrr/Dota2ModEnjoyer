@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod lang;
+
 mod app;
 mod changelog;
 mod crash;
@@ -40,6 +43,7 @@ pub struct Options {
     pub no_restart: bool,
     pub numbers_from: Option<String>,
     pub updated_from: Option<String>,
+    pub game_language: Option<String>,
 }
 
 impl Options {
@@ -55,6 +59,7 @@ impl Options {
                 "--pretend-version" => options.pretend_version = arguments.next(),
                 "--updated-from" => options.updated_from = arguments.next(),
                 "--numbers-from" => options.numbers_from = arguments.next(),
+                "--game-language" => options.game_language = arguments.next(),
                 "--dota" => options.dota = arguments.next().map(PathBuf::from),
                 "--data-dir" => options.data_dir = arguments.next().map(PathBuf::from),
                 "--screenshot" => options.screenshot = arguments.next().map(PathBuf::from),
@@ -188,13 +193,13 @@ fn main() -> std::process::ExitCode {
             drop(held);
             let again = std::env::current_exe().and_then(|app| std::process::Command::new(app).args(std::env::args_os().skip(1)).spawn());
             if again.is_err() && !picture_only {
-                crash::tell("The app could not start with its see-through window. Start it again: it starts without it from now on.");
+                crash::tell(tr!(NoGlass));
             }
             std::process::ExitCode::SUCCESS
         }
         Afterwards::NoWindow(why) => {
             if !picture_only {
-                crash::tell(&format!("The app's window could not be made on this computer: {why}\n\nUpdating the driver of the graphics card may help."));
+                crash::tell(&tr!(NoWindow, why));
             }
             std::process::ExitCode::FAILURE
         }

@@ -93,11 +93,10 @@ pub fn tell(text: &str) {
 pub fn tell(_text: &str) {}
 
 pub fn closed_words(written: Option<&Path>) -> String {
-    let kept = match written {
-        Some(path) => format!("What happened is written in {}. Start the app again to report it, so that it gets fixed.", path.display()),
-        None => "Start the app again, and if it happens again, report it in Help.".to_string(),
-    };
-    format!("Something went wrong inside the app, and it had to close. Your picks are kept.\n\n{kept}")
+    match written {
+        Some(path) => tr!(ClosedWritten, file = path.display()),
+        None => tr!(ClosedNotWritten).to_string(),
+    }
 }
 
 #[cfg(test)]

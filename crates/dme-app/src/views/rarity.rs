@@ -35,7 +35,7 @@ pub fn chips(ui: &mut Ui, rarities: &[Rarity], present: &BTreeSet<usize>, asked:
                 };
             }
         }
-        if !asked.is_empty() && ui.add(egui::Button::new(dim("Show all")).frame(false)).clicked() {
+        if !asked.is_empty() && ui.add(egui::Button::new(dim(tr!(ShowAll))).frame(false)).clicked() {
             asked.clear();
         }
     });

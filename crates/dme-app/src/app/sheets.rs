@@ -2,7 +2,8 @@ use dme_core::apply::Pick;
 use dme_core::share::{self, LONGEST_NAME};
 use eframe::egui::{self, CornerRadius, RichText};
 
-use super::{App, Banner, TITLE, VERSION, picks_in_words, primary};
+use super::{App, Banner, TITLE, VERSION, primary};
+use crate::lang::{self, T};
 use crate::report;
 use crate::status::Tone;
 use crate::support;
@@ -10,134 +11,63 @@ use crate::theme;
 use crate::update::Updater;
 use crate::views::{self, dim};
 
-const NOTICE: [&str; 3] = [
-    "This app changes how Dota 2 looks on your computer. It does that by editing two of the game's own files. Only you see the result.",
-    "Editing game files may be against Valve's rules for Dota 2, so you use this app at your own risk. It is not made or approved by Valve.",
-    "Nothing is changed while Dota 2 is running, and \"Back to normal Dota\" undoes everything. If Dota ever says that Valve Anti-Cheat could not verify your machine, press it, then look for a match again.",
+const NOTICE: [T; 3] = [T::Notice1, T::Notice2, T::Notice3];
+
+const TOUR: [(T, T); 4] = [(T::Tour1, T::Tour1Text), (T::Tour2, T::Tour2Text), (T::Tour3, T::Tour3Text), (T::Tour4, T::Tour4Text)];
+
+const HELP: [(T, T); 18] = [
+    (T::HelpFinding, T::HelpFindingText),
+    (T::HelpPresets, T::HelpPresetsText),
+    (T::HelpDraft, T::HelpDraftText),
+    (T::HelpBuilds, T::HelpBuildsText),
+    (T::HelpNotShowing, T::HelpNotShowingText),
+    (T::HelpOthersWear, T::HelpOthersWearText),
+    (T::HelpAbilityEffects, T::HelpAbilityEffectsText),
+    (T::HelpPersonas, T::HelpPersonasText),
+    (T::HelpEffects, T::HelpEffectsText),
+    (T::HelpEmblems, T::HelpEmblemsText),
+    (T::HelpPartMissing, T::HelpPartMissingText),
+    (T::HelpVideo, T::HelpVideoText),
+    (T::HelpExperiments, T::HelpExperimentsText),
+    (T::HelpAfterUpdate, T::HelpAfterUpdateText),
+    (T::HelpVac, T::HelpVacText),
+    (T::HelpNotListed, T::HelpNotListedText),
+    (T::HelpBackToNormal, T::HelpBackToNormalText),
+    (T::HelpReporting, T::HelpReportingText),
 ];
 
-const TOUR: [(&str, &str); 4] = [
-    ("1. Pick", "Choose a hero and click what it should wear: a whole set, or piece by piece. The courier, the ward and the rest are under World."),
-    ("2. Play", "Press Play. Your picks are put in the game and Dota 2 starts. Close Dota first if it is open. After a Dota update, start it with Play here."),
-    ("3. In Dota", "A pick takes the place of a default item. If you wear an item of your own in that slot, unequip it there for the pick to show."),
-    ("Good to know", "Just type to search. \"My picks\" lists everything you picked. \"Back to normal Dota\" undoes it all. Help has the rest."),
-];
-
-const LOW_END_HINT: &str = "Play starts Dota with its lightest video settings: no shadows, simple water and lighting, no fog, grass or other extras. \
-     An experiment. Dota may keep these settings afterwards; you can change them back in Dota's video options.";
-
-const HELP: [(&str, &str); 18] = [
-    (
-        "Finding things",
-        "Just type. On the hero grid that finds heroes and, from the third letter on, items and sets wherever they are. The chips above the heroes show only those of one attribute, or those with picks. Rest the pointer on an item or a set for a larger look at it and its styles.",
-    ),
-    (
-        "My picks and presets",
-        "\"My picks\", on the left, lists everything you picked. A click on a pick opens its page, and its cross takes it off. To keep what is picked as a preset, type a name there and press \"Save as preset\". A click on a preset picks it again, in the place of what is picked now.",
-    ),
-    (
-        "The draft helper",
-        "\"Draft\", on the left, says which heroes to pick. Put the heroes of both teams in as they are picked: click a place, type a few letters of the name, press Enter. The places are in the order of a ranked draft: two heroes for each team, then two more, then the last. The first two are taken to be the supports, the next two the carry and the offlaner, the last the mid. Each place shows its role as a small drawing in its corner; a click on it opens the roles to choose another. The list is for the place that is lit: it shows the heroes of that role that win more often there, in your rank. A click on a hero in the list puts it in that place and goes on to the next, the same as typing its name. Your own place, the one with the role you play, says \"You\". In the list, what a hero adds is green and what it takes is red. The switch at the top says what the list is for: \"Team composition\" weighs the whole match, \"Lane winning\" only the heroes of that lane, such as the enemy's mid for a mid; for a carry or an offlaner the enemy's core there counts more than its support. Once both teams are full, the page says which draft is better, with each team's chance in percent. The numbers are STRATZ's, added up from millions of matches and made new every week. The app does not look at your game: you put the heroes in yourself, and nothing is read from Dota.",
-    ),
-    (
-        "The build helper",
-        "\"Builds\", on the left, shows what the players of a hero buy and skill in your rank, on one screen: what is bought at the start, the core items in the order they are bought, the other items, where each skill point goes level by level, and the talents. With a draft on the Draft page, an item that is bought more often against one of the enemy's heroes moves up, turns green and shows that hero. The core items also have what most pros buy in that role, such as the Bottle of a mid. When both teams of a draft are full, \"Go to build\" on the Draft page opens the build of your own hero, the one in the place with your role. Or type a hero's name on the Builds page. Rest the pointer on an item for when it is bought and how often its buyers win. A build is what most players do: a place to start from, not a rule.",
-    ),
-    (
-        "A pick does not show in Dota",
-        "A pick takes the place of a default item. If you wear an item of your own in that slot, unequip it in your Dota loadout.",
-    ),
-    (
-        "Other players wear it too",
-        "Whoever uses the default item shows your pick as well. That is on your screen only: nobody else sees any of it.",
-    ),
-    (
-        "Ability effects",
-        "Under what a hero wears is a list of its abilities. Pick an item there to give the ability that item's effects, whatever the hero wears. Only effects that Dota itself lets players use apart from their item are listed.",
-    ),
-    (
-        "Personas",
-        "A persona is put on the hero's own items, so it shows without your owning it in Dota. It takes the place of what the hero wears: picks for those slots are taken off, and picking one of them takes the persona off. An experiment.",
-    ),
-    (
-        "Effects",
-        "A courier, and what a hero wears, can be given an effect on top of its own, the way a gem gives one in Dota. Pick the item first, then choose under \"Effect\". On a hero, the effects marked \"(courier)\" are an experiment: they are made for couriers.",
-    ),
-    (
-        "Emblems, teleports and other effects",
-        "On the World page, under \"Effects\", you can put an event's emblem around your heroes, and use the effect a past event had for a teleport, a Blink Dagger, attacks and more. They go on the heroes you picked something for; Settings can make that every hero, or heroes you choose. A hero shows them as long as its slots in Dota are on their default items.",
-    ),
-    (
-        "A part of an item does not show",
-        "An item or a set with a small ! mark has a part that may not show: Dota no longer has some of its files, or some of its effects go by the level of an arcana, which Dota's servers give only to its owner, or it is known to be buggy, as the fog of Aghanim's Labyrinth's map effect is. The lightest video settings leave parts of effects out as well.",
-    ),
-    (
-        "Video settings",
-        "Do not change Dota's video settings during a match. That makes Dota show the heroes you picked for as \"ERROR\" until the next game. Change them before a match.",
-    ),
-    (
-        "Experiments",
-        "\"Trees\" and \"Map Effect\", at the bottom of the World page, and \"Low-end PC mode\", in Settings, are still being tried out. Low-end PC mode starts Dota with its lightest video settings. Dota may keep them afterwards; you can change them back in its video options.",
-    ),
-    (
-        "After a Dota update",
-        "Press Play here before you play: it puts your picks back for the new version of Dota. Steam updates Dota by itself, often without your noticing, and that undoes half of what the app did. A game left like that can make Valve's anti-cheat check stop you from finding a match, so the app puts such a game back to normal by itself whenever it is open.",
-    ),
-    (
-        "Valve Anti-Cheat could not verify your machine",
-        "If Dota says this as you look for a match, close Dota, press \"Back to normal Dota\" here, and look for a match again. Steam's \"Verify integrity of game files\" does the same.",
-    ),
-    (
-        "Something is not in the lists",
-        "Taunts and a few more cannot be changed: the game has no default item for them to take the place of.",
-    ),
-    (
-        "Back to normal Dota",
-        "Takes everything this app did out of the game's files and puts your picks away, so that nothing is picked. \"Bring back my picks\" picks it all again, unless you have started over with something new.",
-    ),
-    (
-        "Reporting a problem",
-        "Press \"Report a problem\" below, or \"Report\" beside a message about something that went wrong. It opens a new report on the app's GitHub page with what happened written in. You read it over and send it yourself, with a free GitHub account. Without one, \"Copy details\" copies the same, for whoever helps you.",
-    ),
-];
-
-const UPDATES_HELP: (&str, &str) = (
-    "Updates",
-    "When a newer version of this app is out, an Update button shows on the left. One click downloads it and starts the app again. Your picks stay as they are. In Settings you can have the app do this by itself.",
-);
-
-const AUTO_UPDATE_NOTE: &str = "On: when a newer version of this app is out, the app downloads it and starts again by itself. Off: an Update button shows on the left, and nothing happens until you press it. Your picks stay as they are either way.";
+const UPDATES_HELP: (T, T) = (T::HelpUpdates, T::HelpUpdatesText);
 
 impl App {
     pub(super) fn help(&mut self, ctx: &egui::Context) {
         let room = (ctx.content_rect().height() - 200.0).max(120.0);
         let updates = self.updater.is_some().then_some(UPDATES_HELP);
         let version = match self.updater.as_ref().and_then(Updater::trial_source) {
-            Some(source) => format!("Version {VERSION}. Trying updates out: this copy looks for them at {source}"),
-            None => format!("Version {VERSION}"),
+            Some(source) => tr!(VersionTrying, version = VERSION, source),
+            None => tr!(VersionIs, version = VERSION),
         };
         let shown = egui::Modal::new(egui::Id::unique("help")).frame(sheet()).show(ctx, |ui| {
             ui.set_width(540.0);
-            ui.label(theme::title("Good to know", 22.0));
+            ui.label(theme::title(tr!(GoodToKnow), 22.0));
             ui.add_space(8.0);
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
                 for (heading, answer) in HELP.into_iter().chain(updates) {
-                    egui::CollapsingHeader::new(RichText::new(heading).strong()).show(ui, |ui| {
-                        ui.label(dim(answer));
+                    egui::CollapsingHeader::new(RichText::new(lang::t(heading)).strong()).id_salt(heading).show(ui, |ui| {
+                        ui.label(dim(lang::t(answer)));
                         ui.add_space(4.0);
                     });
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label(dim(version.as_str()).small());
-                    if ui.small_button("Report a problem").on_hover_text(super::REPORT_HINT).clicked() {
+                    if ui.small_button(tr!(ReportProblem)).on_hover_text(tr!(ReportHint)).clicked() {
                         self.open_page(&report::address("", None));
                     }
                 });
             });
             ui.add_space(6.0);
-            ui.vertical_centered(|ui| ui.add(primary("Close")).clicked()).inner
+            ui.vertical_centered(|ui| ui.add(primary(tr!(Close))).clicked()).inner
         });
         if shown.inner || shown.should_close() {
             self.help_open = false;
@@ -149,46 +79,47 @@ impl App {
         let mut said = None;
         let shown = egui::Modal::new(egui::Id::unique("support")).frame(sheet()).show(ctx, |ui| {
             ui.set_width(500.0);
-            ui.label(theme::title("Support the project", 22.0));
+            ui.label(theme::title(tr!(SupportTitle), 22.0));
             ui.add_space(6.0);
-            ui.label(dim(format!("{TITLE} is free, and its code is open. If you like it, this is how to help.")));
+            ui.label(dim(tr!(SupportWhy, app = TITLE)));
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
-                views::settings::heading(ui, "Star it on GitHub");
-                ui.label(dim("A star costs nothing and helps other players find the project.").small());
+                views::settings::heading(ui, tr!(StarIt));
+                ui.label(dim(tr!(StarWhy)).small());
                 ui.add_space(4.0);
-                if ui.add(primary("Star on GitHub")).on_hover_text(support::REPOSITORY).clicked() && !self.open_page(support::REPOSITORY) {
-                    said = Some(format!("The page could not be opened. It is at {}", support::REPOSITORY));
+                if ui.add(primary(tr!(StarButton))).on_hover_text(support::REPOSITORY).clicked() && !self.open_page(support::REPOSITORY) {
+                    said = Some(tr!(PageNotOpened, address = support::REPOSITORY));
                 }
                 if !support::takes_donations() {
                     return;
                 }
-                views::settings::heading(ui, "Donate");
-                ui.label(dim("Donations go to the maker, Fluxen, and are never asked for. The app works the same without one.").small());
+                views::settings::heading(ui, tr!(Donate));
+                ui.label(dim(tr!(DonateWhy)).small());
                 if !support::PAYPAL.is_empty() {
                     ui.add_space(4.0);
-                    if ui.button("Donate with PayPal").on_hover_text(support::PAYPAL).clicked() && !self.open_page(support::PAYPAL) {
-                        said = Some(format!("The page could not be opened. It is at {}", support::PAYPAL));
+                    if ui.button(tr!(DonatePaypal)).on_hover_text(support::PAYPAL).clicked() && !self.open_page(support::PAYPAL) {
+                        said = Some(tr!(PageNotOpened, address = support::PAYPAL));
                     }
                 }
                 for wallet in support::WALLETS {
                     ui.add_space(6.0);
-                    ui.label(RichText::new(wallet.coin).strong());
+                    let coin = coin_words(wallet.coin);
+                    ui.label(RichText::new(&coin).strong());
                     ui.horizontal(|ui| {
-                        if ui.button("Copy").on_hover_text("Copy this address").clicked() {
+                        if ui.button(tr!(Copy)).on_hover_text(tr!(CopyAddress)).clicked() {
                             self.copy(ui.ctx(), wallet.address);
-                            said = Some(format!("The {} address is copied.", wallet.coin));
+                            said = Some(tr!(AddressCopied, coin));
                         }
                         ui.add(egui::Label::new(RichText::new(wallet.address).monospace().size(theme::SMALL)).wrap_mode(egui::TextWrapMode::Wrap));
                     });
                 }
                 if !support::WALLETS.is_empty() {
                     ui.add_space(6.0);
-                    ui.label(dim("Send only the currency named, on the network named: anything else sent to an address is lost.").small());
+                    ui.label(dim(tr!(SendOnly)).small());
                 }
             });
             ui.add_space(10.0);
-            ui.vertical_centered(|ui| ui.add(primary("Close")).clicked()).inner
+            ui.vertical_centered(|ui| ui.add(primary(tr!(Close))).clicked()).inner
         });
         if let Some(said) = said {
             self.banner = Some(Banner::new(Tone::Plain, said));
@@ -208,36 +139,59 @@ impl App {
         let kept = self.data_dir.display().to_string();
         let catalog = self.catalog.clone();
         let current = self.loadout.effects_for().clone();
+        let offered = self.offered_languages();
+        let mut language = None;
+        let mut pool = None;
+        let to_pool = std::mem::take(&mut self.to_pool);
         let shown = egui::Modal::new(egui::Id::unique("settings")).frame(sheet()).show(ctx, |ui| {
             ui.set_width(560.0);
-            ui.label(theme::title("Settings", 22.0));
+            ui.label(theme::title(tr!(SettingsTitle), 22.0));
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
-                views::settings::heading(ui, "Effects of events and emblems");
-                ui.label(dim("Which heroes get them:"));
-                effects_for = views::settings::effects_for(ui, catalog.as_deref(), &current);
-                ui.label(dim(views::settings::EFFECTS_FOR_NOTE).small());
+                views::settings::heading(ui, tr!(Language));
+                language = views::settings::language(ui, &offered);
+                ui.label(dim(tr!(LanguageNote)).small());
 
-                views::settings::heading(ui, "Play");
-                ui.checkbox(&mut low_end, RichText::new("Low-end PC mode (experimental)").strong());
-                ui.label(dim(LOW_END_HINT).small());
-
-                views::settings::heading(ui, "Updates");
-                ui.add_enabled(looks, egui::Checkbox::new(&mut auto_update, RichText::new("Update automatically").strong()));
-                ui.label(dim(if looks { AUTO_UPDATE_NOTE } else { "Automatic updates are not set up yet. Get a newer version the same way you got this one." }).small());
-
-                views::settings::heading(ui, "Dota 2 and your files");
-                if let Some(dota) = &dota {
-                    ui.label(dim(format!("Dota 2 is in {dota}")).small());
+                if to_pool {
+                    ui.scroll_to_cursor(Some(egui::Align::TOP));
                 }
-                ui.label(dim(format!("Your picks, these settings and the copies of the two game files this app edits are kept in {kept}")).small());
+                views::settings::heading(ui, tr!(PoolHeading));
+                ui.label(dim(tr!(PoolNote)));
+                ui.add_space(4.0);
+                pool = views::settings::hero_pool(ui, catalog.as_deref(), &mut self.pictures, &self.settings.draft_heroes, &mut self.pool);
 
-                views::settings::heading(ui, "About");
-                ui.label(dim(format!("{TITLE}, version {VERSION}. Copyright (C) 2026 Fluxen. Free software under the GNU General Public License, version 3 or later. Not made or approved by Valve.")).small());
+                views::settings::heading(ui, tr!(EffectsHeading));
+                ui.label(dim(tr!(WhichHeroes)));
+                effects_for = views::settings::effects_for(ui, catalog.as_deref(), &current);
+                ui.label(dim(tr!(EffectsForNote)).small());
+
+                views::settings::heading(ui, tr!(PlayHeading));
+                ui.checkbox(&mut low_end, RichText::new(tr!(LowEnd)).strong());
+                ui.label(dim(tr!(LowEndHint)).small());
+
+                views::settings::heading(ui, tr!(UpdatesHeading));
+                ui.add_enabled(looks, egui::Checkbox::new(&mut auto_update, RichText::new(tr!(AutoUpdate)).strong()));
+                ui.label(dim(if looks { tr!(AutoUpdateNote) } else { tr!(NoAutoUpdate) }).small());
+
+                views::settings::heading(ui, tr!(FilesHeading));
+                if let Some(dota) = &dota {
+                    ui.label(dim(tr!(DotaIn, folder = dota)).small());
+                }
+                ui.label(dim(tr!(KeptIn, folder = kept)).small());
+
+                views::settings::heading(ui, tr!(About));
+                ui.label(dim(tr!(AboutText, app = TITLE, version = VERSION)).small());
             });
             ui.add_space(10.0);
-            ui.vertical_centered(|ui| ui.add(primary("Close")).clicked()).inner
+            ui.vertical_centered(|ui| ui.add(primary(tr!(Close))).clicked()).inner
         });
+        if let Some(language) = language {
+            self.use_language(ctx, language);
+        }
+        if let Some(pool) = pool {
+            self.settings.draft_heroes = pool;
+            self.save_settings();
+        }
         if let Some(effects_for) = effects_for {
             self.loadout.set_effects_for(effects_for);
             self.saved.set_effects_for(self.loadout.effects_for().clone());
@@ -254,8 +208,12 @@ impl App {
                 self.update(ctx);
             }
         }
-        if shown.inner || shown.should_close() {
+        let escaped = self.pool.choosing.is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        if escaped {
+            self.pool.close();
+        } else if shown.inner || shown.should_close() {
             self.settings_open = false;
+            self.pool = Default::default();
         }
     }
 
@@ -264,15 +222,15 @@ impl App {
         let room = (ctx.content_rect().height() - 220.0).max(140.0);
         let shown = egui::Modal::new(egui::Id::unique("whats new")).frame(sheet()).show(ctx, |ui| {
             ui.set_width(500.0);
-            ui.label(theme::title(format!("Updated to version {VERSION}"), 22.0));
+            ui.label(theme::title(tr!(UpdatedTo, version = VERSION), 22.0));
             ui.add_space(4.0);
-            ui.label(dim("Here is what is new. Your picks and settings are as they were."));
+            ui.label(dim(tr!(WhatsNew)));
             ui.add_space(10.0);
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
                 for version in &news {
                     if news.len() > 1 {
-                        ui.label(RichText::new(format!("Version {}", version.number)).strong().color(theme::accent_text()));
+                        ui.label(RichText::new(tr!(VersionNumber, version = version.number)).strong().color(theme::accent_text()));
                         ui.add_space(4.0);
                     }
                     for change in &version.changes {
@@ -286,7 +244,7 @@ impl App {
                 }
             });
             ui.add_space(6.0);
-            ui.vertical_centered(|ui| ui.add(primary("Got it")).clicked()).inner
+            ui.vertical_centered(|ui| ui.add(primary(tr!(GotIt))).clicked()).inner
         });
         if shown.inner || shown.should_close() {
             self.whats_new = None;
@@ -306,9 +264,9 @@ impl App {
         let (mut use_them, mut keep) = (false, false);
         let shown = egui::Modal::new(egui::Id::unique("share")).frame(sheet()).show(ctx, |ui| {
             ui.set_width(520.0);
-            ui.label(theme::title("Use a share code", 22.0));
+            ui.label(theme::title(tr!(UseCodeTitle), 22.0));
             ui.add_space(4.0);
-            ui.label(dim(format!("Paste a code that someone shared with you. It starts with {}", share::PREFIX)));
+            ui.label(dim(tr!(PasteCode, prefix = share::PREFIX)));
             ui.add_space(8.0);
             let hint = format!("{}…", share::PREFIX);
             let typed = ui.add(egui::TextEdit::multiline(&mut self.share_text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY));
@@ -318,7 +276,7 @@ impl App {
             ui.add_space(8.0);
             match (&read, &taken) {
                 (Some(Err(why)), _) => {
-                    ui.label(RichText::new(why.to_string()).color(theme::warn()));
+                    ui.label(RichText::new(lang::words::not_a_code(*why)).color(theme::warn()));
                 }
                 (_, Some((name, picks, left_out))) => {
                     if let Some(name) = name {
@@ -327,22 +285,22 @@ impl App {
                     ui.label(code_in_words(picks, *left_out, |hero| catalog.hero(hero).map(|hero| hero.name.clone())));
                     if !picks.is_empty() {
                         ui.add_space(8.0);
-                        use_them = ui.add(primary("Use these picks")).on_hover_text("Pick what the code has. Your other picks stay. You can undo it.").clicked();
+                        use_them = ui.add(primary(tr!(UseThese))).on_hover_text(tr!(UseTheseHint)).clicked();
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            let hint = name.clone().unwrap_or_else(|| "Name for a new preset".to_string());
+                            let hint = name.clone().unwrap_or_else(|| tr!(PresetNameHint).to_string());
                             let typed = ui.add(egui::TextEdit::singleline(&mut self.share_name).hint_text(hint).char_limit(LONGEST_NAME).desired_width(220.0));
                             let entered = typed.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
                             let named = !self.share_name.trim().is_empty() || name.is_some();
-                            let button = ui.add_enabled(named, egui::Button::new("Save as preset"));
-                            keep = named && (entered || button.on_hover_text("Keep the code's picks as a preset, without picking them now").clicked());
+                            let button = ui.add_enabled(named, egui::Button::new(tr!(SaveAsPreset)));
+                            keep = named && (entered || button.on_hover_text(tr!(KeepCodeHint)).clicked());
                         });
                     }
                 }
                 _ => {}
             }
             ui.add_space(10.0);
-            ui.vertical_centered(|ui| ui.add(primary("Close")).clicked()).inner
+            ui.vertical_centered(|ui| ui.add(primary(tr!(Close))).clicked()).inner
         });
         if let Some((name, picks, left_out)) = taken.filter(|_| use_them || keep) {
             if use_them {
@@ -362,15 +320,15 @@ impl App {
     pub(super) fn tour(&mut self, ctx: &egui::Context) {
         let shown = egui::Modal::new(egui::Id::unique("tour")).frame(sheet()).show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.label(theme::title("How it works", 22.0));
+            ui.label(theme::title(tr!(HowItWorks), 22.0));
             ui.add_space(8.0);
             for (heading, sentence) in TOUR {
-                ui.label(RichText::new(heading).strong().color(theme::accent_text()));
-                ui.label(sentence);
+                ui.label(RichText::new(lang::t(heading)).strong().color(theme::accent_text()));
+                ui.label(lang::t(sentence));
                 ui.add_space(8.0);
             }
             ui.add_space(4.0);
-            ui.vertical_centered(|ui| ui.add(primary("Got it")).clicked()).inner
+            ui.vertical_centered(|ui| ui.add(primary(tr!(GotIt))).clicked()).inner
         });
         if shown.inner || shown.should_close() {
             self.settings.tour_seen = true;
@@ -382,19 +340,29 @@ impl App {
         let mut accepted = false;
         egui::Modal::new(egui::Id::unique("notice")).frame(sheet()).show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.label(theme::title("Before you start", 22.0));
+            ui.label(theme::title(tr!(BeforeYouStart), 22.0));
             ui.add_space(8.0);
             for paragraph in NOTICE {
-                ui.label(paragraph);
+                ui.label(lang::t(paragraph));
                 ui.add_space(6.0);
             }
             ui.add_space(6.0);
-            ui.vertical_centered(|ui| accepted = ui.add(primary("I understand")).clicked());
+            ui.vertical_centered(|ui| accepted = ui.add(primary(tr!(IUnderstand))).clicked());
         });
         if accepted {
             self.settings.notice_accepted = true;
             self.save_settings();
         }
+    }
+}
+
+fn coin_words(coin: &str) -> String {
+    if coin.starts_with("Solana") {
+        tr!(WalletSolana).to_string()
+    } else if coin.starts_with("Ethereum") {
+        tr!(WalletEthereum).to_string()
+    } else {
+        coin.to_string()
     }
 }
 
@@ -417,25 +385,25 @@ fn code_in_words(picks: &[Pick], left_out: usize, name_of: impl Fn(&str) -> Opti
     let named: Vec<String> = owners
         .iter()
         .map(|(owner, count)| {
-            let who = owner.map_or_else(|| "the world".to_string(), |hero| name_of(hero).unwrap_or_else(|| dme_core::items::hero_short_name(hero).to_string()));
-            format!("{who} ({count})")
+            let who = owner.map_or_else(|| tr!(CodeWorld).to_string(), |hero| name_of(hero).unwrap_or_else(|| dme_core::items::hero_short_name(hero).to_string()));
+            tr!(CodeOwner, who, count)
         })
         .collect();
     let whose = match named.as_slice() {
         [] => String::new(),
         [one] => one.clone(),
-        [first @ .., last] => format!("{} and {last}", first.join(", ")),
+        [first @ .., last] => tr!(CodeAnd, first = first.join(", "), last),
     };
     let has = match picks.len() {
-        0 if left_out > 0 => "Nothing in this code is in your game.".to_string(),
-        0 => "This code has no picks.".to_string(),
-        count => format!("It has {}: {whose}.", picks_in_words(count)),
+        0 if left_out > 0 => tr!(CodeNothingInGame).to_string(),
+        0 => tr!(CodeNoPicks).to_string(),
+        count => tr!(CodeHas, count, whose),
     };
     match left_out {
         0 => has,
         _ if picks.is_empty() => has,
-        1 => format!("{has} One more item in it is not in your game, and is left out."),
-        many => format!("{has} {many} more items in it are not in your game, and are left out."),
+        1 => tr!(CodeOneLeftOut, has),
+        many => tr!(CodeLeftOut, has, count = many),
     }
 }
 

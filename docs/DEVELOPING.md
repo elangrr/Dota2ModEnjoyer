@@ -26,8 +26,9 @@ Both files say their name, maker and version to Windows, and the app's file wear
 `assets/logo.svg` is the one drawing of the logo. The app draws its window icon and the mark in
 its side bar from the same numbers (`crates/dme-app/src/logo.rs`), and a test compares the two.
 
-The app's font is Inter, in `assets/fonts` with its license (SIL Open Font License 1.1). The
-colours of its two looks are in `crates/dme-app/src/theme.rs`, and nowhere else: a test there
+The app's font is Inter, in `assets/fonts` with its license (SIL Open Font License 1.1). It has
+every letter of English, Russian, Spanish and Portuguese; Chinese characters come from a font of
+Windows' own (see "Adding a language"). The colours of its two looks are in `crates/dme-app/src/theme.rs`, and nowhere else: a test there
 holds them to a readable contrast.
 
 ## The code
@@ -79,6 +80,30 @@ see-through, as on a computer that cannot; the app should start again, plain. `D
 has a test window hold its data folder like a player's, so that a second one started meanwhile
 closes. The app has no `--help`: an option it does not know is left alone, and without
 `--screenshot` the window opens on your screen with your own picks.
+
+## Adding a language
+
+Every text of the window is in `crates/dme-app/src/lang/` ([SPEC.md](SPEC.md), section 3.28).
+`en.rs` has each text's key and English words; each other language is one file with the same
+keys. To add one:
+
+1. Copy `ru.rs` to `<code>.rs`, as `zh.rs`, `es.rs` or `pt.rs`.
+2. At its top, set `code` (what the settings keep), `name` (the language in itself, as the
+   chooser shows it), `windows` (the names Windows gives it: `es` stands for every `es-...`,
+   `zh-CN` for itself alone), `game` (the end of the game's file names: `schinese`, `spanish`,
+   `latam`, `brazilian`), `forms` and `plural` (`one_and_more`, `slavic` or `one_form`), `decimal`
+   and `letters` (`Letters::Han` for Chinese characters).
+3. Put its code on a line of its own in `languages! { ... }` in `lang/mod.rs`.
+4. Translate every text after its `=>`. Keep every `{place}`; a `{count|...|...}` has as many
+   forms as `forms` says. Look up the game's own words in its files of that language
+   (`dme dev find localization/`, then `dme dev extract`), as for ranks and slots.
+5. `cargo test -p dme-app lang` names every text that is missing or there twice, and every place
+   that was lost or made up. `cargo clippy --workspace --all-targets` and `cargo test --workspace`
+   have to pass.
+6. Look at every page in it: give a scratch data folder a `settings.json` with
+   `"language":"<code>"` (and `"notice_accepted":true,"tour_seen":true,"seen_version":"<version>"`),
+   and take pictures with `--data-dir <that folder> --open <page> --screenshot out.png`, at
+   `--size 1280x820` and at the smallest, `--size 760x560`, by night and with `"theme":"day"`.
 
 ## The draft helper's numbers
 

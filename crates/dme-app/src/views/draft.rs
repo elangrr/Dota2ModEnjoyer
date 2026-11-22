@@ -1,36 +1,28 @@
 use std::collections::BTreeSet;
 
 use dme_core::catalog::{Catalog, Hero};
-use dme_core::draft::{Numbers, Rank, Role, Style, Suggestion};
+use dme_core::draft::{Numbers, Rank, Role, Style, Suggestion, Trend, Way};
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{self, Align, Align2, Color32, CornerRadius, CursorIcon, FontId, Layout, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use super::tiles::{self, Look, Tile};
 use super::{dim, heroes, title_bar};
+use crate::lang::{self, T, number, signed, words};
 use crate::pictures::Pictures;
 use crate::theme;
 use crate::worker::Failure;
 
 pub const SOURCE_PAGE: &str = "https://stratz.com";
 
-const NOTE: &str = "Put the heroes in as they are picked: click a place, type a few letters of the name and press Enter. \
-     The places are in the order of a ranked draft: each team picks two heroes, then two more, then its last. \
-     The first two are taken to be the supports, the next two the carry and the offlaner, and the last the mid. Each place shows its role as a small drawing in its corner. Where a role is not right, click the drawing and choose another. \
-     The list is for the place that is lit: it shows which heroes of that role win more often there, against the other team and beside their own, in matches of your rank. \
-     A click on a hero in the list puts it in that place and goes on to the next, the same as typing its name. Its cross hides a hero that is banned, or that you do not play. \
-     \"My role\" marks your own place with \"You\". \
-     The switch at the top says what the list is for. Team composition weighs a hero against the whole enemy team and beside your whole team, by the matches it wins. \
-     Lane winning weighs it by the lanes it wins, against the enemies of its lane alone: the mids meet each other, the carry and the hard support meet the offlaner and the soft support. \
-     For a carry or an offlaner the enemy's support in the lane counts half, the enemy's core in full. The hero it shares its lane with counts half, and a lane that ends even counts as half won. \
-     Once both teams are full, the page says which draft is better, at the top right, by the whole match, and \"Go to build\" under the teams opens the build of your own hero. \
-     The app does not see your game: nothing is read from Dota.";
-
 const SEATS: usize = 5;
 const PHASES: [&[usize]; 3] = [&[0, 1], &[2, 3], &[4]];
-const PHASE_NAMES: [&str; 3] = ["First picks", "Second picks", "Last pick"];
+const PHASE_NAMES: [T; 3] = [T::FirstPicks, T::SecondPicks, T::LastPick];
 const ROLES_BY_PLACE: [Role; SEATS] = [Role::SoftSupport, Role::HardSupport, Role::Carry, Role::Offlane, Role::Mid];
 pub(super) const ROLES_WIDE: f32 = 172.0;
 pub(super) const RANKS_WIDE: f32 = 172.0;
+const BOX_LEAST: f32 = 124.0;
+const NOMINEES: usize = 3;
+const SUGGESTED: usize = 3;
 const LINE_HIGH: f32 = 30.0;
 const EVEN_WITHIN: f32 = 1.0;
 pub(super) const LOOK: Look = Look { picture: vec2(132.0, 78.0), name_lines: 1, note: false, name_over: true };
@@ -52,7 +44,8 @@ pub struct Draft {
     enemy_roles: [Role; SEATS],
     seat: Seat,
     pub search: String,
-    hidden: BTreeSet<String>,
+    banned: BTreeSet<String>,
+    by_hand: bool,
 }
 
 impl Default for Draft {
@@ -64,7 +57,8 @@ impl Default for Draft {
             enemy_roles: ROLES_BY_PLACE,
             seat: Seat { enemy: true, place: 0 },
             search: String::new(),
-            hidden: BTreeSet::new(),
+            banned: BTreeSet::new(),
+            by_hand: false,
         }
     }
 }
@@ -99,6 +93,13 @@ impl Draft {
         Some(Seat { enemy: false, place })
     }
 
+    fn list_seat(&self, role: Option<Role>) -> Seat {
+        match self.own_seat(role) {
+            Some(own) if self.nothing_picked() && !self.by_hand => own,
+            _ => self.seat,
+        }
+    }
+
     pub fn own_hero(&self, role: Option<Role>) -> Option<(&str, Role)> {
         Some((self.at(self.own_seat(role)?)?, role?))
     }
@@ -125,7 +126,17 @@ impl Draft {
     }
 
     fn is_empty(&self) -> bool {
-        self.team.iter().chain(&self.enemies).all(Option::is_none) && self.hidden.is_empty() && self.team_roles == ROLES_BY_PLACE && self.enemy_roles == ROLES_BY_PLACE
+        self.nothing_picked() && self.banned.is_empty() && self.team_roles == ROLES_BY_PLACE && self.enemy_roles == ROLES_BY_PLACE
+    }
+
+    fn nothing_picked(&self) -> bool {
+        self.team.iter().chain(&self.enemies).all(Option::is_none)
+    }
+
+    fn ban(&mut self, hero: &str) {
+        self.unseat(hero);
+        self.banned.insert(hero.to_string());
+        self.search.clear();
     }
 
     fn unseat(&mut self, hero: &str) {
@@ -150,21 +161,30 @@ impl Draft {
 
     fn seat_hero(&mut self, hero: &str) {
         self.unseat(hero);
-        self.hidden.remove(hero);
+        self.banned.remove(hero);
         let seat = self.seat;
         self.side_mut(seat.enemy)[seat.place] = Some(hero.to_string());
         self.seat = self.next_free(seat);
         self.search.clear();
     }
 
-    fn around_the_seat(&self) -> (Vec<&str>, Vec<&str>) {
-        let own = self.at(self.seat);
-        let beside = self.heroes(self.seat.enemy).into_iter().filter(|hero| Some(*hero) != own).collect();
-        (beside, self.heroes(!self.seat.enemy))
+    fn seat_hero_at(&mut self, seat: Seat, hero: &str) {
+        let lit = self.seat;
+        self.seat = seat;
+        self.seat_hero(hero);
+        if seat != lit && self.at(lit).is_none() {
+            self.seat = lit;
+        }
     }
 
-    fn in_the_lane(&self) -> (Vec<&str>, Vec<(&str, Role)>) {
-        let (seat, role) = (self.seat, self.role(self.seat));
+    fn around(&self, seat: Seat) -> (Vec<&str>, Vec<&str>) {
+        let own = self.at(seat);
+        let beside = self.heroes(seat.enemy).into_iter().filter(|hero| Some(*hero) != own).collect();
+        (beside, self.heroes(!seat.enemy))
+    }
+
+    fn in_the_lane_of(&self, seat: Seat) -> (Vec<&str>, Vec<(&str, Role)>) {
+        let role = self.role(seat);
         let partner = self.seated(seat.enemy).into_iter().filter(|(_, other)| Some(*other) == role.lane_partner()).map(|(hero, _)| hero).collect();
         let opponents = self.seated(!seat.enemy).into_iter().filter(|(_, other)| role.lane_opponents().contains(other)).collect();
         (partner, opponents)
@@ -194,6 +214,8 @@ pub struct View<'a> {
     pub rank: Rank,
     pub role: Option<Role>,
     pub style: Style,
+    pub mine: &'a [String],
+    pub all_heroes: bool,
     pub now: u64,
 }
 
@@ -206,15 +228,21 @@ pub struct Answer {
     pub copy_details: bool,
     pub open_source: bool,
     pub to_build: Option<(String, Role)>,
+    pub all_heroes: Option<bool>,
+    pub suggest: Option<String>,
+    pub open_pool: bool,
 }
 
 pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
-    let View { catalog, pictures, draft, numbers, fetching, failure, rank, role, style, now } = view;
+    let View { catalog, pictures, draft, numbers, fetching, failure, rank, role, style, mine, all_heroes, now } = view;
+    let choices = Choices { rank, role, style, mine, all_heroes, now };
     let mut answer = Answer::default();
+    let own = numbers.map(|numbers| own_picks(catalog, draft, numbers, &choices)).unwrap_or_default();
+    let nominees = numbers.map(|numbers| nominate(catalog, draft, numbers, &choices, &own)).unwrap_or_default();
     let mut start_over = false;
     let any = !draft.is_empty();
-    title_bar(ui, "Draft", Some(NOTE), Some((&mut draft.search, "Type a hero's name")), |ui| {
-        start_over = ui.add_enabled(any, egui::Button::new("New draft")).on_hover_text("Take every hero off, for the next match").clicked();
+    title_bar(ui, tr!(DraftTitle), Some(tr!(DraftNote)), Some((&mut draft.search, tr!(HeroNameHint))), |ui| {
+        start_over = ui.add_enabled(any, egui::Button::new(tr!(NewDraft))).on_hover_text(tr!(NewDraftHint)).clicked();
         ui.add_space(4.0);
         answer.style = style_switch(ui, style);
     });
@@ -223,9 +251,11 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
     }
 
     let chance = numbers.filter(|_| draft.is_full()).map(|numbers| numbers.chance(rank, &draft.seated(false), &draft.seated(true)));
-    choices(ui, pictures, rank, role, chance, &mut answer);
+    self::choices(ui, pictures, &choices, chance, &mut answer);
     seats(ui, catalog, pictures, draft, role);
-    ui.add_space(8.0);
+    ui.add_space(6.0);
+    bans(ui, catalog, pictures, draft, &nominees, role);
+    ui.add_space(6.0);
     if draft.is_full() {
         let own = draft.own_hero(role);
         let name = own.map(|(id, _)| catalog.any_hero(id).map_or(id, |hero| hero.name.as_str()));
@@ -239,7 +269,7 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
     if !wanted.is_empty() {
         fitting(ui, catalog, pictures, draft, &wanted);
     } else if let Some(numbers) = numbers.filter(|numbers| style == Style::Team || numbers.has_lanes()) {
-        suggestions(ui, catalog, pictures, draft, numbers, Choices { rank, role, style, now }, &mut answer);
+        suggestions(ui, catalog, pictures, draft, numbers, &choices, &mut answer);
     } else if numbers.is_some() {
         match lanes_waiting(ui, fetching, failure) {
             Some(Asked::Again) => answer.try_again = true,
@@ -247,7 +277,7 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
             None => {}
         }
     } else {
-        match waiting(ui, fetching, failure, "numbers", "You can still put the heroes in.") {
+        match waiting(ui, fetching, failure, Fetched::Numbers, tr!(StillPutIn)) {
             Some(Asked::Again) => answer.try_again = true,
             Some(Asked::CopyDetails) => answer.copy_details = true,
             None => {}
@@ -256,83 +286,89 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
     answer
 }
 
-struct Choices {
+struct Choices<'a> {
     rank: Rank,
     role: Option<Role>,
     style: Style,
+    mine: &'a [String],
+    all_heroes: bool,
     now: u64,
 }
 
 fn style_switch(ui: &mut Ui, style: Style) -> Option<Style> {
-    const HIGH: f32 = 30.0;
     let short = ui.available_width() < 640.0;
-    let font = FontId::proportional(theme::SMALL + 0.5);
     let words = Style::ALL.map(|each| match (each, short) {
-        (Style::Team, true) => "Team",
-        (Style::Lane, true) => "Lane",
-        (each, false) => each.name(),
+        (Style::Team, true) => tr!(TeamShort),
+        (Style::Lane, true) => tr!(LaneShort),
+        (each, false) => words::style(each),
     });
-    let halves = words.map(|words| ui.painter().layout_no_wrap(words.to_string(), font.clone(), theme::text()).size().x + 24.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(halves.iter().sum::<f32>() + 4.0, HIGH), Sense::hover());
+    let hints = [tr!(StyleTeamHint), tr!(StyleLaneHint)];
+    let on = Style::ALL.iter().position(|each| *each == style).unwrap_or(0);
+    halves(ui, "draft style", 30.0, words, hints, on).map(|index| Style::ALL[index])
+}
+
+fn halves(ui: &mut Ui, salt: &str, high: f32, words: [&str; 2], hints: [&str; 2], on: usize) -> Option<usize> {
+    let font = FontId::proportional(theme::SMALL + 0.5);
+    let wide = words.map(|words| ui.painter().layout_no_wrap(words.to_string(), font.clone(), theme::text()).size().x + 24.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(wide.iter().sum::<f32>() + 4.0, high), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let round = CornerRadius::same(theme::ROUND);
+        ui.painter().rect_filled(rect, round, theme::card());
+        ui.painter().rect_stroke(rect, round, Stroke::new(1.0, theme::line()), StrokeKind::Inside);
+    }
     let mut asked = None;
     let mut left = rect.left() + 2.0;
-    for (index, each) in Style::ALL.into_iter().enumerate() {
-        let half = Rect::from_min_size(pos2(left, rect.top() + 2.0), vec2(halves[index], HIGH - 4.0));
-        left += halves[index];
-        let response = ui.interact(half, egui::Id::unique("draft style").with(index), Sense::click());
-        let on = each == style;
-        if index == 0 && ui.is_rect_visible(rect) {
-            let round = CornerRadius::same(theme::ROUND);
-            ui.painter().rect_filled(rect, round, theme::card());
-            ui.painter().rect_stroke(rect, round, Stroke::new(1.0, theme::line()), StrokeKind::Inside);
-        }
-        if on {
+    for index in 0..2 {
+        let half = Rect::from_min_size(pos2(left, rect.top() + 2.0), vec2(wide[index], high - 4.0));
+        left += wide[index];
+        let response = ui.interact(half, egui::Id::unique(salt).with(index), Sense::click());
+        let chosen = index == on;
+        if chosen {
             ui.painter().rect_filled(half, CornerRadius::same(7), theme::accent().gamma_multiply(if theme::is_day() { 0.18 } else { 0.26 }));
         } else if response.hovered() {
             ui.painter().rect_filled(half, CornerRadius::same(7), theme::text().gamma_multiply(0.08));
         }
-        let ink = if on { theme::accent_text() } else { theme::text() };
+        let ink = if chosen { theme::accent_text() } else { theme::text() };
         ui.painter().text(half.center(), Align2::CENTER_CENTER, words[index], font.clone(), ink);
-        let hint = match each {
-            Style::Team => "Team composition: heroes that win more matches against the whole enemy team and beside your whole team",
-            Style::Lane => "Lane winning: heroes that win their lane more often against the enemies in it, and beside the hero they share it with",
-        };
-        if response.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(hint).clicked() && !on {
-            asked = Some(each);
+        if response.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(hints[index]).clicked() && !chosen {
+            asked = Some(index);
         }
     }
     asked
 }
 
 fn lanes_waiting(ui: &mut Ui, fetching: bool, failure: Option<&Failure>) -> Option<Asked> {
-    let what = "numbers of lanes";
     if fetching || failure.is_some() {
-        return waiting(ui, fetching, failure, what, "Until they are here, choose Team composition at the top.");
+        return waiting(ui, fetching, failure, Fetched::Lanes, tr!(LanesStill));
     }
     let mut asked = None;
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() * 0.2).min(60.0));
-        ui.label(theme::title("The numbers of lanes are not here yet", 18.0));
+        ui.label(theme::title(tr!(LanesNotYet), 18.0));
         ui.add_space(2.0);
-        ui.label(dim("They are made once a week and come with the next numbers. Until then, choose Team composition at the top."));
+        ui.label(dim(tr!(LanesWhen)));
         ui.add_space(8.0);
-        if ui.button("Fetch again").clicked() {
+        if ui.button(tr!(FetchAgain)).clicked() {
             asked = Some(Asked::Again);
         }
     });
     asked
 }
 
-fn choices(ui: &mut Ui, pictures: &mut Pictures, rank: Rank, role: Option<Role>, chance: Option<f32>, answer: &mut Answer) {
+fn choices(ui: &mut Ui, pictures: &mut Pictures, choices: &Choices, chance: Option<f32>, answer: &mut Answer) {
+    let (rank, role) = (choices.rank, choices.role);
     let label = |ui: &mut Ui, words: &str| {
         let words = ui.painter().layout_no_wrap(words.to_string(), FontId::proportional(theme::SMALL), theme::text_dim());
         let (rect, _) = ui.allocate_exact_size(vec2(words.size().x, LINE_HIGH), Sense::hover());
         ui.painter().galley(pos2(rect.left(), rect.center().y - words.size().y / 2.0), words, theme::text_dim());
     };
+    let wide_of = |ui: &Ui, words: &str| ui.painter().layout_no_wrap(words.to_string(), FontId::proportional(theme::SMALL), theme::text_dim()).size().x;
+    let taken = wide_of(ui, tr!(MyRank)) + wide_of(ui, tr!(MyRole)) + 3.0 * 8.0 + 10.0 + if chance.is_some() { 120.0 } else { 0.0 };
+    let box_wide = ((ui.available_width() - taken) / 2.0).floor().clamp(BOX_LEAST, RANKS_WIDE);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        label(ui, "My rank");
-        let open = list_box(ui, pictures, &Line::of_rank(rank), RANKS_WIDE);
+        label(ui, tr!(MyRank));
+        let open = list_box(ui, pictures, &Line::of_rank(rank), box_wide);
         egui::Popup::menu(&open).show(|ui| {
             ui.set_width(RANKS_WIDE);
             ui.spacing_mut().item_spacing.y = 2.0;
@@ -343,8 +379,8 @@ fn choices(ui: &mut Ui, pictures: &mut Pictures, rank: Rank, role: Option<Role>,
             }
         });
         ui.add_space(10.0);
-        label(ui, "My role");
-        let open = list_box(ui, pictures, &Line::of_any_role(role), ROLES_WIDE);
+        label(ui, tr!(MyRole));
+        let open = list_box(ui, pictures, &Line::of_any_role(role), box_wide);
         egui::Popup::menu(&open).show(|ui| {
             ui.set_width(ROLES_WIDE);
             ui.spacing_mut().item_spacing.y = 2.0;
@@ -370,15 +406,15 @@ pub(super) struct Line {
 
 impl Line {
     pub(super) fn of_role(role: Role) -> Line {
-        Line { drawings: vec![role_logo(role)], room: 1, plain: true, name: role.name() }
+        Line { drawings: vec![role_logo(role)], room: 1, plain: true, name: words::role(role) }
     }
 
     fn of_any_role(role: Option<Role>) -> Line {
-        role.map_or(Line { drawings: Vec::new(), room: 1, plain: true, name: "Any role" }, Line::of_role)
+        role.map_or(Line { drawings: Vec::new(), room: 1, plain: true, name: tr!(AnyRole) }, Line::of_role)
     }
 
     pub(super) fn of_rank(rank: Rank) -> Line {
-        Line { drawings: vec![rank_medal(rank)], room: 1, plain: false, name: rank.name() }
+        Line { drawings: vec![rank_medal(rank)], room: 1, plain: false, name: words::rank(rank) }
     }
 
     fn paint(&self, painter: &egui::Painter, pictures: &mut Pictures, rect: Rect, ink: Color32) {
@@ -403,7 +439,8 @@ pub(super) fn list_box(ui: &mut Ui, pictures: &mut Pictures, line: &Line, wide: 
         let round = CornerRadius::same(theme::ROUND);
         painter.rect_filled(rect, round, theme::card().lerp_to_gamma(theme::card_hover(), lit));
         painter.rect_stroke(rect, round, Stroke::new(1.0, theme::line().lerp_to_gamma(theme::text_dim(), lit)), StrokeKind::Inside);
-        line.paint(painter, pictures, rect, theme::text());
+        let room = Rect::from_min_max(rect.min, pos2(rect.right() - 24.0, rect.max.y));
+        line.paint(&painter.with_clip_rect(room), pictures, rect, theme::text());
         let tip = pos2(rect.right() - 14.0, rect.center().y + 3.0);
         let arrow = vec![tip + vec2(-4.5, -5.5), tip + vec2(4.5, -5.5), tip];
         painter.add(egui::Shape::convex_polygon(arrow, theme::text_dim(), Stroke::NONE));
@@ -453,7 +490,7 @@ fn seats(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Dr
         ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
         for enemy in [false, true] {
             ui.vertical(|ui| {
-                ui.label(dim(if enemy { "The enemy" } else { "Your team" }).small());
+                ui.label(dim(if enemy { tr!(TheEnemy) } else { tr!(YourTeam) }).small());
                 ui.horizontal(|ui| {
                     for (phase, places) in PHASES.iter().enumerate() {
                         for &place in *places {
@@ -462,7 +499,7 @@ fn seats(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Dr
                                 ui.add_space(if place == places[0] { PHASE_GAP } else { GAP });
                             }
                             let hero = draft.at(seat).and_then(|id| catalog.any_hero(id));
-                            let look = SeatLook { size, filling: draft.seat == seat, yours: own == Some(seat), phase: PHASE_NAMES[phase], role: draft.role(seat) };
+                            let look = SeatLook { size, filling: draft.seat == seat, yours: own == Some(seat), phase: lang::t(PHASE_NAMES[phase]), role: draft.role(seat) };
                             let did = seat_button(ui, pictures, &look, hero, draft.at(seat));
                             if did.clicked {
                                 clicked = Some(seat);
@@ -484,6 +521,7 @@ fn seats(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Dr
             true => draft.empty(seat),
             false => draft.seat = seat,
         }
+        draft.by_hand = true;
     }
     if let Some((seat, other)) = asked {
         draft.set_role(seat, other);
@@ -543,7 +581,7 @@ fn seat_button(ui: &mut Ui, pictures: &mut Pictures, look: &SeatLook, hero: Opti
         role_drawing(painter, pictures, look.role, plate.shrink(if narrow { 2.0 } else { 3.5 }), ink);
 
         if look.yours && !narrow {
-            let words = painter.layout_no_wrap("You".to_string(), theme::heavy(10.0), Color32::WHITE);
+            let words = painter.layout_no_wrap(tr!(You).to_string(), theme::heavy(10.0), Color32::WHITE);
             let tag = Rect::from_min_size(rect.min + vec2(4.0, 4.0), words.size() + vec2(10.0, 4.0));
             painter.rect_filled(tag, CornerRadius::same(7), theme::accent());
             painter.galley(tag.min + vec2(5.0, 2.0), words, Color32::WHITE);
@@ -560,14 +598,14 @@ fn seat_button(ui: &mut Ui, pictures: &mut Pictures, look: &SeatLook, hero: Opti
             }
         }
     });
-    let whose = if look.yours { " This is your place." } else { "" };
-    badge.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("{}.{whose} Click to choose another role. The hero of this team that had it gets this one.", look.role.name()));
+    let whose = if look.yours { tr!(YourPlace) } else { "" };
+    badge.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("{}{whose}", tr!(RoleBadgeHint, role = words::role(look.role))));
 
     let name = hero.map_or(id.unwrap_or_default(), |hero| hero.name.as_str());
     let hint = match (taken, filling) {
-        (true, _) => format!("{name}. Click to take it off."),
-        (false, true) => format!("{}. The next hero you pick goes here.{whose}", look.phase),
-        (false, false) => format!("{}. Click to pick a hero for this place.{whose}", look.phase),
+        (true, _) => tr!(SeatTaken, hero = name),
+        (false, true) => format!("{}{whose}", tr!(SeatFilling, phase = look.phase)),
+        (false, false) => format!("{}{whose}", tr!(SeatFree, phase = look.phase)),
     };
     let clicked = response.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(hint).clicked();
     Did { clicked, role: chosen }
@@ -579,7 +617,8 @@ fn role_drawing(painter: &egui::Painter, pictures: &mut Pictures, role: Role, ro
             painter.image(texture, room, tiles::WHOLE, ink);
         }
         None => {
-            painter.text(room.center(), Align2::CENTER_CENTER, &role.name()[..1], theme::heavy(room.height() * 0.8), ink);
+            let first: String = words::role(role).chars().take(1).collect();
+            painter.text(room.center(), Align2::CENTER_CENTER, first, theme::heavy(room.height() * 0.8), ink);
         }
     }
 }
@@ -600,23 +639,26 @@ fn verdict(ui: &mut Ui, chance: f32) {
     let (words, color) = verdict_words(chance);
     let team = chance.round().clamp(1.0, 99.0);
     ui.add_space(14.0);
+    let (ours, theirs) = (tr!(BarYourTeam, share = format!("{team:.0}")), tr!(BarTheEnemy, share = format!("{:.0}", 100.0 - team)));
+    let width_of = |text: &str| ui.painter().layout_no_wrap(text.to_string(), theme::heavy(12.0), Color32::WHITE).size().x;
+    let named = (width_of(&ours) + width_of(&theirs) + 30.0).max(BAR.x);
     let room = ui.available_width();
-    let short = room < BAR.x;
-    let wide = if short { room.clamp(96.0, 130.0) } else { BAR.x };
+    let short = room < named;
+    let wide = if short { room.clamp(96.0, 130.0) } else { named };
+    let (ours, theirs) = match short {
+        true => (format!("{team:.0}%"), format!("{:.0}%", 100.0 - team)),
+        false => (ours, theirs),
+    };
     let (rect, bar) = ui.allocate_exact_size(vec2(wide, BAR.y), Sense::hover());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         let split = rect.left() + rect.width() * team / 100.0;
         painter.rect_filled(rect, CornerRadius::same(ROUND), theme::bad());
         painter.rect_filled(Rect::from_min_max(rect.min, pos2(split, rect.bottom())), CornerRadius { nw: ROUND, sw: ROUND, ne: 0, se: 0 }, theme::good());
-        let (ours, theirs) = match short {
-            true => (format!("{team:.0}%"), format!("{:.0}%", 100.0 - team)),
-            false => (format!("Your team {team:.0}%"), format!("The enemy {:.0}%", 100.0 - team)),
-        };
         painter.text(pos2(rect.left() + 9.0, rect.center().y), Align2::LEFT_CENTER, ours, theme::heavy(12.0), Color32::WHITE);
         painter.text(pos2(rect.right() - 9.0, rect.center().y), Align2::RIGHT_CENTER, theirs, theme::heavy(12.0), Color32::WHITE);
     }
-    bar.on_hover_text(format!("{words}, by the numbers of your rank: your team {team:.0}%, the enemy {:.0}%. How the match is played decides it.", 100.0 - team));
+    bar.on_hover_text(tr!(VerdictHint, verdict = words, ours = format!("{team:.0}"), theirs = format!("{:.0}", 100.0 - team)));
     let said = ui.painter().layout_no_wrap(words.to_string(), theme::heavy(13.0), color);
     if said.size().x + 10.0 <= ui.available_width() {
         ui.add_space(2.0);
@@ -628,14 +670,14 @@ fn verdict(ui: &mut Ui, chance: f32) {
 fn to_build(ui: &mut Ui, own: Option<&str>) -> bool {
     let mut go = false;
     ui.horizontal(|ui| {
-        let words = own.map_or_else(|| "Go to build".to_string(), |name| format!("Go to build  ·  {name}"));
+        let words = own.map_or_else(|| tr!(GoToBuild).to_string(), |name| tr!(GoToBuildOf, hero = name));
         let button = egui::Button::new(theme::title(words, 17.0).color(Color32::WHITE)).fill(theme::accent()).min_size(vec2(230.0, 44.0));
         let asked = ui.add_enabled(own.is_some(), button);
         match own {
-            Some(name) => go = asked.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("What the players of {name} buy and skill, in your role and your rank.")).clicked(),
+            Some(name) => go = asked.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tr!(GoToBuildHint, hero = name)).clicked(),
             None => {
                 ui.add_space(4.0);
-                ui.label(dim("Choose \"My role\" above to see your own hero's build.").small());
+                ui.label(dim(tr!(ChooseRoleForBuild)).small());
             }
         }
     });
@@ -644,26 +686,37 @@ fn to_build(ui: &mut Ui, own: Option<&str>) -> bool {
 
 fn verdict_words(chance: f32) -> (&'static str, Color32) {
     if chance >= 50.0 + EVEN_WITHIN {
-        ("Your draft is better", theme::good())
+        (tr!(DraftBetter), theme::good())
     } else if chance <= 50.0 - EVEN_WITHIN {
-        ("The enemy's draft is better", theme::bad())
+        (tr!(EnemyBetter), theme::bad())
     } else {
-        ("The two drafts are even", theme::text())
+        (tr!(DraftsEven), theme::text())
     }
 }
 
 fn fitting(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Draft, wanted: &str) {
-    let fitting: Vec<&Hero> = heroes::found(catalog.all_heroes(), wanted).into_iter().filter(|hero| !draft.is_picked(&hero.id)).collect();
-    let whose = if draft.seat.enemy { "the enemy" } else { "your team" };
+    let fitting: Vec<&Hero> = heroes::found(catalog.all_heroes(), wanted).into_iter().filter(|hero| !draft.is_picked(&hero.id) && !draft.banned.contains(&hero.id)).collect();
+    let mut banned = None;
     let free = draft.at(draft.seat).is_none();
     ui.horizontal(|ui| {
-        ui.label(theme::title("Heroes that fit", 16.0));
+        ui.label(theme::title(tr!(HeroesThatFit), 16.0));
         ui.label(dim(match (fitting.is_empty(), free) {
-            (true, _) => "No hero that is still free goes by that name.".to_string(),
-            (false, true) => format!("Click one, or press Enter for the first. It goes to {whose}."),
-            (false, false) => "Both teams are full. Click a hero above to take it off first.".to_string(),
+            (true, _) => tr!(NoFreeHero),
+            (false, true) if draft.seat.enemy => tr!(GoesToEnemy),
+            (false, true) => tr!(GoesToTeam),
+            (false, false) => tr!(TeamsFull),
         }).small());
+        if let Some(first) = fitting.first() {
+            let ban = ui.add(egui::Button::new(tr!(BanHero, hero = first.name)).small());
+            if ban.on_hover_text(tr!(BanHeroHint, hero = first.name)).clicked() {
+                banned = Some(first.id.clone());
+            }
+        }
     });
+    if let Some(hero) = banned {
+        draft.ban(&hero);
+        return;
+    }
     if !free {
         return;
     }
@@ -675,111 +728,301 @@ fn fitting(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut 
         tiles::flow(ui, fitting.len(), LOOK, |ui, index, look| {
             let hero = fitting[index];
             let tile = Tile { picture: hero.picture.as_deref(), name: &hero.name, note: None, badge: None, band: None, picked: false, faint: false, warning: None, detail: None, mark: None };
-            if tiles::tile(ui, pictures, look, &tile).clicked() {
+            let response = tiles::tile(ui, pictures, look, &tile);
+            response.context_menu(|ui| {
+                if ui.button(tr!(Ban)).clicked() {
+                    banned = Some(hero.id.clone());
+                }
+            });
+            if response.clicked() {
                 chosen = Some(hero.id.clone());
             }
         });
     });
-    if let Some(hero) = chosen {
+    if let Some(hero) = banned {
+        draft.ban(&hero);
+    } else if let Some(hero) = chosen {
         draft.seat_hero(&hero);
     }
 }
 
-fn suggestions(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Draft, numbers: &Numbers, choices: Choices, answer: &mut Answer) {
-    let Choices { rank, role, style, now } = choices;
-    let seat = draft.seat;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Whose {
+    Everyone,
+    Mine,
+    AllChosen,
+    NoneOfMine,
+}
+
+impl Whose {
+    fn of(theirs: bool, mine: usize, listed: usize, all_heroes: bool) -> Whose {
+        match (theirs && mine > 0, all_heroes, listed) {
+            (false, _, _) => Whose::Everyone,
+            (true, true, _) => Whose::AllChosen,
+            (true, false, 0) => Whose::NoneOfMine,
+            (true, false, _) => Whose::Mine,
+        }
+    }
+}
+
+fn is_theirs(draft: &Draft, seat: Seat, role: Option<Role>) -> bool {
+    !seat.enemy && (role.is_none() || draft.own_seat(role) == Some(seat))
+}
+
+fn list_for<'c>(catalog: &'c Catalog, draft: &Draft, numbers: &Numbers, choices: &Choices, seat: Seat) -> (Vec<(Suggestion, &'c Hero)>, Whose) {
     let seat_role = draft.role(seat);
-    let all = match style {
+    let all = match choices.style {
         Style::Team => {
-            let (beside, against) = draft.around_the_seat();
-            numbers.suggest(rank, Some(seat_role), &beside, &against)
+            let (beside, against) = draft.around(seat);
+            numbers.suggest(choices.rank, Some(seat_role), &beside, &against)
         }
         Style::Lane => {
-            let (partner, opponents) = draft.in_the_lane();
-            numbers.suggest_in_lane(rank, seat_role, &partner, &opponents, &draft.picked())
+            let (partner, opponents) = draft.in_the_lane_of(seat);
+            numbers.suggest_in_lane(choices.rank, seat_role, &partner, &opponents, &draft.picked())
         }
     };
     let there = draft.at(seat);
-    let shown: Vec<(&Suggestion, &Hero)> = all.iter().filter(|suggestion| !draft.hidden.contains(&suggestion.hero) && Some(suggestion.hero.as_str()) != there).filter_map(|suggestion| Some((suggestion, catalog.any_hero(&suggestion.hero)?))).collect();
+    let listed: Vec<(Suggestion, &Hero)> = all
+        .into_iter()
+        .filter(|suggestion| !draft.banned.contains(&suggestion.hero) && Some(suggestion.hero.as_str()) != there)
+        .filter_map(|suggestion| catalog.any_hero(&suggestion.hero).map(|hero| (suggestion, hero)))
+        .collect();
+    let of_mine = listed.iter().filter(|(suggestion, _)| choices.mine.contains(&suggestion.hero)).count();
+    let whose = Whose::of(is_theirs(draft, seat, choices.role), choices.mine.len(), of_mine, choices.all_heroes);
+    match whose {
+        Whose::Mine => (listed.into_iter().filter(|(suggestion, _)| choices.mine.contains(&suggestion.hero)).collect(), whose),
+        _ => (listed, whose),
+    }
+}
+
+fn suggestions(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Draft, numbers: &Numbers, choices: &Choices, answer: &mut Answer) {
+    let (rank, role, style) = (choices.rank, choices.role, choices.style);
+    let seat = draft.list_seat(role);
+    let seat_role = draft.role(seat);
+    let (shown, whose) = list_for(catalog, draft, numbers, choices, seat);
+    let this_week = draft.nothing_picked() && style == Style::Team;
+    let no_pool = whose == Whose::Everyone && choices.mine.is_empty() && is_theirs(draft, seat, role);
 
     let roomy = ui.available_width() > 760.0;
     ui.horizontal(|ui| {
-        ui.label(theme::title(list_title(seat, seat_role, draft.own_seat(role) == Some(seat)), 16.0));
-        if roomy {
-            let hint = match (style, seat.enemy) {
-                (Style::Team, true) => "what does best for them, first",
-                (Style::Team, false) => "the best first",
-                (Style::Lane, true) => "what wins their lane, first",
-                (Style::Lane, false) => "what wins the lane, first",
+        ui.label(theme::title(list_title(seat, seat_role, draft.own_seat(role) == Some(seat), this_week), 16.0));
+        if whose != Whose::Everyone {
+            ui.add_space(6.0);
+            let hints = [tr!(OnlyMine), tr!(EveryInRole)];
+            let on = usize::from(whose != Whose::Mine);
+            if let Some(index) = halves(ui, "draft whose", 26.0, [tr!(MyHeroes), tr!(AllHeroesHalf)], hints, on) {
+                answer.all_heroes = Some(index == 1);
+            }
+        }
+        if no_pool && roomy {
+            ui.add_space(4.0);
+            answer.open_pool = pool_link(ui, tr!(PoolInSettings));
+        }
+        if roomy && !no_pool {
+            let hint = match (style, seat.enemy, this_week && numbers.has_weeks()) {
+                (_, _, true) => tr!(HintWeeks),
+                (Style::Team, true, false) => tr!(HintEnemyTeam),
+                (Style::Team, false, false) => tr!(HintTeam),
+                (Style::Lane, true, false) => tr!(HintEnemyLane),
+                (Style::Lane, false, false) => tr!(HintLane),
             };
             ui.label(dim(hint).small());
         }
-        if !draft.hidden.is_empty() {
-            ui.add_space(6.0);
-            let hidden = match draft.hidden.len() {
-                1 => "1 hidden. Show it again".to_string(),
-                many => format!("{many} hidden. Show them again"),
-            };
-            if ui.add(egui::Button::new(dim(hidden).small()).frame(false)).clicked() {
-                draft.hidden.clear();
-            }
-        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let credit = ui.add(egui::Button::new(dim(credit_of(&numbers.source, &numbers.patch, numbers.age_in_days(now))).small()).frame(false));
-            answer.open_source = credit.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(format!("Opens {SOURCE_PAGE}")).clicked();
+            let credit = ui.add(egui::Button::new(dim(credit_of(&numbers.source, &numbers.patch, numbers.age_in_days(choices.now))).small()).frame(false));
+            answer.open_source = credit.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tr!(Opens, address = SOURCE_PAGE)).clicked();
         });
     });
+    if no_pool && !roomy {
+        answer.open_pool = pool_link(ui, tr!(PoolInSettings));
+    }
+    if whose == Whose::NoneOfMine {
+        ui.label(dim(tr!(NoneOfMine, role = words::as_played(seat_role))).small());
+    }
     if shown.is_empty() {
-        ui.label(dim("No hero is played in that role often enough to say anything about it. Type a hero's name to put one in."));
+        ui.label(dim(tr!(NoneInRole)));
         return;
     }
 
     let name_of = |id: &str| catalog.any_hero(id).map_or_else(|| id.to_string(), |hero| hero.name.clone());
-    let (mut picks, mut hides) = (None, None);
+    let enemy_picked = !draft.heroes(!seat.enemy).is_empty();
+    let (mut picks, mut bans) = (None, None);
     egui::ScrollArea::vertical().id_salt("suggestions").auto_shrink(false).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 5.0;
-        for (suggestion, hero) in &shown {
-            match row(ui, pictures, suggestion, hero, (seat_role, style), &name_of) {
+        for (place, (suggestion, hero)) in shown.iter().enumerate() {
+            let trend = numbers.trend(rank, seat_role, &suggestion.hero).filter(|_| style == Style::Team);
+            let suggest = !seat.enemy && place < SUGGESTED;
+            match row(ui, pictures, suggestion, hero, (seat_role, style), trend, suggest, &name_of) {
                 Some(Clicked::Row) => picks = Some(suggestion.hero.clone()),
-                Some(Clicked::Cross) => hides = Some(suggestion.hero.clone()),
+                Some(Clicked::Cross) => bans = Some(suggestion.hero.clone()),
+                Some(Clicked::Suggest) => answer.suggest = Some(suggest_line(&hero.name, seat_role, enemy_picked)),
                 None => {}
             }
         }
     });
-    if let Some(hero) = hides {
-        draft.hidden.insert(hero);
+    if let Some(hero) = bans {
+        draft.ban(&hero);
     } else if let Some(hero) = picks {
-        draft.seat_hero(&hero);
+        draft.seat_hero_at(seat, &hero);
     }
 }
 
-fn list_title(seat: Seat, role: Role, yours: bool) -> String {
-    let who = match role {
-        Role::Carry => "carry",
-        Role::Mid => "mid",
-        Role::Offlane => "offlaner",
-        Role::SoftSupport => "soft support",
-        Role::HardSupport => "hard support",
+fn pool_link(ui: &mut Ui, words: &str) -> bool {
+    let link = ui.add(egui::Button::new(egui::RichText::new(words).small().underline().color(theme::text_dim())).frame(false));
+    link.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tr!(PoolInSettingsHint)).clicked()
+}
+
+fn nominate(catalog: &Catalog, draft: &Draft, numbers: &Numbers, choices: &Choices, own: &[String]) -> Vec<Suggestion> {
+    if !draft.nothing_picked() {
+        return Vec::new();
+    }
+    let all: Vec<&str> = choices.mine.iter().map(String::as_str).collect();
+    let in_role: Vec<&str> = match choices.role {
+        Some(role) => all.iter().copied().filter(|hero| numbers.is_played_in(choices.rank, role, hero)).collect(),
+        None => Vec::new(),
     };
-    match (seat.enemy, yours) {
-        (true, _) => format!("Heroes for the enemy's {who}"),
-        (false, true) => format!("Heroes for you, {}", role.as_played()),
-        (false, false) => format!("Heroes for your team's {who}"),
+    let mine = if in_role.is_empty() { all } else { in_role };
+    let left_out: Vec<&str> = draft.banned.iter().chain(own).map(String::as_str).collect();
+    let all = numbers.to_ban(choices.rank, choices.role, &mine, &left_out);
+    all.into_iter().filter(|suggestion| !choices.mine.contains(&suggestion.hero) && catalog.any_hero(&suggestion.hero).is_some()).take(NOMINEES).collect()
+}
+
+fn bans(ui: &mut Ui, catalog: &Catalog, pictures: &mut Pictures, draft: &mut Draft, nominees: &[Suggestion], role: Option<Role>) {
+    if nominees.is_empty() && draft.banned.is_empty() {
+        return;
+    }
+    let name_of = |id: &str| catalog.any_hero(id).map_or_else(|| id.to_string(), |hero| hero.name.clone());
+    let (mut ban, mut unban) = (None, None);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+        if !nominees.is_empty() {
+            ui.label(dim(tr!(NominateBan)).small());
+            for nominee in nominees {
+                let picture = catalog.any_hero(&nominee.hero).and_then(|hero| hero.picture.as_deref());
+                let why = ban_words(nominee, role, &name_of);
+                if chip(ui, pictures, picture, &name_of(&nominee.hero), false).on_hover_text(tr!(ClickToBan, why)).clicked() {
+                    ban = Some(nominee.hero.clone());
+                }
+            }
+        }
+        if !draft.banned.is_empty() {
+            if !nominees.is_empty() {
+                ui.add_space(10.0);
+            }
+            ui.label(dim(tr!(BannedLabel)).small());
+            for hero in &draft.banned {
+                let picture = catalog.any_hero(hero).and_then(|hero| hero.picture.as_deref());
+                if chip(ui, pictures, picture, &name_of(hero), true).on_hover_text(tr!(BannedHint)).clicked() {
+                    unban = Some(hero.clone());
+                }
+            }
+        }
+    });
+    if let Some(hero) = ban {
+        draft.ban(&hero);
+    }
+    if let Some(hero) = unban {
+        draft.banned.remove(&hero);
+    }
+}
+
+fn ban_words(nominee: &Suggestion, role: Option<Role>, name_of: &dyn Fn(&str) -> String) -> String {
+    let words = in_words(nominee, None, Style::Team, name_of, usize::MAX);
+    match (nominee.reasons.is_empty(), role) {
+        (true, Some(role)) => {
+            let matches = nominee.matches as f32;
+            let own = (nominee.win_rate - 50.0) * matches / (matches + 400.0);
+            tr!(AgainstRoleRule, words, role = words::as_played(role), points = signed(nominee.points - own))
+        }
+        _ => words,
+    }
+}
+
+pub(super) fn chip(ui: &mut Ui, pictures: &mut Pictures, picture: Option<&str>, name: &str, banned: bool) -> egui::Response {
+    const PORTRAIT: egui::Vec2 = vec2(36.0, 20.0);
+    let font = FontId::proportional(theme::SMALL + 0.5);
+    let ink = if banned { theme::text_dim() } else { theme::text() };
+    let words = ui.painter().layout_no_wrap(name.to_string(), font, ink);
+    let (rect, response) = ui.allocate_exact_size(vec2(4.0 + PORTRAIT.x + 7.0 + words.size().x + 10.0, 28.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let lit = ui.ctx().animate_bool_with_time(response.id.with("lit"), response.hovered(), 0.12);
+        let painter = ui.painter();
+        let round = CornerRadius::same(8);
+        painter.rect_filled(rect, round, theme::card().lerp_to_gamma(theme::card_hover(), lit));
+        painter.rect_stroke(rect, round, Stroke::new(1.0, if banned { theme::bad().gamma_multiply(0.7) } else { theme::line() }), StrokeKind::Inside);
+        let portrait = Rect::from_min_size(pos2(rect.left() + 4.0, rect.center().y - PORTRAIT.y / 2.0), PORTRAIT);
+        tiles::fill_with(painter, pictures, picture, portrait, 5, 1.0);
+        let left = portrait.right() + 7.0;
+        let width = words.size().x;
+        painter.galley(pos2(left, rect.center().y - words.size().y / 2.0), words, ink);
+        if banned {
+            painter.rect_filled(portrait, CornerRadius::same(5), Color32::from_black_alpha(120));
+            painter.line_segment([pos2(portrait.left() + 2.0, rect.center().y), pos2(left + width, rect.center().y)], Stroke::new(1.5, theme::bad()));
+        }
+    }
+    response.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+fn own_picks(catalog: &Catalog, draft: &Draft, numbers: &Numbers, choices: &Choices) -> Vec<String> {
+    match draft.own_seat(choices.role).map(|seat| (seat, draft.at(seat))) {
+        Some((_, Some(hero))) => vec![hero.to_string()],
+        Some((seat, None)) => list_for(catalog, draft, numbers, choices, seat).0.into_iter().take(SUGGESTED).map(|(suggestion, _)| suggestion.hero).collect(),
+        None => Vec::new(),
+    }
+}
+
+fn suggest_line(hero: &str, role: Role, enemy_picked: bool) -> String {
+    match enemy_picked {
+        true => tr!(SuggestAgainst, hero),
+        false => tr!(SuggestInRole, hero, role = words::as_played(role)),
+    }
+}
+
+fn list_title(seat: Seat, role: Role, yours: bool, this_week: bool) -> String {
+    let who = words::player(role);
+    match (this_week, seat.enemy, yours) {
+        (true, true, _) => tr!(BestThisWeekEnemy, who),
+        (true, false, true) => tr!(BestThisWeekYou, role = words::as_played(role)),
+        (true, false, false) => tr!(BestThisWeekTeam, who),
+        (false, true, _) => tr!(HeroesForEnemy, who),
+        (false, false, true) => tr!(HeroesForYou, role = words::as_played(role)),
+        (false, false, false) => tr!(HeroesForTeam, who),
     }
 }
 
 enum Clicked {
     Row,
     Cross,
+    Suggest,
 }
 
-fn row(ui: &mut Ui, pictures: &mut Pictures, suggestion: &Suggestion, hero: &Hero, (role, style): (Role, Style), name_of: &dyn Fn(&str) -> String) -> Option<Clicked> {
+const SUGGEST_IN_WORDS: f32 = 720.0;
+
+#[allow(clippy::too_many_arguments)]
+fn row(ui: &mut Ui, pictures: &mut Pictures, suggestion: &Suggestion, hero: &Hero, (role, style): (Role, Style), trend: Option<Trend>, suggest: bool, name_of: &dyn Fn(&str) -> String) -> Option<Clicked> {
     const PORTRAIT: egui::Vec2 = vec2(78.0, 44.0);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width() - 14.0, ROW), Sense::click());
     let cross = Rect::from_center_size(pos2(rect.right() - 22.0, rect.center().y), vec2(28.0, 28.0));
     let hide = ui.interact(cross, response.id.with("hide"), Sense::click());
+    let color = match suggestion.points {
+        points if points >= WORTH_NAMING => theme::good(),
+        points if points <= -WORTH_NAMING => theme::bad(),
+        _ => theme::text_dim(),
+    };
+    let number = ui.painter().layout_no_wrap(format!("{}%", signed(suggestion.points)), theme::heavy(16.0), color);
+    let number_left = cross.left() - 12.0 - number.size().x;
+    let widest = ui.painter().layout_no_wrap("+00.0%".to_string(), theme::heavy(16.0), color).size().x;
+    let number_slot = number_left.min(cross.left() - 12.0 - widest);
+    let worded = rect.width() >= SUGGEST_IN_WORDS;
+    let label = worded.then(|| ui.painter().layout_no_wrap(tr!(SuggestToTeam).to_string(), FontId::proportional(theme::SMALL + 0.5), theme::text()));
+    let tell = suggest.then(|| {
+        let size = label.as_ref().map_or(vec2(30.0, 28.0), |label| vec2(label.size().x + 22.0, 28.0));
+        let area = Rect::from_min_size(pos2(number_slot - 14.0 - size.x, rect.center().y - size.y / 2.0), size);
+        (area, ui.interact(area, response.id.with("suggest"), Sense::click()))
+    });
+    let tell_hovered = tell.as_ref().is_some_and(|(_, button)| button.hovered());
     if ui.is_rect_visible(rect) {
-        let lit = ui.ctx().animate_bool_with_time(response.id.with("lit"), response.hovered() || hide.hovered(), 0.12);
+        let lit = ui.ctx().animate_bool_with_time(response.id.with("lit"), response.hovered() || hide.hovered() || tell_hovered, 0.12);
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(theme::ROUND), theme::card().lerp_to_gamma(theme::card_hover(), lit));
         let portrait = Rect::from_min_size(pos2(rect.left() + 7.0, rect.center().y - PORTRAIT.y / 2.0), PORTRAIT);
@@ -787,36 +1030,89 @@ fn row(ui: &mut Ui, pictures: &mut Pictures, suggestion: &Suggestion, hero: &Her
 
         let ink = if hide.hovered() { theme::text() } else { theme::text_dim() };
         painter.text(cross.center(), Align2::CENTER_CENTER, "×", FontId::proportional(20.0), ink);
-        let color = match suggestion.points {
-            points if points >= WORTH_NAMING => theme::good(),
-            points if points <= -WORTH_NAMING => theme::bad(),
-            _ => theme::text_dim(),
-        };
-        let number = painter.layout_no_wrap(format!("{:+.1}%", suggestion.points), theme::heavy(16.0), color);
-        let number_left = cross.left() - 12.0 - number.size().x;
         painter.galley(pos2(number_left, rect.center().y - number.size().y / 2.0), number, color);
+        let mut words_end = number_left;
+        if let Some((area, _)) = &tell {
+            words_end = area.left();
+            let fill = if tell_hovered { theme::accent().gamma_multiply(if theme::is_day() { 0.18 } else { 0.26 }) } else { theme::text().gamma_multiply(0.06) };
+            let edge = if tell_hovered { theme::accent() } else { theme::line() };
+            painter.rect_filled(*area, CornerRadius::same(7), fill);
+            painter.rect_stroke(*area, CornerRadius::same(7), Stroke::new(1.0, edge), StrokeKind::Inside);
+            let ink = if tell_hovered { theme::accent_text() } else { theme::text() };
+            match label {
+                Some(label) => painter.galley(pos2(area.center().x - label.size().x / 2.0, area.center().y - label.size().y / 2.0), label, ink),
+                None => speech_bubble(painter, area.center(), ink),
+            }
+        }
 
         let left = portrait.right() + 12.0;
-        let room = (number_left - 14.0 - left).max(40.0);
+        let room = (words_end - 14.0 - left).max(40.0);
         let mut name = LayoutJob::simple(hero.name.clone(), theme::heavy(15.0), theme::text(), room);
         name.wrap.max_rows = 1;
         name.wrap.overflow_character = Some('…');
-        painter.galley(pos2(left, rect.top() + 9.0), painter.layout_job(name), theme::text());
+        let name = painter.layout_job(name);
+        let name_right = left + name.size().x;
+        painter.galley(pos2(left, rect.top() + 9.0), name, theme::text());
+        if let Some((words, color, up)) = trend.and_then(trend_mark) {
+            let said = painter.layout_no_wrap(words.to_string(), FontId::proportional(theme::SMALL), color);
+            let at = pos2(name_right + 10.0, rect.top() + 9.0 + 9.5);
+            if at.x + 12.0 + said.size().x <= words_end - 14.0 {
+                let tip = if up { [at + vec2(0.0, -4.5), at + vec2(4.5, 3.0), at + vec2(-4.5, 3.0)] } else { [at + vec2(0.0, 4.5), at + vec2(4.5, -3.0), at + vec2(-4.5, -3.0)] };
+                painter.add(egui::Shape::convex_polygon(tip.to_vec(), color, Stroke::NONE));
+                painter.galley(pos2(at.x + 8.0, at.y - said.size().y / 2.0), said, color);
+            }
+        }
         let mut words = painted(&in_words(suggestion, Some(role), style, name_of, NAMED_IN_A_ROW), FontId::proportional(theme::SMALL), theme::text_dim(), room);
         words.wrap.max_rows = 1;
         words.wrap.overflow_character = Some('…');
         painter.galley(pos2(left, rect.top() + 32.0), painter.layout_job(words), theme::text_dim());
     }
-    if hide.on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Hide this hero: it is banned, or you do not play it").clicked() {
+    if hide.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tr!(BannedCrossHint)).clicked() {
         return Some(Clicked::Cross);
+    }
+    if let Some((_, button)) = tell {
+        let hint = if worded { tr!(SuggestHint) } else { tr!(SuggestHintShort) };
+        if button.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(hint).clicked() {
+            return Some(Clicked::Suggest);
+        }
     }
     let response = response.on_hover_ui(|ui| {
         ui.set_max_width(420.0);
         ui.label(theme::title(&hero.name, 16.0));
         ui.label(painted(&in_words(suggestion, Some(role), style, name_of, usize::MAX), FontId::proportional(theme::BODY), theme::text(), 420.0));
-        ui.label(dim("Click to put it in the place that is lit.").small());
+        if let Some(trend) = trend {
+            ui.label(painted(&trend_words(trend, role), FontId::proportional(theme::BODY), theme::text(), 420.0));
+        }
+        ui.label(dim(tr!(ClickToPut)).small());
     });
     response.on_hover_cursor(CursorIcon::PointingHand).clicked().then_some(Clicked::Row)
+}
+
+fn speech_bubble(painter: &egui::Painter, center: egui::Pos2, ink: Color32) {
+    let body = Rect::from_center_size(center + vec2(0.0, -1.5), vec2(15.0, 10.0));
+    painter.rect_stroke(body, CornerRadius::same(3), Stroke::new(1.4, ink), StrokeKind::Middle);
+    let tail = [pos2(body.left() + 3.5, body.bottom()), pos2(body.left() + 3.0, body.bottom() + 4.5), pos2(body.left() + 7.5, body.bottom())];
+    painter.add(egui::Shape::line(tail.to_vec(), Stroke::new(1.4, ink)));
+    for dot in [-4.0, 0.0, 4.0] {
+        painter.circle_filled(body.center() + vec2(dot, 0.0), 1.1, ink);
+    }
+}
+
+fn trend_mark(trend: Trend) -> Option<(&'static str, Color32, bool)> {
+    match trend.way {
+        Way::Rising => Some((tr!(Rising), theme::good(), true)),
+        Way::Falling => Some((tr!(Falling), theme::bad(), false)),
+        Way::Level => None,
+    }
+}
+
+fn trend_words(trend: Trend, role: Role) -> String {
+    let (now, before, role) = (number(f64::from(trend.now), 1), number(f64::from(trend.before), 1), words::as_played(role));
+    match trend.way {
+        Way::Rising => tr!(TrendRising, now, role, before),
+        Way::Falling => tr!(TrendFalling, now, role, before),
+        Way::Level => tr!(TrendLevel, now, role, before),
+    }
 }
 
 fn in_words(suggestion: &Suggestion, role: Option<Role>, style: Style, name_of: &dyn Fn(&str) -> String, most: usize) -> String {
@@ -827,20 +1123,25 @@ fn in_words(suggestion: &Suggestion, role: Option<Role>, style: Style, name_of: 
             .iter()
             .filter(|reason| reason.beside == beside && (reason.points > 0.0) == good && reason.points.abs() >= least)
             .take(most)
-            .map(|reason| format!("{} {:+.1}", name_of(&reason.hero), reason.points))
+            .map(|reason| tr!(HeroPoints, hero = name_of(&reason.hero), points = signed(reason.points)))
             .collect();
         (!heroes.is_empty()).then(|| heroes.join(", "))
     };
-    let (starts, what) = match style {
-        Style::Team => (["Good against", "Weak against", "Goes well with", "Not good with"], "matches"),
-        Style::Lane => (["Strong in lane against", "Weak in lane against", "Lanes well with", "Lanes badly with"], "lanes"),
+    let starts = match style {
+        Style::Team => [T::GoodAgainst, T::WeakAgainst, T::GoesWellWith, T::NotGoodWith],
+        Style::Lane => [T::StrongInLane, T::WeakInLane, T::LanesWell, T::LanesBadly],
     };
     let mut sentences = Vec::new();
     for ((beside, good), start) in [(false, true), (false, false), (true, true), (true, false)].into_iter().zip(starts) {
-        sentences.extend(named(beside, good).map(|heroes| format!("{start} {heroes}.")));
+        sentences.extend(named(beside, good).map(|heroes| lang::fill(lang::t(start), &[("heroes", &heroes)])));
     }
-    let role = role.map(|role| format!(" {}", role.as_played())).unwrap_or_default();
-    sentences.push(format!("Wins {:.1}% of its {what}{role}.", suggestion.win_rate));
+    let share = number(f64::from(suggestion.win_rate), 1);
+    sentences.push(match (style, role) {
+        (Style::Team, None) => tr!(WinsMatches, share),
+        (Style::Team, Some(role)) => tr!(WinsMatchesAs, share, role = words::as_played(role)),
+        (Style::Lane, None) => tr!(WinsLanes, share),
+        (Style::Lane, Some(role)) => tr!(WinsLanesAs, share, role = words::as_played(role)),
+    });
     sentences.join(" ")
 }
 
@@ -853,8 +1154,9 @@ pub(super) fn painted(words: &str, font: FontId, plain: Color32, room: f32) -> L
             add(" ", plain);
         }
         let number = word.trim_end_matches([',', '.']);
-        let signed = number.chars().next().filter(|sign| "+-".contains(*sign) && number[1..].parse::<f32>().is_ok()).map(|sign| sign == '+');
-        let share = number.strip_suffix('%').and_then(|share| share.parse::<f32>().ok()).filter(|share| *share != 50.0).map(|share| share > 50.0);
+        let read = |text: &str| text.replace(',', ".").parse::<f32>().ok();
+        let signed = number.chars().next().filter(|sign| "+-".contains(*sign) && read(&number[1..]).is_some()).map(|sign| sign == '+');
+        let share = number.strip_suffix('%').and_then(read).filter(|share| *share != 50.0).map(|share| share > 50.0);
         match signed.or(share) {
             Some(good) => {
                 add(number, if good { theme::good() } else { theme::bad() });
@@ -868,14 +1170,13 @@ pub(super) fn painted(words: &str, font: FontId, plain: Color32, room: f32) -> L
 
 pub(super) fn credit_of(source: &str, patch: &str, days: u64) -> String {
     let age = match days {
-        0 => "made today".to_string(),
-        1 => "1 day old".to_string(),
-        days => format!("{days} days old"),
+        0 => tr!(MadeToday).to_string(),
+        days => tr!(DaysOld, count = days),
     };
     let source = if source.trim().is_empty() { "STRATZ" } else { source.trim() };
     match patch.trim() {
-        "" => format!("Numbers from {source} · {age}"),
-        patch => format!("Numbers from {source} · patch {patch} · {age}"),
+        "" => tr!(NumbersFrom, source, age),
+        patch => tr!(NumbersFromPatch, source, patch, age),
     }
 }
 
@@ -885,27 +1186,39 @@ pub(super) enum Asked {
     CopyDetails,
 }
 
-pub(super) fn waiting(ui: &mut Ui, fetching: bool, failure: Option<&Failure>, what: &str, still: &str) -> Option<Asked> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Fetched {
+    Numbers,
+    Builds,
+    Lanes,
+}
+
+pub(super) fn waiting(ui: &mut Ui, fetching: bool, failure: Option<&Failure>, what: Fetched, still: &str) -> Option<Asked> {
+    let (getting, not_here, failed) = match what {
+        Fetched::Numbers => (tr!(GettingNumbers), tr!(NumbersNotHere), tr!(NumbersFailed)),
+        Fetched::Builds => (tr!(GettingBuilds), tr!(BuildsNotHere), tr!(BuildsFailed)),
+        Fetched::Lanes => (tr!(GettingLanes), tr!(LanesNotHere), tr!(LanesFailed)),
+    };
     let mut asked = None;
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() * 0.2).min(60.0));
         if fetching {
             ui.spinner();
-            ui.label(dim(format!("Getting the {what}…")));
+            ui.label(dim(getting));
             return;
         }
         if failure.is_none() {
-            ui.label(dim(format!("The {what} are not here yet.")));
+            ui.label(dim(not_here));
             return;
         }
-        ui.label(theme::title(format!("The {what} could not be fetched"), 18.0));
+        ui.label(theme::title(failed, 18.0));
         ui.add_space(2.0);
-        ui.label(dim(format!("They come from the internet, once, and are kept. {still}")));
+        ui.label(dim(format!("{} {still}", tr!(ComeFromInternet)).trim_end()));
         ui.add_space(8.0);
-        if ui.button("Try again").clicked() {
+        if ui.button(tr!(TryAgain)).clicked() {
             asked = Some(Asked::Again);
         }
-        if ui.add(egui::Button::new(dim("Copy details").small()).frame(false)).on_hover_text("Copy what happened, to send to whoever helps you").clicked() {
+        if ui.add(egui::Button::new(dim(tr!(CopyDetails)).small()).frame(false)).on_hover_text(tr!(CopyDetailsHint)).clicked() {
             asked = Some(Asked::CopyDetails);
         }
     });
@@ -1017,28 +1330,28 @@ mod tests {
             draft.seat_hero(hero);
         }
         assert_eq!((draft.seat, draft.role(draft.seat)), (ENEMY(2), Role::Carry));
-        assert_eq!(draft.around_the_seat(), (vec!["lion", "cm"], vec!["ogre", "jakiro"]));
-        assert_eq!(list_title(draft.seat, Role::Carry, false), "Heroes for the enemy's carry");
+        assert_eq!(draft.around(draft.seat), (vec!["lion", "cm"], vec!["ogre", "jakiro"]));
+        assert_eq!(list_title(draft.seat, Role::Carry, false, false), "Heroes for the enemy's carry");
 
         draft.seat_hero("pa");
         draft.seat_hero("axe");
         assert_eq!(draft.heroes(true), ["lion", "cm", "pa", "axe"]);
         assert_eq!((draft.seat, draft.role(draft.seat)), (TEAM(2), Role::Carry));
-        assert_eq!(draft.around_the_seat(), (vec!["ogre", "jakiro"], vec!["lion", "cm", "pa", "axe"]));
-        assert_eq!(list_title(draft.seat, Role::Carry, false), "Heroes for your team's carry");
-        assert_eq!(list_title(draft.seat, Role::Carry, true), "Heroes for you, as carry");
+        assert_eq!(draft.around(draft.seat), (vec!["ogre", "jakiro"], vec!["lion", "cm", "pa", "axe"]));
+        assert_eq!(list_title(draft.seat, Role::Carry, false, false), "Heroes for your team's carry");
+        assert_eq!(list_title(draft.seat, Role::Carry, true, false), "Heroes for you, as carry");
         draft.seat_hero("sven");
         draft.seat_hero("mars");
         assert_eq!(draft.heroes(false), ["ogre", "jakiro", "sven", "mars"]);
         assert_eq!((draft.seat, draft.role(draft.seat)), (ENEMY(4), Role::Mid), "the last picks, the enemy's first");
-        assert_eq!(list_title(TEAM(4), Role::Mid, true), "Heroes for you, in mid");
+        assert_eq!(list_title(TEAM(4), Role::Mid, true, false), "Heroes for you, in mid");
 
         assert_eq!(draft.against("sven"), ["lion", "cm", "pa", "axe"]);
         assert_eq!(draft.against("pa"), ["ogre", "jakiro", "sven", "mars"]);
         assert_eq!(draft.against("zeus"), ["lion", "cm", "pa", "axe"]);
 
         draft.seat = TEAM(3);
-        assert_eq!(draft.around_the_seat().0, ["ogre", "jakiro", "sven"]);
+        assert_eq!(draft.around(draft.seat).0, ["ogre", "jakiro", "sven"]);
 
         draft.start_over();
         assert_eq!(draft, Draft::default());
@@ -1052,16 +1365,16 @@ mod tests {
         }
         assert_eq!(draft.picked(), ["ogre", "jakiro", "lion", "cm", "pa", "axe"]);
         assert_eq!((draft.seat, draft.role(draft.seat)), (TEAM(2), Role::Carry));
-        assert_eq!(draft.in_the_lane(), (vec!["jakiro"], vec![("lion", Role::SoftSupport), ("axe", Role::Offlane)]));
+        assert_eq!(draft.in_the_lane_of(draft.seat), (vec!["jakiro"], vec![("lion", Role::SoftSupport), ("axe", Role::Offlane)]));
         draft.seat = TEAM(3);
-        assert_eq!(draft.in_the_lane(), (vec!["ogre"], vec![("cm", Role::HardSupport), ("pa", Role::Carry)]));
+        assert_eq!(draft.in_the_lane_of(draft.seat), (vec!["ogre"], vec![("cm", Role::HardSupport), ("pa", Role::Carry)]));
         draft.seat = TEAM(4);
-        assert_eq!(draft.in_the_lane(), (vec![], vec![]));
+        assert_eq!(draft.in_the_lane_of(draft.seat), (vec![], vec![]));
         draft.set_role(ENEMY(3), Role::Mid);
-        assert_eq!(draft.in_the_lane(), (vec![], vec![("axe", Role::Mid)]));
+        assert_eq!(draft.in_the_lane_of(draft.seat), (vec![], vec![("axe", Role::Mid)]));
         draft.seat = ENEMY(4);
         assert_eq!(draft.role(draft.seat), Role::Offlane);
-        assert_eq!(draft.in_the_lane(), (vec!["lion"], vec![("jakiro", Role::HardSupport)]));
+        assert_eq!(draft.in_the_lane_of(draft.seat), (vec!["lion"], vec![("jakiro", Role::HardSupport)]));
     }
 
     #[test]
@@ -1131,6 +1444,99 @@ mod tests {
         assert_eq!(draft.seated(false)[0], ("c", Role::Mid));
         draft.empty(TEAM(4));
         assert_eq!(draft.seated(false).len(), 4);
+    }
+
+    #[test]
+    fn with_nothing_picked_the_list_is_of_the_best_heroes_this_week() {
+        assert_eq!(list_title(TEAM(4), Role::Mid, true, true), "Best heroes this week for you, in mid");
+        assert_eq!(list_title(TEAM(0), Role::SoftSupport, false, true), "Best heroes this week for your team's soft support");
+        let trend = |now: f32, before: f32, way: Way| Trend { now, before, way };
+        assert_eq!(trend_words(trend(55.04, 51.2, Way::Rising), Role::Mid), "Rising: won 55.0% in mid last week, and 51.2% the week before.");
+        assert_eq!(trend_words(trend(47.0, 49.5, Way::Falling), Role::Carry), "Falling: won 47.0% as carry last week, and 49.5% the week before.");
+        assert_eq!(trend_words(trend(50.5, 50.1, Way::Level), Role::Carry), "won 50.5% as carry last week, and 50.1% the week before.");
+        assert!(trend_mark(trend(55.0, 51.0, Way::Rising)).is_some_and(|(words, _, up)| words == "Rising" && up));
+        assert!(trend_mark(trend(47.0, 49.0, Way::Falling)).is_some_and(|(words, _, up)| words == "Falling" && !up));
+        assert_eq!(trend_mark(trend(50.0, 50.0, Way::Level)), None, "a hero that is neither has no mark");
+    }
+
+    #[test]
+    fn a_banned_hero_leaves_its_place_and_the_lists_until_new_draft() {
+        let mut draft = Draft::default();
+        assert!(draft.nothing_picked());
+        draft.search = "rik".to_string();
+        draft.ban("riki");
+        assert!(draft.banned.contains("riki") && draft.search.is_empty());
+        assert!(draft.nothing_picked() && !draft.is_empty(), "a ban is no pick, but there is something to start over from");
+        assert_eq!(draft.seat, ENEMY(0), "banning goes on to no other place");
+
+        draft.seat_hero("axe");
+        assert!(!draft.nothing_picked());
+        draft.ban("axe");
+        assert_eq!((draft.heroes(true), draft.banned.len()), (vec![], 2));
+        draft.seat_hero("riki");
+        assert!(!draft.banned.contains("riki") && draft.is_picked("riki"));
+
+        draft.by_hand = true;
+        draft.start_over();
+        assert_eq!(draft, Draft::default());
+    }
+
+    #[test]
+    fn my_heroes_are_for_the_players_own_place_alone() {
+        let mut draft = Draft::default();
+        assert!(is_theirs(&draft, TEAM(4), Some(Role::Mid)) && !is_theirs(&draft, TEAM(2), Some(Role::Mid)));
+        assert!(is_theirs(&draft, TEAM(2), None) && !is_theirs(&draft, ENEMY(4), None));
+        draft.set_role(TEAM(2), Role::Mid);
+        assert!(is_theirs(&draft, TEAM(2), Some(Role::Mid)), "the own place follows the role");
+
+        assert_eq!(Whose::of(true, 5, 2, false), Whose::Mine);
+        assert_eq!(Whose::of(true, 5, 0, false), Whose::NoneOfMine, "none in the role: all heroes, and the page says so");
+        assert_eq!(Whose::of(true, 5, 2, true), Whose::AllChosen);
+        assert_eq!(Whose::of(true, 0, 0, false), Whose::Everyone, "no heroes chosen: no switch");
+        assert_eq!(Whose::of(false, 5, 2, false), Whose::Everyone, "the enemy's place, or a teammate's");
+    }
+
+    #[test]
+    fn a_hero_suggested_to_the_team_is_good_against_the_enemy_once_the_enemy_has_a_hero() {
+        assert_eq!(suggest_line("Outworld Destroyer", Role::Mid, true), "Outworld Destroyer is a good pick against the enemy");
+        assert_eq!(suggest_line("Outworld Destroyer", Role::Mid, false), "Outworld Destroyer is a good pick in mid", "before that, good in its role");
+        assert_eq!(suggest_line("Lion", Role::SoftSupport, false), "Lion is a good pick as soft support");
+    }
+
+    #[test]
+    fn with_nothing_picked_the_list_follows_my_role() {
+        let mut draft = Draft::default();
+        assert_eq!(draft.seat, ENEMY(0));
+        assert_eq!(draft.list_seat(Some(Role::Mid)), TEAM(4));
+        assert_eq!(draft.role(draft.list_seat(Some(Role::Mid))), Role::Mid);
+        assert_eq!(draft.list_seat(Some(Role::Carry)), TEAM(2));
+        assert_eq!(draft.role(draft.list_seat(Some(Role::HardSupport))), Role::HardSupport);
+        assert_eq!(list_title(TEAM(2), Role::Carry, true, true), "Best heroes this week for you, as carry");
+        assert_eq!(draft.list_seat(None), ENEMY(0));
+        assert_eq!(list_title(ENEMY(0), Role::SoftSupport, false, true), "Best heroes this week for the enemy's soft support");
+
+        draft.seat_hero_at(draft.list_seat(Some(Role::Mid)), "lina");
+        assert_eq!((draft.at(TEAM(4)), draft.seat), (Some("lina"), ENEMY(0)));
+        draft.seat_hero("axe");
+        assert_eq!(draft.seat, ENEMY(1));
+        assert_eq!(draft.list_seat(Some(Role::Mid)), ENEMY(1));
+
+        let mut draft = Draft { by_hand: true, ..Draft::default() };
+        assert_eq!(draft.list_seat(Some(Role::Mid)), ENEMY(0));
+        draft.seat_hero_at(ENEMY(0), "axe");
+        assert_eq!(draft.seat, ENEMY(1));
+    }
+
+    #[test]
+    fn a_hero_to_ban_says_why() {
+        let name_of = |id: &str| id.to_uppercase();
+        let reason = |hero: &str, points: f32| Reason { hero: hero.to_string(), beside: false, points };
+        let against_mine = Suggestion { hero: "riki".to_string(), points: 4.0, win_rate: 53.0, matches: 10000, reasons: vec![reason("lina", 2.0), reason("axe", -1.0)] };
+        assert_eq!(ban_words(&against_mine, Some(Role::Mid), &name_of), "Good against LINA +2.0. Weak against AXE -1.0. Wins 53.0% of its matches.");
+        let own = 3.0 * 10000.0 / 10400.0;
+        let against_role = Suggestion { hero: "riki".to_string(), points: own + 0.8, win_rate: 53.0, matches: 10000, reasons: Vec::new() };
+        assert_eq!(ban_words(&against_role, Some(Role::Mid), &name_of), "Wins 53.0% of its matches. Against the heroes played in mid: +0.8 as a rule.");
+        assert_eq!(ban_words(&against_role, None, &name_of), "Wins 53.0% of its matches.");
     }
 
     #[test]

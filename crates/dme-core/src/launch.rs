@@ -33,7 +33,7 @@ pub fn settings(low_end: bool) -> &'static [Setting] {
 }
 
 pub fn start_dota(settings: &[Setting]) -> Result<()> {
-    let steam = find_steam(&dota::steam_folders()).ok_or_else(|| Error::Launch("Steam was not found.".to_string()))?;
+    let steam = find_steam(&dota::steam_folders()).ok_or(Error::NoSteam)?;
     Command::new(&steam)
         .args(launch_arguments(settings))
         .spawn()

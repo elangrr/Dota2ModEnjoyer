@@ -267,11 +267,11 @@ pub(crate) fn spawn(name: &str, work: impl FnOnce() + Send + 'static) {
 fn installing_in_plain_words(error: &dme_core::Error) -> Option<&'static str> {
     let dme_core::Error::Io { action, source, .. } = error else { return None };
     if *action == "write" && source.raw_os_error() == Some(5) {
-        Some("The update could not be put in place: Windows does not let the app write in its own folder. Move the app to a folder of your own, such as Documents or Downloads, then try again.")
+        Some(tr!(UpdateNotWritable))
     } else if fsutil::is_held(source) {
-        Some("The update could not be put in place: another program, such as an antivirus, is holding the app's file. Try again in a moment. This version goes on working as it is.")
+        Some(tr!(UpdateHeld))
     } else if fsutil::is_disk_full(source) {
-        Some("The update could not be put in place: the disk is full. Make some room on it, then try again.")
+        Some(tr!(UpdateDiskFull))
     } else {
         None
     }
@@ -279,7 +279,8 @@ fn installing_in_plain_words(error: &dme_core::Error) -> Option<&'static str> {
 
 fn failure(version: &str, address: &str, error: &str) -> Failure {
     Failure {
-        sentence: format!("The update did not work: {error}. This version goes on working as it is."),
+        sentence: tr!(UpdateFailed, error),
+        english: tr_en!(UpdateFailed, error),
         details: format!("Dota 2 Mod Enjoyer {version}\nWhile updating from {address}: {error}"),
     }
 }

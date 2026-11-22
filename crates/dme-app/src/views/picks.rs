@@ -9,12 +9,6 @@ use crate::pictures::Pictures;
 use crate::presets::{LONGEST_NAME, Preset};
 use crate::theme;
 
-const PRESETS_NOTE: &str = "Everything you picked. A click on a pick opens its page; its cross takes it off. \
-     To keep what is picked as a preset, type a name and press \"Save as preset\". A click on a preset picks it again, in the place of what is picked now. \
-     \"Share\" copies a code of your picks, for a friend or another computer; \"Use a code\" takes one in. A right-click on a preset shares it.";
-
-pub const SHARE_HINT: &str = "Copy a code of these picks, to paste anywhere: a friend with the app uses it under My picks, \"Use a code\". It holds only the items' numbers.";
-
 const PICK_WIDTH: f32 = 300.0;
 const GAP: f32 = 8.0;
 
@@ -33,12 +27,12 @@ pub struct Answer {
 pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &mut Loadout, pictures: &mut Pictures, presets: &[Preset], name: &mut String) -> Answer {
     let mut answer = Answer::default();
     let mut clear_all = false;
-    title_bar(ui, "My picks", Some(PRESETS_NOTE), None, |ui| {
-        let button = ui.add_enabled(!loadout.is_empty(), egui::Button::new("Clear all"));
-        clear_all = button.on_hover_text("Take off every pick").clicked();
-        let share = ui.add_enabled(!loadout.is_empty(), egui::Button::new("Share"));
-        answer.share = share.on_hover_text(SHARE_HINT).on_disabled_hover_text("Pick something first").clicked();
-        answer.take_code = ui.button("Use a code").on_hover_text("Paste a share code that someone sent you, to use its picks").clicked();
+    title_bar(ui, tr!(MyPicks), Some(tr!(PresetsNote)), None, |ui| {
+        let button = ui.add_enabled(!loadout.is_empty(), egui::Button::new(tr!(ClearAll)));
+        clear_all = button.on_hover_text(tr!(ClearAllHint)).clicked();
+        let share = ui.add_enabled(!loadout.is_empty(), egui::Button::new(tr!(Share)));
+        answer.share = share.on_hover_text(tr!(ShareHint)).on_disabled_hover_text(tr!(PickFirst)).clicked();
+        answer.take_code = ui.button(tr!(UseCode)).on_hover_text(tr!(UseCodeHint)).clicked();
     });
     if clear_all {
         loadout.clear_all();
@@ -50,12 +44,12 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &mut Loadout, pictures: &mu
     if loadout.is_empty() {
         ui.add_space(ui.available_height() * 0.2);
         ui.vertical_centered(|ui| {
-            ui.label(crate::theme::title("Nothing is picked yet", 20.0));
+            ui.label(crate::theme::title(tr!(NothingPicked), 20.0));
             ui.add_space(4.0);
             ui.label(dim(match loadout.kept_away().len() {
-                0 => "Choose a hero under Heroes, or a courier, a ward and the rest under World. What you pick is listed here.".to_string(),
-                1 => "One pick is put away. \"Bring back my picks\", beside Play, picks it again.".to_string(),
-                many => format!("{many} picks are put away. \"Bring back my picks\", beside Play, picks them again."),
+                0 => tr!(NothingPickedHow).to_string(),
+                1 => tr!(OneAway).to_string(),
+                many => tr!(ManyAway, count = many),
             }));
         });
         return answer;
@@ -71,12 +65,12 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &mut Loadout, pictures: &mu
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(owner.map_or("The world", |hero| hero.name.as_str())).size(17.0).strong());
+                ui.label(RichText::new(owner.map_or(tr!(TheWorld), |hero| hero.name.as_str())).size(17.0).strong());
                 ui.label(dim(count(picks.len())).small());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.add_space(14.0);
-                    let hint = if owner.is_some() { "Take off every pick for this hero" } else { "Take off every pick that is not a hero's" };
-                    if ui.add(egui::Button::new(dim("Reset")).frame(false)).on_hover_text(hint).clicked() {
+                    let hint = if owner.is_some() { tr!(ResetHeroHint) } else { tr!(ResetWorldHint) };
+                    if ui.add(egui::Button::new(dim(tr!(Reset))).frame(false)).on_hover_text(hint).clicked() {
                         loadout.clear_owner(id);
                         answer.changed = true;
                     }
@@ -105,7 +99,7 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &mut Loadout, pictures: &mu
                             picture,
                             band: entry.and_then(|entry| rarity::color(&catalog.rarities, entry.rarity)),
                             open: false,
-                            clear_hint: "Take this pick off",
+                            clear_hint: tr!(TakePickOff),
                             warning: warning.as_deref(),
                         };
                         let said = ui.allocate_ui(vec2(width, ROW_HEIGHT), |ui| row(ui, pictures, &look)).inner;
@@ -127,7 +121,7 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &mut Loadout, pictures: &mu
 fn preset_bar(ui: &mut Ui, presets: &[Preset], name: &mut String, loadout: &Loadout, answer: &mut Answer) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-        ui.label(dim("Presets"));
+        ui.label(dim(tr!(Presets)));
         for (place, preset) in presets.iter().enumerate() {
             let worn = !loadout.is_empty() && dme_core::loadout::same_picks(loadout.picks(), &preset.picks);
             let said = preset_chip(ui, &preset.name, preset.picks.len(), worn);
@@ -142,16 +136,16 @@ fn preset_bar(ui: &mut Ui, presets: &[Preset], name: &mut String, loadout: &Load
             }
         }
         if presets.is_empty() {
-            ui.label(dim("none yet").small());
+            ui.label(dim(tr!(NoneYet)).small());
         }
         ui.add_space(10.0);
         let can_save = !loadout.is_empty();
-        let hint = if can_save { "Name for a new preset" } else { "Pick something first" };
+        let hint = if can_save { tr!(PresetNameHint) } else { tr!(PickFirst) };
         let typed = ui.add_enabled(can_save, egui::TextEdit::singleline(name).hint_text(hint).char_limit(LONGEST_NAME).desired_width(200.0));
         let entered = typed.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let save = ui.add_enabled(can_save && !name.trim().is_empty(), egui::Button::new("Save as preset"));
+        let save = ui.add_enabled(can_save && !name.trim().is_empty(), egui::Button::new(tr!(SaveAsPreset)));
         let known = presets.iter().any(|preset| preset.name.eq_ignore_ascii_case(name.trim()));
-        let save = save.on_hover_text(if known { "Keep what is picked now under this name, in the place of what was kept there" } else { "Keep what is picked now under this name, to pick it again later with one click" });
+        let save = save.on_hover_text(if known { tr!(KeepReplace) } else { tr!(KeepNew) });
         answer.save = can_save && !name.trim().is_empty() && (save.clicked() || entered);
     });
     ui.add_space(6.0);
@@ -191,16 +185,16 @@ fn preset_chip(ui: &mut Ui, name: &str, picks: usize, worn: bool) -> ChipAnswer 
         painter.line_segment([center + vec2(-arm, arm), center + vec2(arm, -arm)], stroke);
     }
     let mut forgotten = on_cross.clicked();
-    on_cross.on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Forget this preset. Your picks stay as they are.");
+    on_cross.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tr!(ForgetPresetHint));
     let used = response.clicked() && !forgotten;
-    let hint = if worn { "This is what is picked now. A right-click shares it." } else { "Pick this, in the place of what is picked now. A right-click shares it." };
+    let hint = if worn { tr!(PresetWorn) } else { tr!(PresetPick) };
     let mut shared = false;
     response.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(hint).context_menu(|ui| {
-        if ui.button("Share this preset").on_hover_text(SHARE_HINT).clicked() {
+        if ui.button(tr!(SharePreset)).on_hover_text(tr!(ShareHint)).clicked() {
             shared = true;
             ui.close();
         }
-        if ui.button("Forget this preset").clicked() {
+        if ui.button(tr!(ForgetPreset)).clicked() {
             forgotten = true;
             ui.close();
         }
@@ -209,10 +203,7 @@ fn preset_chip(ui: &mut Ui, name: &str, picks: usize, worn: bool) -> ChipAnswer 
 }
 
 fn count(picks: usize) -> String {
-    match picks {
-        1 => "1 pick".to_string(),
-        many => format!("{many} picks"),
-    }
+    tr!(PickCount, count = picks)
 }
 
 #[cfg(test)]

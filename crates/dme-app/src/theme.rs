@@ -146,14 +146,30 @@ pub fn heavy(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(HEAVY.into()))
 }
 
-pub fn install_fonts(ctx: &egui::Context) {
+pub fn install_fonts(ctx: &egui::Context, han: bool) -> bool {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("inter".into(), FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).into());
     fonts.font_data.insert("inter-heavy".into(), FontData::from_static(include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf")).into());
-    let behind = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let mut behind = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let windows = han.then(han_font).flatten().and_then(|path| std::fs::read(path).ok());
+    let had = windows.is_some();
+    if let Some(bytes) = windows {
+        fonts.font_data.insert("han".into(), FontData::from_owned(bytes).into());
+        behind.insert(0, "han".into());
+        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "han".into());
+    }
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "inter".into());
     fonts.families.insert(FontFamily::Name(HEAVY.into()), std::iter::once("inter-heavy".to_string()).chain(behind).collect());
     ctx.set_fonts(fonts);
+    had
+}
+
+const HAN_FONTS: [&str; 3] = ["msyh.ttc", "simsun.ttc", "Deng.ttf"];
+
+pub fn han_font() -> Option<std::path::PathBuf> {
+    let windows = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("WINDIR"))?;
+    let folder = std::path::Path::new(&windows).join("Fonts");
+    HAN_FONTS.iter().map(|name| folder.join(name)).find(|path| path.is_file())
 }
 
 pub fn apply(ctx: &egui::Context, theme: Theme) {

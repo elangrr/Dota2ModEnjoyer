@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use dme_core::draft::{Rank, Role, Style};
@@ -28,6 +29,12 @@ pub struct Settings {
     pub draft_role: Option<Role>,
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Style::is_default")]
     pub draft_style: Style,
+    #[serde(default, deserialize_with = "pool", skip_serializing_if = "Vec::is_empty")]
+    pub draft_heroes: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub draft_all_heroes: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 fn or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -37,6 +44,15 @@ where
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+fn pool<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut seen = BTreeSet::new();
+    let list: Vec<String> = or_default(deserializer)?;
+    Ok(list.into_iter().filter(|hero| seen.insert(hero.clone())).collect())
 }
 
 fn is_false(value: &bool) -> bool {
@@ -78,6 +94,9 @@ mod tests {
             draft_rank: Rank::Immortal,
             draft_role: Some(Role::Mid),
             draft_style: Style::Lane,
+            draft_heroes: vec!["npc_dota_hero_lina".to_string(), "npc_dota_hero_axe".to_string()],
+            draft_all_heroes: true,
+            language: Some("ru".to_string()),
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);
@@ -87,6 +106,18 @@ mod tests {
         assert_eq!(Settings::load(&path), Settings::default(), "missing fields take their defaults");
         std::fs::write(&path, b"nonsense").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
+    }
+
+    #[test]
+    fn a_pool_of_more_than_three_heroes_loads_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let five = ["npc_dota_hero_axe", "npc_dota_hero_invoker", "npc_dota_hero_lina", "npc_dota_hero_puck", "npc_dota_hero_zuus"];
+        std::fs::write(&path, format!(r#"{{"notice_accepted":true,"draft_heroes":{}}}"#, serde_json::to_string(&five).unwrap())).unwrap();
+        let settings = Settings::load(&path);
+        assert_eq!(settings.draft_heroes, five);
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).draft_heroes, five, "and is written back whole");
     }
 
     #[test]
@@ -110,5 +141,19 @@ mod tests {
         assert!(settings.notice_accepted && settings.tour_seen && settings.no_glass);
         assert_eq!(settings.seen_version.as_deref(), Some("0.2.3"));
         assert_eq!((settings.draft_rank, settings.draft_role), (Rank::default(), None));
+        assert!(settings.draft_heroes.is_empty() && !settings.draft_all_heroes, "a version without \"My heroes\" has none");
+    }
+
+    #[test]
+    fn the_hero_pool_is_kept_as_a_list_in_its_order_and_one_that_is_not_a_list_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"notice_accepted":true,"draft_heroes":["npc_dota_hero_lina","npc_dota_hero_axe","npc_dota_hero_lina"]}"#).unwrap();
+        let settings = Settings::load(&path);
+        assert_eq!(settings.draft_heroes, ["npc_dota_hero_lina", "npc_dota_hero_axe"], "in the order chosen, each once");
+        std::fs::write(&path, br#"{"notice_accepted":true,"draft_heroes":"lina"}"#).unwrap();
+        let settings = Settings::load(&path);
+        assert!(settings.notice_accepted && settings.draft_heroes.is_empty());
+        assert!(!String::from_utf8(serde_json::to_vec(&Settings::default()).unwrap()).unwrap().contains("draft_heroes"), "none is not written");
     }
 }

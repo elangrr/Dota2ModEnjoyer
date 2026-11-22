@@ -45,7 +45,7 @@ pub fn theme_switch(ui: &mut Ui) -> Option<Theme> {
     let day = theme::is_day();
     ui.painter().rect_filled(rect, CornerRadius::same(13), theme::text().gamma_multiply(if day { 0.08 } else { 0.10 }));
     let mut asked = None;
-    for (index, (look, icon, hint)) in [(Theme::Day, icons::Icon::Day, "The day look"), (Theme::Night, icons::Icon::Night, "The night look")].into_iter().enumerate() {
+    for (index, (look, icon, hint)) in [(Theme::Day, icons::Icon::Day, tr!(DayLook)), (Theme::Night, icons::Icon::Night, tr!(NightLook))].into_iter().enumerate() {
         let half = Rect::from_min_size(rect.min + vec2(2.0 + HALF.x * index as f32, 2.0), HALF);
         let response = ui.interact(half, egui::Id::unique("look switch").with(index), Sense::click());
         let on = (look == Theme::Day) == day;

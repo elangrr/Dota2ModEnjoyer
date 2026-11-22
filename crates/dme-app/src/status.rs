@@ -1,7 +1,5 @@
 use dme_core::engine::ModState;
 
-pub const TIP: &str = "A pick takes the place of a default item. If it does not show in Dota, unequip your own item in that slot there.";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Busy {
     Playing,
@@ -28,11 +26,9 @@ pub struct Facts {
     pub in_game: bool,
     pub reach_nobody: bool,
     pub half_undone: bool,
+    pub undone: bool,
+    pub steam_busy: bool,
 }
-
-pub const HALF_UNDONE: &str = "Dota was updated while your picks were in it. If it cannot find a match, close it, then press Play here.";
-
-pub const REACH_NOBODY: &str = "No hero gets your event effects or emblem yet. Pick something for a hero, or give them to every hero.";
 
 impl Facts {
     pub fn sentence(&self) -> (Tone, String) {
@@ -41,52 +37,57 @@ impl Facts {
         let warn = |text: &str| (Tone::Warn, text.to_string());
 
         match self.busy {
-            Some(Busy::Playing) if self.picks == 0 => return plain("Getting normal Dota ready…"),
-            Some(Busy::Playing) => return plain("Putting your picks in the game…"),
-            Some(Busy::Restoring) => return plain("Going back to normal Dota…"),
+            Some(Busy::Playing) if self.picks == 0 => return plain(tr!(GettingNormalReady)),
+            Some(Busy::Playing) => return plain(tr!(PuttingPicksIn)),
+            Some(Busy::Restoring) => return plain(tr!(GoingBackToNormal)),
             None => {}
         }
         if !self.loaded {
-            return if self.load_failed { warn("Your game's files could not be read.") } else { plain("Reading your game's files…") };
+            return if self.load_failed { warn(tr!(FilesNotRead)) } else { plain(tr!(ReadingFiles)) };
         }
         if self.starting {
-            return good("Dota 2 is starting…");
+            return good(tr!(DotaStarting));
         }
         let ours_in_game = matches!(self.mods, ModState::On | ModState::NeedsRepair(_));
+        let to_put_back = self.undone && self.picks > 0;
         if self.running {
-            return if self.half_undone {
-                warn(HALF_UNDONE)
+            return if self.half_undone && to_put_back {
+                warn(tr!(HalfUndonePutBack))
+            } else if self.half_undone {
+                warn(tr!(HalfUndone))
+            } else if to_put_back {
+                warn(tr!(UndoneRunning))
             } else if self.picks == 0 && ours_in_game {
-                warn("Dota 2 is running. Close it, then press Play for normal Dota.")
+                warn(tr!(RunningCloseForNormal))
             } else if self.picks == 0 {
-                plain("Dota 2 is running.")
+                plain(tr!(Running))
             } else if self.in_game {
-                good("Dota 2 is running with your picks.")
+                good(tr!(RunningWithPicks))
             } else {
-                warn("Dota 2 is running. Close it, then press Play to use your new picks.")
+                warn(tr!(RunningCloseForNew))
             };
         }
         if matches!(self.mods, ModState::ChangedByOther(_)) {
-            return warn("Another program has changed Dota's files. In Steam, verify the game's files, then try again.");
+            return warn(tr!(ChangedByOther));
+        }
+        if to_put_back {
+            return if self.steam_busy { plain(tr!(Updating)) } else { plain(tr!(PuttingBack)) };
         }
         if self.picks == 0 {
             return match (self.away, ours_in_game) {
-                (true, false) => plain("Dota 2 is back to normal. Your picks are put away."),
-                (true, true) => plain("Your picks are put away. Press Play for normal Dota."),
-                (false, false) => plain("Pick something for a hero or for the world, then press Play."),
-                (false, true) => plain("You have no picks. Press Play for normal Dota."),
+                (true, false) => plain(tr!(BackToNormalAway)),
+                (true, true) => plain(tr!(AwayPressPlay)),
+                (false, false) => plain(tr!(PickSomething)),
+                (false, true) => plain(tr!(NoPicksPressPlay)),
             };
         }
         if self.reach_nobody {
-            return warn(REACH_NOBODY);
+            return warn(tr!(ReachNobody));
         }
         if self.in_game {
-            return good("Your picks are in the game. Press Play.");
+            return good(tr!(PicksInGame));
         }
-        match self.picks {
-            1 => plain("1 pick is ready. Press Play to see it in Dota."),
-            many => (Tone::Plain, format!("{many} picks are ready. Press Play to see them in Dota.")),
-        }
+        (Tone::Plain, tr!(PicksReady, count = self.picks))
     }
 
     pub fn badge(&self) -> Option<(Tone, &'static str)> {
@@ -95,37 +96,44 @@ impl Facts {
         }
         let ours_in_game = matches!(self.mods, ModState::On | ModState::NeedsRepair(_));
         Some(match (&self.mods, self.picks, self.in_game) {
-            (ModState::ChangedByOther(_), ..) => (Tone::Warn, "Needs attention"),
-            _ if self.half_undone && self.running => (Tone::Warn, "Needs attention"),
-            (_, 0, _) if ours_in_game => (Tone::Warn, "Old picks in the game"),
-            (_, 0, _) => (Tone::Plain, "Normal Dota"),
-            (_, _, true) => (Tone::Good, "Mods on"),
-            (_, _, false) => (Tone::Warn, "Not in the game yet"),
+            (ModState::ChangedByOther(_), ..) => (Tone::Warn, tr!(BadgeAttention)),
+            _ if self.half_undone && self.running => (Tone::Warn, tr!(BadgeAttention)),
+            _ if self.updating() => (Tone::Plain, tr!(BadgeUpdating)),
+            (_, 0, _) if ours_in_game => (Tone::Warn, tr!(BadgeOldPicks)),
+            (_, 0, _) => (Tone::Plain, tr!(BadgeNormal)),
+            (_, _, true) => (Tone::Good, tr!(BadgeOn)),
+            (_, _, false) => (Tone::Warn, tr!(BadgeNotYet)),
         })
     }
 
     pub fn tip(&self) -> Option<&'static str> {
         let pressing = matches!(self.mods, ModState::ChangedByOther(_)) || self.reach_nobody;
-        (self.loaded && self.picks > 0 && !pressing).then_some(TIP)
+        (self.loaded && self.picks > 0 && !pressing).then_some(tr!(Tip))
     }
 
     pub fn working(&self) -> bool {
         self.busy.is_some() || !(self.loaded || self.load_failed)
     }
 
+    fn updating(&self) -> bool {
+        self.undone && self.picks > 0 && self.steam_busy && !self.running
+    }
+
     pub fn can_play(&self) -> bool {
-        self.loaded && self.busy.is_none() && !self.starting && !self.running
+        self.loaded && self.busy.is_none() && !self.starting && !self.running && !self.updating()
     }
 
     pub fn play_label(&self) -> &'static str {
         if self.busy == Some(Busy::Playing) {
-            "Working…"
+            tr!(PlayWorking)
         } else if self.starting {
-            "Starting…"
+            tr!(PlayStarting)
         } else if self.running {
-            "Dota is running"
+            tr!(PlayRunning)
+        } else if self.updating() {
+            tr!(PlaySteamUpdating)
         } else {
-            "Play"
+            tr!(Play)
         }
     }
 
@@ -134,7 +142,7 @@ impl Facts {
     }
 
     pub fn switch_label(&self) -> &'static str {
-        if self.brings_back() { "Bring back my picks" } else { "Back to normal Dota" }
+        if self.brings_back() { tr!(BringBack) } else { tr!(BackToNormal) }
     }
 
     pub fn can_switch(&self) -> bool {
@@ -143,19 +151,21 @@ impl Facts {
         } else if self.brings_back() {
             true
         } else {
-            !self.running && (self.picks > 0 || self.mods != ModState::Off)
+            !self.running && !self.updating() && (self.picks > 0 || self.mods != ModState::Off)
         }
     }
 
     pub fn why_no_switch(&self) -> &'static str {
         if self.running {
-            "Close Dota 2 first."
+            tr!(NoSwitchRunning)
         } else if self.starting {
-            "Dota 2 is starting."
+            tr!(NoSwitchStarting)
         } else if self.busy.is_some() {
-            "Wait until this is done."
+            tr!(NoSwitchBusy)
+        } else if self.updating() {
+            tr!(NoSwitchUpdating)
         } else {
-            "Dota 2 is as Valve ships it."
+            tr!(AsValveShips)
         }
     }
 }
@@ -177,6 +187,8 @@ mod tests {
             in_game: false,
             reach_nobody: false,
             half_undone: false,
+            undone: false,
+            steam_busy: false,
         }
     }
 
@@ -184,7 +196,7 @@ mod tests {
     fn dota_running_with_what_an_update_left_half_undone_is_told_to_close() {
         let half = ModState::NeedsRepair(dme_core::engine::UNDECLARED.to_string());
         let running = Facts { running: true, picks: 3, mods: half.clone(), half_undone: true, ..facts() };
-        assert_eq!(running.sentence(), (Tone::Warn, HALF_UNDONE.to_string()));
+        assert_eq!(running.sentence(), (Tone::Warn, tr!(HalfUndone).to_string()));
         assert_eq!(running.badge(), Some((Tone::Warn, "Needs attention")));
         assert!(!running.can_play() && !running.can_switch(), "nothing is written while Dota runs");
         let closed = Facts { running: false, ..running };
@@ -193,10 +205,32 @@ mod tests {
     }
 
     #[test]
+    fn the_picks_that_an_update_took_out_are_said_to_go_back_in() {
+        let half = ModState::NeedsRepair(dme_core::engine::UNDECLARED.to_string());
+        let undone = Facts { picks: 3, mods: half, half_undone: true, undone: true, ..facts() };
+        let running = Facts { running: true, ..undone.clone() };
+        assert_eq!(running.sentence(), (Tone::Warn, tr!(HalfUndonePutBack).to_string()));
+        assert_eq!(running.badge(), Some((Tone::Warn, "Needs attention")));
+        assert!(!running.can_play() && !running.can_switch());
+        let whole = Facts { mods: ModState::NeedsRepair("x".into()), half_undone: false, ..running };
+        assert_eq!(whole.sentence(), (Tone::Warn, tr!(UndoneRunning).to_string()));
+        let updating = Facts { steam_busy: true, ..undone.clone() };
+        assert_eq!(updating.sentence(), (Tone::Plain, tr!(Updating).to_string()));
+        assert_eq!(updating.badge(), Some((Tone::Plain, "Dota updating")));
+        assert!(!updating.can_play() && updating.play_label() == "Steam is updating");
+        assert!(!updating.can_switch() && updating.why_no_switch() == "Wait until Steam has updated Dota.");
+        assert_eq!(undone.sentence(), (Tone::Plain, tr!(PuttingBack).to_string()));
+        assert!(undone.can_play());
+        assert_eq!(Facts { busy: Some(Busy::Playing), ..undone.clone() }.sentence().1, "Putting your picks in the game…");
+        let away = Facts { picks: 0, away: true, running: true, ..undone };
+        assert_eq!(away.sentence(), (Tone::Warn, tr!(HalfUndone).to_string()));
+    }
+
+    #[test]
     fn effects_that_go_on_no_hero_are_not_called_ready() {
         let nobody = Facts { picks: 2, reach_nobody: true, ..facts() };
-        assert_eq!(nobody.sentence(), (Tone::Warn, REACH_NOBODY.to_string()));
-        assert_eq!(Facts { in_game: true, mods: ModState::On, ..nobody.clone() }.sentence(), (Tone::Warn, REACH_NOBODY.to_string()));
+        assert_eq!(nobody.sentence(), (Tone::Warn, tr!(ReachNobody).to_string()));
+        assert_eq!(Facts { in_game: true, mods: ModState::On, ..nobody.clone() }.sentence(), (Tone::Warn, tr!(ReachNobody).to_string()));
         assert!(nobody.can_play(), "Play still puts the rest in the game");
         assert_eq!(nobody.tip(), None, "unequipping an item of one's own would not help");
         assert_eq!(Facts { busy: Some(Busy::Playing), ..nobody.clone() }.sentence().1, "Putting your picks in the game…");
@@ -321,8 +355,8 @@ mod tests {
     #[test]
     fn the_tip_is_there_while_there_are_picks_to_show() {
         assert_eq!(facts().tip(), None);
-        assert_eq!(Facts { picks: 1, ..facts() }.tip(), Some(TIP));
-        assert_eq!(Facts { picks: 1, running: true, mods: ModState::On, ..facts() }.tip(), Some(TIP));
+        assert_eq!(Facts { picks: 1, ..facts() }.tip(), Some(tr!(Tip)));
+        assert_eq!(Facts { picks: 1, running: true, mods: ModState::On, ..facts() }.tip(), Some(tr!(Tip)));
         assert_eq!(Facts { picks: 1, loaded: false, ..facts() }.tip(), None);
     }
 }

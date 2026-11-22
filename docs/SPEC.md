@@ -1196,12 +1196,13 @@ do not vouch for. As a match was looked for so, a player was stopped by "Valve A
 unable to verify that your machine is secure", until Steam verified the files. So the app,
 whenever it finds the game so, Dota is not running and Steam is done with Dota's files
 (`StateFlags` 4 in Steam's `appmanifest_570.acf` beside the game; a copy of the game without
-that file has no Steam to wait for), puts it back to
-normal by itself (3.7), keeps the picks, and says so: Play puts them back in. It does that
+that file has no Steam to wait for), puts the picks back in by itself (3.27). Where there are
+no picks in use, or they are put away, or putting them back did not work, it puts the game back
+to normal instead (3.7), keeps the picks, and says so: Play puts them back in. It does that
 once, until the game is found otherwise. While the app is open it looks at the files again
-every 9 seconds, for an update that comes meanwhile. While Dota runs so, the bar at the bottom
-says to close it and press Play. A window that only has its picture taken does it only to a
-copy of the game it is pointed to (`--dota`).
+every 9 seconds, for an update that comes meanwhile. While Dota runs so, nothing is written,
+and the bar at the bottom says to close it if it cannot find a match. A window that only has
+its picture taken does either only to a copy of the game it is pointed to (`--dota`).
 
 An update also changes the game's archive under an app that is open. The app holds the
 archive's list of files in memory and reads the files themselves from disk as they are asked
@@ -1332,7 +1333,8 @@ says in two or three words whether the game has the picks: "Mods on", "Not in th
 - "Draft" on the left side opens the draft helper (5). `--open draft` shows it in a picture.
 - "Builds" on the left side opens the build helper (6). `--open builds:axe:offlane` shows
   the build of a hero in a role in a picture, and `--open builds` the page with no hero.
-- "Settings" on the left side opens the settings page, with: which heroes get the effects of events
+- "Settings" on the left side opens the settings page, with: the language of the window (3.28);
+  which heroes get the effects of events
   and an emblem (3.21), as every hero, the heroes picked for, or heroes chosen from a list;
   Low-end PC mode (3.18); "Update automatically" (4.2), off by default; where Dota is and where
   the app keeps the picks, its settings and the backups; and the version and license.
@@ -1368,7 +1370,7 @@ Dota2ModEnjoyer.exe --screenshot out.png [--size 1180x760] [--open hero:axe:weap
                     [--click X,Y] [--right-click X,Y] [--rest X,Y] [--type TEXT] [--scroll X,Y,DOWN] [--wait SECONDS] ...
                     [--dota FOLDER] [--data-dir FOLDER] [--no-start] [--ignore-running]
                     [--update-from MANIFEST] [--pretend-version VERSION] [--no-restart]
-                    [--numbers-from FILE]
+                    [--numbers-from FILE] [--game-language LANGUAGE]
 ```
 
 Steps are taken in the order given, each once the window has come to rest. `--rest` leaves the
@@ -1379,7 +1381,9 @@ the steps up, so that a picture can show how far it has come; the start of it do
 Dota. `--ignore-running` writes even while Dota runs and only works together with `--dota`: it
 is for a copy of the game. `--update-from`, `--pretend-version` and `--no-restart` are for
 trying the app's own updates (4.5). `--numbers-from` says where the Draft page fetches its
-numbers (5.4), and the Builds page its builds from beside them (6.4).
+numbers (5.4), and the Builds page its builds from beside them (6.4). `--game-language` names
+the game's language to take the names of heroes and items from, in the place of the window's
+(3.28).
 
 A window that only has its picture taken leaves the clipboard and the browser alone: what it
 would copy is written to `copied.txt` in its data folder, and an address it would open to
@@ -1953,6 +1957,106 @@ such as standing still may start again on the other now and then. ArdysaModsTool
 so, and that it rebuilds such bodies with Valve's tools to avoid it; that is not done here.
 **(to confirm in a match)**
 
+### 3.27 The picks put back in after a Dota update
+
+Steam updates Dota by itself, and an update undoes what Play did: half of it (3.12), or, where
+Valve changed `gameinfo_branchspecific.gi` too, all of it but the package, which nothing loads
+then. Either way the picks no longer show. `Status::undone_by_an_update` says so of a game that
+is half undone, or that is not set up to load the package while `state.json` has picks put in
+for another build than the one in `steam.inf`. A game whose files Steam verified is of the
+build the picks were put in for, and is not taken for one: the player wanted normal Dota.
+
+Found so, the app puts the picks back in by itself (`Engine::mend`, `Job::Mend`), as soon as
+all of this holds:
+
+- Dota is not running, and Steam is done with Dota's files (3.12). Both are looked at again by
+  `Engine::mend` itself, right before it writes, and Play looks at the first again before the
+  first write (3.9).
+- There are picks in use: not none, and not put away.
+- What can be picked was read from the new build (3.12, `read_again_after_an_update`), and the
+  picks were settled against it, so that one the update took away is taken off and said first.
+- It was tried fewer than two times for this build.
+
+It does what Play does to the files: the package made anew from the new build's archive, both
+game files edited, and the new build's own files backed up first under the new build, so that
+going back to normal gives back the bytes of the new build's files. Dota is not started. The bar
+says "Dota was updated. Your picks are back in."
+
+Where it does not work, the game is put back to normal (3.7), so that it is never left half
+undone, and the player is told in one sentence, with "Copy details": the app could not put the
+picks back in, so it put Dota back to normal; Play tries again. Where going back to normal does
+not work either, it is tried once more, then the game is put back to normal as in 3.12, once.
+Where the new build's files cannot be read, the game is put back to normal as in 3.12.
+
+Until then the bar says what is going on: while Steam is busy, "Steam is updating Dota. Your
+picks go back in once it is done.", the badge "Dota updating", and Play waits; once it is done,
+that the picks go back in in a moment. A player who started Dota from Steam before the app could
+put them back plays without them, half undone or not: nothing is written while Dota runs, the
+bar says to close it if it cannot find a match, and the app puts the picks back in once it is
+closed, so that the next start, from Steam or with Play, has them. The app has to be open for
+any of this; one that is opened later does it as it starts. `dme status` says when a game is
+undone by an update, and when Steam is busy with its files.
+
+### 3.28 Languages
+
+The window speaks English and Russian; a language is one file more (below). At the first start
+it speaks the first language Windows is set to show its own texts in (`GetUserPreferredUILanguages`,
+as `ru-RU`) that the app has and can show, and English where there is none. The choice is kept in
+`settings.json` (`"language": "ru"`), and a settings file without it is a first start. Settings
+has a chooser at its top, each language written in itself ("English", "Русский"). A choice
+there changes the window at once, without starting again: every text is looked up as it is drawn.
+
+**Where the texts are.** Every sentence the window shows is in `crates/dme-app/src/lang/`. `en.rs`
+gives each text a key and its English, which is the source and the fallback; `ru.rs` and the
+like give the same keys in their language. A text a language does not have is said in English.
+A text can have places in braces: `{hero}` takes a value as it is, and `{count|pick|picks}` the
+form of a word that goes with the number `count`, in the order of the language's forms: English
+has two (one, more), Russian three (1, 21; 2 to 4, 22 to 24; the rest), Chinese one. A sentence
+that is put together from parts is one text with places, so that each language orders its words
+and forms its plurals as it does: "Good against {heroes}.", "{count} {count|day|days} old".
+Numbers with a fraction are written with the language's mark before the fraction ("52.3%",
+"52,3%"). A test names every text a language lacks or has twice, every place a translation
+lost or made up, and every place with another number of forms than the language has.
+
+The engine knows nothing of the window. It says what happened in kinds, which
+`lang/words.rs` turns into words: an error as `Error::plain_kind` (a file another program
+holds, a full disk, Dota running, Dota not found, Steam not found, a game file changed by
+something else, missing models; anything else as the engine says it, in English), what going
+back to normal left as it was (`engine::Note`), why a text is not a share code, roles, ranks,
+attributes, and the words the catalog puts around the game's names (`catalog::Words`: "Persona
+Weapon", "Blade Fury effects", "Level 2", "No emblem").
+
+**What stays English, on purpose:** the command-line tool `dme`; what "Copy details" copies and
+what "Report" writes into a public issue on GitHub, title and all (the maintainer reads them);
+`CHANGELOG.md` and the entries of what is new (the sheet's title, line and button are in the
+player's language); and the details of errors and logs. The update's own notes, which the
+maintainer writes, are said as they are.
+
+**The game's names.** Heroes, items, sets, styles, slots, rarities, abilities, talents and gems
+are named as the game names them in the window's language: from `resource/localization/
+<file>_<language>.txt` (`items`, `dota`, `abilities`), with the game's name of the language
+(`english`, `russian`, `schinese`, `spanish`, `latam`, `brazilian`), and from the English
+files name by name where those lack one (2.8). The Russian game keeps most names of heroes,
+items and abilities in English; its slots, talents and some items have Russian ones. The game's
+names are read again when the language changes. Typing finds a hero, an item or a set by its name
+in the window's language and by its English name (`Catalog::english`; a hero has its English
+name among its other names). An event's effect of a Dota item is named by the game's name of
+that item, in any language but English.
+
+**Fonts.** Inter (`assets/fonts`) has every letter of English, Russian, Spanish and Portuguese.
+Chinese characters it has not, and the app brings no font for them: where a language needs them
+(`Letters::Han`), a font Windows itself has is put behind Inter, read from the Windows fonts
+folder, which is found through the environment (`SystemRoot`): Microsoft YaHei (`msyh.ttc`), or
+else SimSun or DengXian. It is read only when it is needed. A language whose letters no font on
+the computer can show is not offered, nor started in. `--game-language schinese` shows the game's
+names of another language than the window's, with the font that language needs: that is how the
+Chinese names were seen before the app had a word of Chinese.
+
+**Adding a language** (also in `docs/DEVELOPING.md`): copy `lang/ru.rs` to `lang/<code>.rs`,
+give it its code, its name in itself, the names Windows gives it, the game's name of it, its
+forms and its mark before a fraction, and put it on its own line in `languages!` in
+`lang/mod.rs`. Translate every text; `cargo test -p dme-app lang` names what is still missing.
+
 ## 4. The app updating itself
 
 The app can put a newer version of itself in the place of its own program file. Nothing of
@@ -2197,6 +2301,7 @@ repository on GitHub, at the address `NUMBERS_URL` in `crates/dme-core/src/draft
 | `lanes` | How lanes go, for each of the four pairs of ranks. Files made before 0.3.1 have none, and versions before it leave it alone |
 | `played`, `won`, `drawn` | In `lanes`, for each of the five roles, how often each hero met a hero of the other team in its lane in that role, and how many of those lanes it won and how many ended even |
 | `against`, `with` (in `lanes`) | For each of the five roles, for each hero, a number for each other hero: by how much more often the hero came out of its lane ahead against that hero, or beside it on its own team, than expected, in tenths of a percent |
+| `weekly` | The newest whole week of the ones added up and the week before it, each by itself (5.7): `weeks`, when the two began, the newest first, and `ranks`, for each of the eight ranks the two weeks' `played` and `won`, as in `ranks`. Files made before 0.5.0 have none, versions before it leave it alone, and a version that finds it of another shape leaves it out and reads the rest |
 
 A lane is counted once for every hero of the other team met in it, so a carry who met an
 offlaner and a soft support counts it twice, once against each. A lane is won, lost or even
@@ -2232,7 +2337,7 @@ than the newest: "7.41f", or "7.41f and 7.42" for a week a patch came out in. Th
 builds names the newest patch, which STRATZ counts builds over. It asks STRATZ about sixty questions, each for all heroes at once, with a token that
 it reads from the environment variable `STRATZ_TOKEN`. The token is never written anywhere.
 `python publish/make_numbers.py --check` tries the sums on made-up numbers. The maker writes
-no file larger than the 4 MB the app takes (5.4). With the lanes the file is about 2.1 MB.
+no file larger than the 4 MB the app takes (5.4). With the lanes and the weeks apart the file is about 2.2 MB.
 
 STRATZ's lanes come from its `laneOutcome`, asked for each role of the first hero by
 `positionIds`. Its answer names every row's position and rank as the first ones there are,
@@ -2307,15 +2412,22 @@ had it the role this one had, so a team has each role once. The place of the pla
 with the role the player chose is the player's own. Its drawing is on the app's colour, and
 the place says "You" where there is room.
 
-Under the teams is the list. It is for the place that is being filled, whichever team's. It
-has the heroes of that place's role (5.2), with that place's team as the team and the other
+Under the teams is the list. It is for the place that is being filled, whichever team's,
+with one exception: while no place has a hero and the player has not clicked a place, it is
+for the player's own place, so that the best heroes this week (5.7) are those of "My role" and
+change with it at once. Typing still fills the enemy's first place first. The list's title
+says whose place it is for: "Best heroes this week for you, in mid", "Heroes for the enemy's
+carry". The list has the heroes of that place's role (5.2), with that place's team as the team and the other
 as the enemy, so for a place of the enemy it shows what does best for them. Each line has the
 hero, its points, and what speaks for and against it in words, with the picked heroes that
 add or take the most. What a hero adds is green and what it takes is red, in the words and
 in the points, and so is the share of its matches a hero wins, green above half and red
-below. A click on a line does what typing the hero's name does. It puts the
-hero in the place that is being filled and goes on to the next free one. The cross at its end takes the hero out of the list until "New
-draft", for a hero that is banned or that the player does not play.
+below. A click on a line puts the hero in the place the list is for. Where that is the place
+being filled, it does what typing the hero's name does and goes on to the next free one;
+before the first pick, when it is the player's own place, the place being filled stays the
+next. The cross at its end marks the hero banned (5.6). The three best heroes of a list for a
+place of the player's team have "Suggest to my team" (5.8). A hero the player does not play is
+left out by the hero pool (5.5).
 
 Once all ten places have a hero, the page says which draft is better (5.2), small, at the
 right end of the line of the two lists, over the teams. A bar is shared by the two teams by
@@ -2347,6 +2459,82 @@ made while the environment variable `DME_NUMBERS_TRIAL` holds such a place fetch
 there in the place of the built-in address, with no option, the way `DME_UPDATE_TRIAL` does
 it for updates (4.5). That is for a build somebody is to try before the files are put out.
 `publish/release.ps1` builds with neither of the two set.
+
+### 5.5 My Hero Pool
+
+The hero pool is the heroes the player plays, chosen in Settings under "My Hero Pool" and kept
+in `settings.json` as the names the game's files know them by, in the order they were chosen,
+each once (`draft_heroes`; the build of 2026-11-22 wrote it as a set, which is read as it is).
+The part has three places to begin with, and a box "More" adds one place at a time, up to ten.
+A saved pool of any size shows whole, with as many places as it has heroes. A click on a place
+opens a box to type in under the places, with the heroes whose names fit, by their name in the
+window's language or in English, each with its picture; a click on one, or Enter for the first,
+puts it in the place, in the place of the hero there if there is one. A hero already in the
+pool is not offered. A cross on a hero takes it out and leaves its place empty, and a cross on
+an empty place beyond the third takes the place away. Empty places are not kept. Escape and
+"Cancel" end the search.
+
+The pool has to do with the player's own place, and with no role chosen with every place of the
+player's team. There the list has the pool alone, those of its heroes that are played in the
+place's role, and a switch of two halves beside its title, "My heroes" and "All heroes",
+whose choice is kept in `settings.json` too (`draft_all_heroes`). Where none of them is
+played in the role, the list has every hero and says so. The enemy's places and the places
+of the player's team mates have every hero, as before. A hero the player does not play is
+so for good, and a banned one for one draft (5.6): the two are kept apart. Where the pool is
+empty, quiet words beside the title of such a list, or under it in a narrow window, say
+"Add the heroes you play in Settings: My Hero Pool", and a click on them opens Settings at
+that part.
+
+### 5.6 Bans
+
+Ranked matches ban heroes before any is picked, so there is no enemy to go by. While no
+place has a hero, a line under the teams names three heroes to nominate for a ban. Each gets
+points:
+
+1. Its own share of wins less 50 in the player's rank, in all roles together, believed by
+   `n / (n + 400)` as in 5.2.
+2. Plus the middle of its numbers in `against` for the heroes it is to be kept from. Those are
+   the heroes of the pool that are played in the player's role, or all of them where none are.
+   Without a pool, they are the heroes played in the player's role, each counted as often as it
+   is played there. Without either, nothing is added.
+
+Neither the heroes of the pool nor the three best of the player's own list (5.8) are
+named to ban, nor a hero that is banned already. A click on one marks it banned. So does the
+cross on a hero of the list, "Ban" beside the heroes that fit what is typed, which bans the
+first of them, and "Ban" in the menu of a right click on one of them. A banned hero is in no
+list and leaves any place it had. It stands in the same line, crossed out, and a click on it
+takes the ban off; so does putting it in a place. "New draft" takes every ban off.
+
+### 5.7 Rising and falling
+
+With no place filled, the list for Team composition is of the heroes that win most in the
+role and rank, and is called "Best heroes this week" with whose place it is for and its role:
+the player's own, with the role chosen in "My role" (5.3). The file is made once a
+week from the weeks since the patch (5.1), so that is this week's list.
+
+Where the file has `weekly`, a hero of the list is rising or falling where its share of wins
+in the place's role went up or down from the week before to the newest week by at least 1
+percent of matches and by at least twice what luck alone moves it by in so many matches,
+`100 * sqrt(p(1-p)(1/n1 + 1/n0))`, where `p` is its share over both weeks and `n1` and `n0` are
+its matches in each. A hero played fewer than 100 times in one of the two is neither. Such a
+hero has "Rising" in green or "Falling" in red beside its name, with a small triangle, in
+Team composition however much is picked, and its tooltip says its share in each week. The
+maker takes the two weeks from the same answers it adds the weeks up from, and asks STRATZ
+nothing more for them. They add about 90 KB to the file.
+
+### 5.8 Suggest to my team
+
+The three best heroes of a list for a place of the player's team, as it is shown (with the
+pool and the bans), have a button "Suggest to my team" on their line, before the points. It
+copies one line for Dota's chat with the hero's name as the app shows it: "Outworld Destroyer
+is a good pick against the enemy" once the enemy has a hero, and before that, when "against
+the enemy" would not be true, the role of the list: "Outworld Destroyer is a good pick in
+mid". A line of the list narrower than 720 points has a small speech bubble in the place of
+the words, which say what it does while the pointer rests on it. A click on the button does
+not put the hero in a place. Lists for the enemy's places have no such button. The line is
+copied the way "Copy details" is, so that a window that is only there to have its picture
+taken writes it to `copied.txt` in its data folder and leaves the clipboard alone, and a
+message says what was copied and that it is pasted in Dota's chat with Ctrl+V.
 
 ## 6. The build helper
 
@@ -2572,3 +2760,74 @@ player's role, the role it is played in most is shown.
 `builds.json` is fetched and kept as `draft.json` is (5.4), when the Builds page is first
 opened, and takes no more than 8 MB. `--numbers-from` names where `draft.json` is fetched
 from, and `builds.json` is fetched from beside it.
+
+### 6.5 Neutral items
+
+What pros take of neutral items is in `builds.json` too, under a key of its own, `neutrals`.
+The file stays of format 2: the apps of 0.4.3 and before pass over a key they do not know, as
+the shape of the file that they read (`File` in `builds.rs`) does not refuse one. The app of
+this version reads the part apart from the rest, and where it is not of the shape below, reads
+the file without it.
+
+```json
+"neutrals": {
+  "source": "OpenDota", "patch": "7.42", "matches": 50,
+  "names": ["item_pogo_stick", "item_enhancement_alert", "item_brick"],
+  "heroes": {
+    "npc_dota_hero_slark": [
+      [0, 9, [[1, 9, 0, [[0, 4]], [[1, 6]]], [2, 9, 0, [[2, 2]], [[1, 7]]]]],
+      [5, 13, [[1, 13, 0, [[0, 4]], [[1, 8]]]]]
+    ]
+  }
+}
+```
+
+| Key | Holds |
+|---|---|
+| `source`, `patch`, `matches` | Whose numbers, the patch whose pro matches they are of, and how many |
+| `names` | The trinkets and enhancements, by the names the game's files know them by. The rest names them by their place here |
+| `heroes` | For each hero, the role (0 to 4, or 5 for every role together), how many pros played it so, and its tiers. A tier is its number, how many of those pros made something of it, how many of them kept the trinket they had and took only a new enhancement, the trinkets and the enhancements taken, each with how many took it, the most taken first |
+
+**From the newest patch alone.** A patch changes the trinkets of each tier: 7.42 brought the
+Red Ledger, the Vile Phial, the Brick and the Balmhook, and made Revenant's Brooch a trinket of
+tier 3. So, unlike what pros buy (6.1), what they take of neutral items is counted in the pro
+matches of the newest patch alone, though they are few in its first weeks (50 on the fourth
+day of 7.42, about 20 more each day). The maker asks OpenDota once, in SQL. The newest patch
+is that of OpenDota's newest pro match, in its table `match_patch`, which names each pro
+match's patch by when it was played ("7.42", without the letters of the small patches after
+it): STRATZ named 7.42 only days after it came out. STRATZ is not asked: its numbers of
+neutral items were empty, and its single matches had neither the new trinkets nor any
+enhancement.
+
+A pro match has, for each player, what was made at each tier (`neutral_item_history`), in
+order: the first of tier 1, the second of tier 2, and so on, each with the trinket and the
+enhancement. One without a trinket kept the one before. What comes after the fourth is made
+again at tier 4 and is not counted. OpenDota calls the Defiant Shell `guardian_shell`, and the
+maker gives it the game's name. The roles are told apart as for what pros buy (6.1).
+
+A hero in a role is said where at least 8 pros played it so, as for what pros buy. For the
+other roles, the hero in every role together is said, where at least 8 pros played it at all.
+A tier is said where at least 5 of them made something of it, and a trinket or an enhancement
+where at least 15 of 100 of those, and two at the least, took it: three trinkets and two
+enhancements of each tier at the most. On the fourth day of 7.42, 12 heroes in a role had
+their own and 24 heroes one of every role. The part had 6,169 bytes then. With every hero in
+every role it would come to some hundreds of thousands, far inside the 8 MB the file may have.
+
+What the app shows of it goes by the game's own file of neutral items,
+`scripts/npc/neutral_items.txt`: its tiers (`neutral_tiers`), the minute each opens
+(`start_time`), its trinkets (under `item_pools`, in pools of three) and its enhancements
+(under `enhancements`, by the hero's attribute and for every hero). Of what pros took, only
+what the game has in that tier is shown: what a patch took out of a tier or moved to another
+is left out, and a tier with nothing left is not shown. Where the game's file cannot be read,
+nothing is. The names and pictures are those of items (6.2). The game has the names of some
+hundreds of items, the neutral items among them, under the name with `:n` after it, as
+`DOTA_Tooltip_Ability_item_pogo_stick:n`, "Tumbler's Toy": the app looks there too.
+
+On the page, the line "Neutral items" is between the other items and the skills. Under its
+name, how many pros and the patch, and "in any role" where the pros are of every role. For each
+tier, "Tier 2" and the minute it opens, then the trinkets most taken and the enhancement most
+taken, each with how many of 100 of those who got as far took it. Resting the pointer on them
+says how many pros, in which role and patch. Where the tiers do not fit, the pictures are
+smaller (6.3). A hero that too few pros played has no such line, and the page is as before.
+The page's foot names the pro matches they are from. `dme dev builds` says what of them the
+game has no name or picture for, and what is not in the tier the game has it in.

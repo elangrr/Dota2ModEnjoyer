@@ -31,7 +31,7 @@ pub fn effects(dota: &DotaInstall) -> Result<()> {
     let archive = Archive::open(&dota.game_archive())?;
     let bytes = archive.read(ITEMS_GAME)?.with_context(|| format!("{ITEMS_GAME} is not in the game's archive"))?;
     let game = ItemsGame::parse(&bytes)?;
-    let names = catalog::read_names(&archive);
+    let names = catalog::read_names(&archive, "english");
     let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
 
     let (hero_slots, hero_files) = hero_slots(&archive)?;

@@ -18,6 +18,8 @@ const ENOUGH_IN_A_ROLE: u64 = 100;
 const PERCENT_TO_A_STEP: f64 = 25.0;
 const PARTNER_WEIGHT: f32 = 0.5;
 const SUPPORT_WEIGHT: f32 = 0.5;
+const TREND_LEAST: f32 = 1.0;
+const TREND_SURE: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -166,6 +168,27 @@ struct File {
     pairs: Vec<Pairs>,
     #[serde(default)]
     lanes: Vec<Lanes>,
+    #[serde(default)]
+    weekly: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct Weekly {
+    ranks: Vec<[Played; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Trend {
+    pub now: f32,
+    pub before: f32,
+    pub way: Way,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Way {
+    Rising,
+    Falling,
+    Level,
 }
 
 #[derive(Deserialize)]
@@ -200,6 +223,7 @@ pub struct Numbers {
     ranks: Vec<Played>,
     pairs: Vec<Pairs>,
     lanes: Vec<Lanes>,
+    weekly: Vec<[Played; 2]>,
 }
 
 impl std::fmt::Debug for Lanes {
@@ -270,12 +294,71 @@ impl Numbers {
                 return Err(wrong("a table of the lanes does not fit the list of heroes"));
             }
         }
+        let weekly = file.weekly.and_then(|weekly| serde_json::from_value::<Weekly>(weekly).ok()).map(|weekly| weekly.ranks).filter(|ranks| ranks.len() == Rank::ALL.len() && ranks.iter().flatten().all(|week| by_role(&week.played) && by_role(&week.won))).unwrap_or_default();
         let places = file.heroes.iter().enumerate().map(|(place, hero)| (hero.clone(), place)).collect();
-        Ok(Numbers { made: file.made, source: file.source, patch: file.patch, weeks: file.weeks, heroes: file.heroes, places, ranks: file.ranks, pairs: file.pairs, lanes: file.lanes })
+        Ok(Numbers { made: file.made, source: file.source, patch: file.patch, weeks: file.weeks, heroes: file.heroes, places, ranks: file.ranks, pairs: file.pairs, lanes: file.lanes, weekly })
+    }
+
+    pub fn has_weeks(&self) -> bool {
+        !self.weekly.is_empty()
+    }
+
+    pub fn trend(&self, rank: Rank, role: Role, hero: &str) -> Option<Trend> {
+        let [newest, before] = self.weekly.get(rank.place())?;
+        let hero = *self.places.get(hero)?;
+        let at = role.place();
+        let week = |week: &Played| -> Option<(f64, f64)> {
+            let (matches, wins) = (week.played[at][hero], week.won[at][hero]);
+            (matches >= ENOUGH_IN_A_ROLE && wins <= matches).then(|| (wins as f64 / matches as f64, matches as f64))
+        };
+        let ((now, n_now), (then, n_then)) = (week(newest)?, week(before)?);
+        let change = ((now - then) * 100.0) as f32;
+        let middle = (now * n_now + then * n_then) / (n_now + n_then);
+        let luck = ((middle * (1.0 - middle) * (1.0 / n_now + 1.0 / n_then)).sqrt() * 100.0) as f32;
+        let way = match change {
+            change if change >= TREND_LEAST && change >= TREND_SURE * luck => Way::Rising,
+            change if change <= -TREND_LEAST && -change >= TREND_SURE * luck => Way::Falling,
+            _ => Way::Level,
+        };
+        Some(Trend { now: (now * 100.0) as f32, before: (then * 100.0) as f32, way })
+    }
+
+    pub fn to_ban(&self, rank: Rank, role: Option<Role>, mine: &[&str], left_out: &[&str]) -> Vec<Suggestion> {
+        let (ranked, paired) = (&self.ranks[rank.place()], &self.pairs[rank.pair()]);
+        let placed = |heroes: &[&str]| -> Vec<usize> { heroes.iter().filter_map(|hero| self.places.get(*hero).copied()).collect() };
+        let (mine, left_out) = (placed(mine), placed(left_out));
+        let targets: Vec<(usize, f64)> = match (mine.is_empty(), role) {
+            (false, _) => mine.iter().map(|&hero| (hero, 1.0)).collect(),
+            (true, Some(role)) => (0..self.heroes.len()).filter_map(|hero| Some((hero, ranked.record(hero, Some(role))?.0 as f64))).collect(),
+            (true, None) => Vec::new(),
+        };
+
+        let mut suggestions: Vec<Suggestion> = (0..self.heroes.len())
+            .filter(|hero| !mine.contains(hero) && !left_out.contains(hero))
+            .filter_map(|hero| {
+                let (matches, wins) = ranked.record(hero, None)?;
+                let share = wins as f64 / matches as f64;
+                let own = (share - 0.5) * 100.0 * matches as f64 / (matches as f64 + DOUBT);
+                let against = |target: usize| f64::from(paired.against[hero][target]) / 10.0;
+                let others = targets.iter().filter(|(target, _)| *target != hero);
+                let (sum, weight) = others.fold((0.0, 0.0), |(sum, all), &(target, weight)| (sum + against(target) * weight, all + weight));
+                let threat = if weight > 0.0 { sum / weight } else { 0.0 };
+                let reasons = mine.iter().map(|&target| Reason { hero: self.heroes[target].clone(), beside: false, points: against(target) as f32 }).collect();
+                let mut suggestion = Suggestion::of(self.heroes[hero].clone(), own, share, matches, reasons);
+                suggestion.points = (own + threat) as f32;
+                Some(suggestion)
+            })
+            .collect();
+        best_first(&mut suggestions);
+        suggestions
     }
 
     pub fn knows(&self, hero: &str) -> bool {
         self.places.contains_key(hero)
+    }
+
+    pub fn is_played_in(&self, rank: Rank, role: Role, hero: &str) -> bool {
+        self.places.get(hero).is_some_and(|&hero| self.ranks[rank.place()].record(hero, Some(role)).is_some())
     }
 
     pub fn has_lanes(&self) -> bool {
@@ -668,6 +751,76 @@ mod tests {
         assert_eq!(Style::default(), Style::Team);
         assert!(Style::Team.is_default() && !Style::Lane.is_default());
         assert_eq!(serde_json::to_string(&Style::ALL).unwrap(), r#"["team","lane"]"#);
+    }
+
+    fn file_with_weeks() -> serde_json::Value {
+        let mut file = file();
+        let newest = json!({
+            "played": [[0, 0, 2000, 150], [0, 2000, 0, 0], [2000, 0, 2000, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            "won": [[0, 0, 1000, 81], [0, 1000, 0, 0], [1100, 0, 960, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+        });
+        let before = json!({
+            "played": [[0, 0, 2000, 150], [0, 2000, 0, 0], [2000, 0, 2000, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            "won": [[0, 0, 1000, 75], [0, 1000, 0, 0], [1000, 0, 1040, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+        });
+        let week = json!([newest, before]);
+        file["weekly"] = json!({ "weeks": [1_000_000, 395_200], "ranks": [week, week, week, week, week, week, week, week] });
+        file
+    }
+
+    #[test]
+    fn the_newest_week_and_the_one_before_say_who_is_rising_and_who_is_falling() {
+        let numbers = read(&file_with_weeks()).unwrap();
+        assert!(numbers.has_weeks());
+        let axe = numbers.trend(Rank::Legend, Role::Offlane, AXE).unwrap();
+        assert_eq!((axe.now, axe.before, axe.way), (55.0, 50.0, Way::Rising));
+        assert_eq!(numbers.trend(Rank::Herald, Role::Offlane, PUDGE).unwrap().way, Way::Falling);
+        assert_eq!(numbers.trend(Rank::Legend, Role::Mid, LINA).unwrap().way, Way::Level);
+        let sven = numbers.trend(Rank::Legend, Role::Carry, SVEN).unwrap();
+        assert_eq!((sven.now, sven.way), (54.0, Way::Level));
+        assert_eq!(numbers.trend(Rank::Legend, Role::Carry, LINA), None);
+        assert_eq!(numbers.trend(Rank::Legend, Role::Carry, "npc_dota_hero_new"), None);
+    }
+
+    #[test]
+    fn a_file_without_the_weeks_apart_or_with_them_wrong_is_read_as_ever() {
+        let numbers = read(&file()).unwrap();
+        assert!(!numbers.has_weeks());
+        assert_eq!(numbers.trend(Rank::Legend, Role::Offlane, AXE), None);
+        for wrong in [json!("weeks"), json!({ "ranks": [] }), json!({ "ranks": [[{ "played": [[1]], "won": [[1]] }]] })] {
+            let mut file = file_with_weeks();
+            file["weekly"] = wrong;
+            let numbers = read(&file).expect("the rest of the file stands");
+            assert!(!numbers.has_weeks());
+            assert_eq!(names(&numbers.suggest(Rank::Legend, None, &[], &[])), [AXE, LINA, PUDGE, SVEN]);
+        }
+        let mut file = file_with_weeks();
+        file["weekly"]["ranks"][7][1]["won"].as_array_mut().unwrap().truncate(4);
+        assert!(!read(&file).unwrap().has_weeks(), "one rank that does not fit, and none are taken");
+    }
+
+    #[test]
+    fn heroes_to_ban_are_those_that_win_most_and_do_best_against_the_players_heroes() {
+        let mut file = file();
+        for role in 0..5 {
+            file["ranks"][4]["won"][role][2] = json!(1100);
+        }
+        let numbers = read(&file).unwrap();
+        let bans = numbers.to_ban(Rank::Legend, None, &[], &[]);
+        assert_eq!(names(&bans)[0], PUDGE);
+        assert!(bans.iter().all(|ban| ban.reasons.is_empty()));
+        let bans = numbers.to_ban(Rank::Legend, None, &[LINA], &[]);
+        assert_eq!(names(&bans), [PUDGE, SVEN, AXE], "never the player's own hero");
+        assert_eq!(bans[0].reasons, [Reason { hero: LINA.to_string(), beside: false, points: 2.0 }]);
+        assert!((bans[0].points - (bans[1].points + 2.0 + 5.0 * 10000.0 / 10400.0)).abs() < 0.01, "{}", bans[0].points);
+        let lina_and_sven = numbers.to_ban(Rank::Legend, None, &[LINA, SVEN], &[]);
+        assert_eq!(names(&lina_and_sven), [PUDGE, AXE]);
+        assert!((lina_and_sven[1].points + 1.5).abs() < 0.01, "Axe is weak against Lina, and does nothing to Sven");
+        let mid = numbers.to_ban(Rank::Legend, Some(Role::Mid), &[], &[]);
+        let axe = mid.iter().find(|ban| ban.hero == AXE).unwrap();
+        assert!((axe.points - (-3.0 * 9000.0 + 0.5 * 2000.0) / 11000.0).abs() < 0.01, "{}", axe.points);
+        assert_eq!(names(&numbers.to_ban(Rank::Legend, None, &[LINA], &[PUDGE])), [SVEN, AXE]);
+        assert!(numbers.is_played_in(Rank::Legend, Role::Mid, LINA) && !numbers.is_played_in(Rank::Legend, Role::Carry, LINA));
     }
 
     #[test]

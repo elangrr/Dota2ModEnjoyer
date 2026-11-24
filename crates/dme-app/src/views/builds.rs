@@ -62,21 +62,35 @@ pub struct View<'a> {
     pub texts: Option<&'a GameTexts>,
     pub rank: Rank,
     pub enemies: &'a [String],
+    pub shop_builds: bool,
     pub now: u64,
 }
 
 #[derive(Default)]
 pub struct Answer {
     pub rank: Option<Rank>,
+    pub shop_builds: Option<bool>,
     pub try_again: bool,
     pub copy_details: bool,
     pub open_source: bool,
 }
 
 pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
-    let View { catalog, pictures, chosen, builds, fetching, failure, texts, rank, enemies, now } = view;
+    let View { catalog, pictures, chosen, builds, fetching, failure, texts, rank, enemies, shop_builds, now } = view;
     let mut answer = Answer::default();
-    title_bar(ui, tr!(BuildsTitle), Some(tr!(BuildsNote)), Some((&mut chosen.search, tr!(HeroNameHint))), |_| {});
+    title_bar(ui, tr!(BuildsTitle), Some(tr!(BuildsNote)), Some((&mut chosen.search, tr!(HeroNameHint))), |ui| {
+        let label = if shop_builds { tr!(ShopBuildsOn) } else { tr!(ShopBuildsShort) };
+        let button = if shop_builds {
+            egui::Button::new(egui::RichText::new(label).color(theme::accent_text()).strong())
+                .fill(theme::accent().gamma_multiply(if theme::is_day() { 0.16 } else { 0.24 }))
+                .stroke(Stroke::new(1.0, theme::accent()))
+        } else {
+            egui::Button::new(label)
+        };
+        if ui.add(button).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tr!(ShopBuildsHint)).clicked() {
+            answer.shop_builds = Some(!shop_builds);
+        }
+    });
 
     let wanted = chosen.search.trim().to_lowercase();
     if !wanted.is_empty() {
@@ -140,7 +154,7 @@ pub fn show(ui: &mut Ui, view: View<'_>) -> Answer {
             }
         });
         part(ui, tr!(PartCore), tr!(PartCoreNote), line, |ui| {
-            let item = fitted(item, core.len(), ui.available_width() - SCROLL_BAR);
+            let item = fitted(item, core.len(), (ui.available_width() - SCROLL_BAR).max(0.0));
             for one in &core {
                 let shown = match one {
                     Core::Ours(bought) => Shown { item: &bought.item, copies: 1, corner: Some(tr!(Minutes, minute = bought.minute)), under: format!("{:.0}%", build.share(bought.matches)), ink: theme::text_dim(), face: None },
@@ -321,7 +335,7 @@ fn drawn(copies: u32, size: egui::Vec2, room: f32) -> Option<(u32, Option<String
 
 fn item_tile(ui: &mut Ui, pictures: &mut Pictures, size: egui::Vec2, shown: &Shown<'_>) -> Option<egui::Response> {
     const ROUND: u8 = 6;
-    let (count, how_many) = drawn(shown.copies, size, ui.available_width() - SCROLL_BAR)?;
+    let (count, how_many) = drawn(shown.copies, size, (ui.available_width() - SCROLL_BAR).max(0.0))?;
     let wide = size.x * count as f32 + 2.0 * (count as f32 - 1.0);
     let (rect, response) = ui.allocate_exact_size(vec2(wide, size.y + under(size)), Sense::hover());
     if ui.is_rect_visible(rect) {
@@ -353,7 +367,7 @@ fn neutral_line(ui: &mut Ui, pictures: &mut Pictures, texts: &GameTexts, size: e
     let shown = |tier: &NeutralTier<'_>| tier.trinkets.len() + tier.enhancements.len().min(1);
     let count: usize = tiers.iter().map(shown).sum();
     let tier_wide = tiers.iter().map(|tier| ui.painter().layout_no_wrap(tr!(Tier, tier = tier.tier), theme::heavy(12.0), theme::accent_text()).size().x).fold(TIER_WIDE, f32::max);
-    let room = ui.available_width() - SCROLL_BAR - tiers.len() as f32 * (tier_wide + GAP);
+    let room = (ui.available_width() - SCROLL_BAR - tiers.len() as f32 * (tier_wide + GAP)).max(0.0);
     let size = fitted(size, count, room);
     for tier in tiers {
         let (rect, response) = ui.allocate_exact_size(vec2(tier_wide, size.y + under(size)), Sense::hover());
@@ -392,7 +406,12 @@ fn neutral_words(hero: &str, neutral: &NeutralBuild, tier: &NeutralTier<'_>, sha
 }
 
 fn tier_words(hero: &str, neutral: &NeutralBuild, tier: &NeutralTier<'_>, patch: &str) -> String {
-    let mut words = tr!(TierWords, minute = tier.minute, players = neutral.players, pros = neutral_pros(hero, neutral), reached = tier.reached, patch);
+    let pros = neutral_pros(hero, neutral);
+    let mut words = if tier.minute_from_pros {
+        tr!(TierWordsPros, minute = tier.minute, players = neutral.players, pros, reached = tier.reached, patch)
+    } else {
+        tr!(TierWords, minute = tier.minute, players = neutral.players, pros, reached = tier.reached, patch)
+    };
     if tier.kept > 0 {
         words.push_str(&tr!(TierKept, count = tier.kept));
     }
@@ -453,7 +472,7 @@ fn points(ui: &mut Ui, pictures: &mut Pictures, texts: &GameTexts, own: &[Talent
     };
     const BETWEEN: f32 = 3.0;
     let count = order.skills.len().min(POINT_LEVELS.len());
-    let room = ui.available_width() - SCROLL_BAR;
+    let room = (ui.available_width() - SCROLL_BAR).max(0.0);
     let side = ((room + BETWEEN) / count as f32 - BETWEEN).clamp(16.0, (POINT * larger).round()).floor();
     ui.spacing_mut().item_spacing.x = BETWEEN;
     for (skill, level) in order.skills.iter().zip(POINT_LEVELS) {
@@ -492,7 +511,7 @@ fn talents(ui: &mut Ui, own: &[Talent], build: &Build, high: f32, counted: bool)
     const MIDDLE: f32 = 40.0;
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = BETWEEN_TALENTS;
-        let wide = ui.available_width() - SCROLL_BAR;
+        let wide = (ui.available_width() - SCROLL_BAR).max(0.0);
         let side = ((wide - MIDDLE) / 2.0).max(100.0);
         for tier in (0..(own.len() / 2).min(4)).rev() {
             let (right, left) = (&own[2 * tier], &own[2 * tier + 1]);
@@ -715,12 +734,22 @@ mod tests {
     #[test]
     fn a_neutral_item_says_how_many_pros_take_it_and_who_they_are() {
         let neutral = NeutralBuild { role: Some(Role::Carry), players: 12, tiers: Vec::new() };
-        let tier = NeutralTier { tier: 2, minute: 15, reached: 9, kept: 2, trinkets: vec![("item_brick", 44.4)], enhancements: Vec::new() };
+        let tier = NeutralTier {
+            tier: 2,
+            minute: 15,
+            minute_from_pros: false,
+            reached: 9,
+            kept: 2,
+            trinkets: vec![("item_brick", 44.4)],
+            enhancements: Vec::new(),
+        };
         assert_eq!(neutral_words("Slark", &neutral, &tier, 44.4, true, "7.42"), "44 of 100 took it as their trinket of tier 2: of the 12 pros who played Slark as carry, the 9 who got that far, in pro matches of patch 7.42.");
         assert_eq!(
             tier_words("Slark", &neutral, &tier, "7.42"),
             "Opens at minute 15. Of the 12 pros who played Slark as carry, 9 made something of it, in pro matches of patch 7.42. 2 of them kept the trinket they had and took only a new enhancement."
         );
+        let from_pros = NeutralTier { minute: 18, minute_from_pros: true, ..tier.clone() };
+        assert!(tier_words("Slark", &neutral, &from_pros, "7.42").starts_with("Crafted around minute 18 in pro matches."));
         let any = NeutralBuild { role: None, ..neutral };
         assert!(tier_words("Slark", &any, &NeutralTier { kept: 0, ..tier }, "7.42").ends_with("pros who played Slark in any role (too few played it in this one), 9 made something of it, in pro matches of patch 7.42."));
     }

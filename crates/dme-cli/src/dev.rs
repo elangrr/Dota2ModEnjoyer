@@ -11,7 +11,7 @@ use clap::Subcommand;
 use dme_core::apply::{self, Change, Pick};
 use dme_core::catalog::{Catalog, Gap};
 use dme_core::dota::DotaInstall;
-use dme_core::heroes::HeroFiles;
+use dme_core::heroes::{HeroFiles, UnitFiles};
 use dme_core::items::{self, Item, ItemsGame};
 use dme_core::signatures::{self, Signatures};
 use dme_core::update::{self, Manifest};
@@ -337,7 +337,7 @@ fn sounds(dota: &DotaInstall) -> Result<()> {
         });
         match again {
             Ok((before, after)) => {
-                let unpacked_numbers = |numbers: &[u32; 25]| numbers.iter().enumerate().filter(|(field, _)| ![8, 14, 16].contains(field)).map(|(_, number)| *number).collect::<Vec<_>>();
+                let unpacked_numbers = |numbers: &[u32; 25]| numbers.iter().enumerate().filter(|(field, _)| ![0, 1, 8, 14, 16].contains(field)).map(|(_, number)| *number).collect::<Vec<_>>();
                 if unpacked_numbers(&before.0) == unpacked_numbers(&after.0) && before.1 == after.1 && before.2 == after.2 {
                     same += 1;
                 } else {
@@ -891,7 +891,8 @@ fn try_all(dota: &DotaInstall) -> Result<()> {
     let heroes = game.heroes();
     let heroes_sounds = Sounds::read(&archive)?;
     let hero_files = HeroFiles::read(&archive);
-    let made = Made { sounds: &heroes_sounds, heroes: &hero_files };
+    let unit_files = UnitFiles::read(&archive);
+    let made = Made { sounds: &heroes_sounds, heroes: &hero_files, units: &unit_files };
     let mut failed = 0;
 
     let in_every_style = |pick: Pick, item: &Item<'_>| -> Vec<Vec<Pick>> {
@@ -1167,6 +1168,7 @@ struct Outcome {
 struct Made<'m> {
     sounds: &'m Sounds,
     heroes: &'m HeroFiles,
+    units: &'m UnitFiles,
 }
 
 fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], made: &Made<'_>, rounds: &[Vec<Vec<Pick>>]) -> Outcome {
@@ -1182,10 +1184,11 @@ fn run_rounds<'a>(game: &ItemsGame<'a>, bytes: &'a [u8], made: &Made<'_>, rounds
                     let patch = |picks: &[Pick]| {
                         let mut patched = apply::patch(game, bytes, picks)?;
                         apply::place_models(game, &mut patched, &|_| true)?;
+                        let hero_model = |hero: &str| made.heroes.model(hero).map(str::to_string);
+                        let unit_model = |unit: &str| made.units.model(unit).map(str::to_string);
+                        let bodies = bodies::place_all(game, &mut patched, &hero_model, &unit_model, &|_| true)?.len();
                         let after = ItemsGame::parse(&patched.bytes)?;
                         let sounds = made.sounds.files_for(&sounds::swaps(game, &after))?.done.len();
-                        let hero_model = |hero: &str| made.heroes.model(hero).map(str::to_string);
-                        let bodies = bodies::placements(&bodies::swaps(game, &after), &hero_model, &|_| true, &patched.placed).0.len();
                         drop(after);
                         Ok::<_, dme_core::Error>((patched, sounds, bodies))
                     };

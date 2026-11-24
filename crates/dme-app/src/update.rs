@@ -230,6 +230,9 @@ fn told_when_started_again(options: &Options, from: &str) -> Vec<OsString> {
     if options.no_start {
         told.push("--no-start".into());
     }
+    if options.no_glass {
+        told.push("--no-glass".into());
+    }
     if let Some([width, height]) = options.size {
         told.extend(["--size".into(), format!("{width}x{height}").into()]);
     }
@@ -407,6 +410,9 @@ mod http {
                     return Err(failed("receiving"));
                 }
                 body.truncate(have + got as usize);
+                if got == 0 {
+                    return Ok(body);
+                }
                 come(body.len() as u64);
             }
         }

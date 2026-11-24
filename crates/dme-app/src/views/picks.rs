@@ -78,7 +78,7 @@ pub fn show(ui: &mut Ui, catalog: &Catalog, loadout: &mut Loadout, pictures: &mu
             });
             ui.add_space(2.0);
 
-            let room = ui.available_width() - 14.0;
+            let room = (ui.available_width() - 14.0).max(0.0);
             let columns = (((room + GAP) / (PICK_WIDTH + GAP)).floor() as usize).max(1);
             let width = (room + GAP) / columns as f32 - GAP;
             for line in picks.chunks(columns) {

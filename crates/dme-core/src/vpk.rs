@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -12,6 +12,9 @@ const EMBEDDED: u16 = 0x7FFF;
 const ENTRY_LEN: usize = 18;
 const TERMINATOR: u16 = 0xFFFF;
 const OTHER_MD5_LEN: usize = 48;
+const DATA_ALIGN: usize = 16;
+const MAX_CHUNK: usize = 100 * 1024 * 1024;
+const MD5_CHUNK: usize = 1024 * 1024;
 
 pub struct Archive {
     dir_path: PathBuf,
@@ -73,6 +76,10 @@ impl Entry {
 
     pub fn archive_index(&self) -> u16 {
         self.archive
+    }
+
+    pub fn offset(&self) -> u32 {
+        self.offset
     }
 }
 
@@ -233,44 +240,45 @@ impl Archive {
         let preload_at = entry.preload_at as usize;
         let preload_len = entry.preload_len as usize;
         let length = entry.length as usize;
+        let preload = preload_at
+            .checked_add(preload_len)
+            .and_then(|end| self.data.get(preload_at..end))
+            .ok_or_else(|| Error::format(what(), "a file's preload data runs past the end of the file"))?;
 
-        let mut out = Vec::with_capacity(preload_len + length);
-        out.extend_from_slice(&self.data[preload_at..preload_at + preload_len]);
         if length == 0 {
-            return Ok(out);
+            return Ok(preload.to_vec());
         }
         if entry.archive == EMBEDDED {
             let start = self.header_len + self.tree_len + entry.offset as usize;
-            let bytes = self
-                .data
-                .get(start..start + length)
+            let bytes = start
+                .checked_add(length)
+                .and_then(|end| self.data.get(start..end))
                 .ok_or_else(|| Error::format(what(), "a file's data runs past the end of the file"))?;
+            let mut out = Vec::with_capacity(preload_len + length);
+            out.extend_from_slice(preload);
             out.extend_from_slice(bytes);
+            Ok(out)
         } else {
             let chunk = self.chunk_path(entry.archive)?;
             let mut file = open(&chunk).map_err(|e| Error::io("open", &chunk, e))?;
-            out.resize(preload_len + length, 0);
+            let file_len = file.metadata().map_err(|e| Error::io("read", &chunk, e))?.len();
+            let end = u64::from(entry.offset).checked_add(u64::from(entry.length));
+            if end.is_none_or(|end| end > file_len) {
+                return Err(Error::format(what(), "a file's data runs past the end of its numbered data file"));
+            }
+            let total = preload_len.checked_add(length).ok_or_else(|| Error::format(what(), "a file is too large"))?;
+            let mut out = Vec::with_capacity(total);
+            out.extend_from_slice(preload);
+            out.resize(total, 0);
             file.seek(SeekFrom::Start(entry.offset as u64))
                 .and_then(|_| file.read_exact(&mut out[preload_len..]))
                 .map_err(|e| Error::io("read", &chunk, e))?;
+            Ok(out)
         }
-        Ok(out)
     }
 
     fn chunk_path(&self, index: u16) -> Result<PathBuf> {
-        let name = self.dir_path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-        let stem = name
-            .len()
-            .checked_sub("_dir.vpk".len())
-            .filter(|&at| name.is_char_boundary(at) && name[at..].eq_ignore_ascii_case("_dir.vpk"))
-            .map(|at| &name[..at])
-            .ok_or_else(|| {
-                Error::format(
-                    self.dir_path.display().to_string(),
-                    "the file name does not end in _dir.vpk, so its numbered data files cannot be found",
-                )
-            })?;
-        Ok(self.dir_path.with_file_name(format!("{stem}_{index:03}.vpk")))
+        chunk_path_for(&self.dir_path, index)
     }
 
     pub fn verify_checksums(&self) -> Option<Checksums> {
@@ -297,20 +305,64 @@ pub struct PackFile<'a> {
 
 pub type NewFile = (String, Vec<u8>);
 
-pub fn build(files: &[PackFile<'_>]) -> Result<Vec<u8>> {
-    let bad = |detail: String| Error::format("the mod package", detail);
+fn chunk_path_for(dir_path: &Path, index: u16) -> Result<PathBuf> {
+    let stem = dir_stem(dir_path).ok_or_else(|| {
+        Error::format(
+            dir_path.display().to_string(),
+            "the file name does not end in _dir.vpk, so its numbered data files cannot be found",
+        )
+    })?;
+    Ok(dir_path.with_file_name(format!("{stem}_{index:03}.vpk")))
+}
 
-    let mut groups: BTreeMap<String, BTreeMap<String, BTreeMap<String, &[u8]>>> = BTreeMap::new();
+fn dir_stem(dir_path: &Path) -> Option<&str> {
+    let name = dir_path.file_name()?.to_str()?;
+    let at = name.len().checked_sub("_dir.vpk".len())?;
+    (name.is_char_boundary(at) && name[at..].eq_ignore_ascii_case("_dir.vpk")).then(|| &name[..at])
+}
+
+pub fn package_is_complete(dir_path: &Path) -> bool {
+    let Ok(mut file) = File::open(dir_path) else { return false };
+    let mut head = [0u8; 28];
+    let Ok(read) = file.read(&mut head) else { return false };
+    if read < 12 || u32_at(&head, 0) != MAGIC {
+        return false;
+    }
+    if u32_at(&head, 4) == 2 && read == 28 && u32_at(&head, 12) == 0 {
+        return chunk_path_for(dir_path, 0).is_ok_and(|chunk| chunk.is_file());
+    }
+    true
+}
+
+type Groups<'a> = BTreeMap<String, BTreeMap<String, BTreeMap<String, &'a [u8]>>>;
+
+fn group_files<'a>(files: &[PackFile<'a>]) -> Result<Groups<'a>> {
+    let bad = |detail: String| Error::format("the mod package", detail);
+    let mut groups: Groups<'a> = BTreeMap::new();
     for file in files {
         let (dir, name, ext) = split_path(file.path);
         if name.is_empty() || file.path.contains('\0') {
             return Err(bad(format!("{:?} is not a usable file path", file.path)));
+        }
+        if u32::try_from(file.data.len()).is_err() {
+            return Err(bad(format!("{:?} is larger than 4 GB", file.path)));
         }
         let names = groups.entry(ext).or_default().entry(dir).or_default();
         if names.insert(name, file.data).is_some() {
             return Err(bad(format!("{:?} is listed twice", file.path)));
         }
     }
+    Ok(groups)
+}
+
+pub fn validate(files: &[PackFile<'_>]) -> Result<()> {
+    group_files(files)?;
+    Ok(())
+}
+
+pub fn build(files: &[PackFile<'_>]) -> Result<Vec<u8>> {
+    let bad = |detail: String| Error::format("the mod package", detail);
+    let groups = group_files(files)?;
 
     let total: usize = files.iter().map(|f| f.data.len()).sum();
     let total_u32 = u32::try_from(total).map_err(|_| bad("the files are larger than 4 GB in total".into()))?;
@@ -353,6 +405,137 @@ pub fn build(files: &[PackFile<'_>]) -> Result<Vec<u8>> {
     let whole = hash::md5(&out);
     out.extend_from_slice(&whole);
     Ok(out)
+}
+
+pub fn write_package(dir_path: &Path, files: &[PackFile<'_>]) -> Result<usize> {
+    let bad = |detail: String| Error::format("the mod package", detail);
+    let groups = group_files(files)?;
+    chunk_path_for(dir_path, 0)?;
+
+    let mut tree = Vec::new();
+    let mut chunks: Vec<Vec<(u32, &[u8])>> = vec![Vec::new()];
+    let mut archive_idx: u16 = 0;
+    let mut offset: usize = 0;
+
+    for (ext, dirs) in &groups {
+        push_cstr(&mut tree, ext);
+        for (dir, names) in dirs {
+            push_cstr(&mut tree, dir);
+            for (name, data) in names {
+                let mut aligned = offset.div_ceil(DATA_ALIGN) * DATA_ALIGN;
+                let needs_new_chunk = !chunks[archive_idx as usize].is_empty()
+                    && (aligned.saturating_add(data.len()) > MAX_CHUNK || u32::try_from(aligned.saturating_add(data.len())).is_err());
+                if needs_new_chunk {
+                    archive_idx = archive_idx
+                        .checked_add(1)
+                        .filter(|&next| next < EMBEDDED)
+                        .ok_or_else(|| bad("the package would have too many numbered data files".into()))?;
+                    chunks.push(Vec::new());
+                    aligned = 0;
+                }
+                let end = aligned
+                    .checked_add(data.len())
+                    .filter(|&end| u32::try_from(end).is_ok())
+                    .ok_or_else(|| bad("a file is too large for a VPK chunk".into()))?;
+
+                push_cstr(&mut tree, name);
+                tree.extend_from_slice(&hash::crc32(data).to_le_bytes());
+                tree.extend_from_slice(&0u16.to_le_bytes());
+                tree.extend_from_slice(&archive_idx.to_le_bytes());
+                tree.extend_from_slice(&(aligned as u32).to_le_bytes());
+                tree.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                tree.extend_from_slice(&TERMINATOR.to_le_bytes());
+
+                chunks[archive_idx as usize].push((aligned as u32, data));
+                offset = end;
+            }
+            tree.push(0);
+        }
+        tree.push(0);
+    }
+    tree.push(0);
+    let tree_len = u32::try_from(tree.len()).map_err(|_| bad("the file list is too large".into()))?;
+
+    let mut archive_md5 = Vec::new();
+    let mut total_data_bytes = 0usize;
+    let zeros = [0u8; DATA_ALIGN];
+    for (index, entries) in chunks.iter().enumerate() {
+        let chunk_path = chunk_path_for(dir_path, index as u16)?;
+        let (written, records) = fsutil::write_atomic_with(&chunk_path, |out| {
+            let mut records = Vec::new();
+            let mut hash_buf = Vec::with_capacity(MD5_CHUNK.min(entries.iter().map(|(_, d)| d.len()).sum::<usize>().saturating_add(entries.len() * DATA_ALIGN)));
+            let mut chunk_start = 0u32;
+            let mut written = 0usize;
+            let mut push = |bytes: &[u8], out: &mut std::io::BufWriter<File>| -> std::io::Result<()> {
+                let mut rest = bytes;
+                while !rest.is_empty() {
+                    let take = (MD5_CHUNK - hash_buf.len()).min(rest.len());
+                    hash_buf.extend_from_slice(&rest[..take]);
+                    out.write_all(&rest[..take])?;
+                    rest = &rest[take..];
+                    if hash_buf.len() == MD5_CHUNK {
+                        push_archive_md5(&mut records, index as u32, chunk_start, &hash_buf);
+                        chunk_start += hash_buf.len() as u32;
+                        hash_buf.clear();
+                    }
+                }
+                Ok(())
+            };
+            for &(aligned, data) in entries {
+                let pad = aligned as usize - written;
+                if pad > 0 {
+                    push(&zeros[..pad], out)?;
+                    written += pad;
+                }
+                push(data, out)?;
+                written += data.len();
+            }
+            if !hash_buf.is_empty() {
+                push_archive_md5(&mut records, index as u32, chunk_start, &hash_buf);
+            }
+            Ok((written, records))
+        })?;
+        total_data_bytes += written;
+        archive_md5.extend_from_slice(&records);
+    }
+
+    let archive_md5_len = u32::try_from(archive_md5.len()).map_err(|_| bad("the archive checksum section is too large".into()))?;
+    let mut out = Vec::with_capacity(28 + tree.len() + archive_md5.len() + OTHER_MD5_LEN);
+    for field in [MAGIC, 2, tree_len, 0, archive_md5_len, OTHER_MD5_LEN as u32, 0] {
+        out.extend_from_slice(&field.to_le_bytes());
+    }
+    out.extend_from_slice(&tree);
+    out.extend_from_slice(&archive_md5);
+    out.extend_from_slice(&hash::md5(&tree));
+    out.extend_from_slice(&hash::md5(&archive_md5));
+    let whole = hash::md5(&out);
+    out.extend_from_slice(&whole);
+    fsutil::write_atomic(dir_path, &out)?;
+
+    remove_stale_chunks(dir_path, chunks.len());
+    Ok(out.len() + total_data_bytes)
+}
+
+fn push_archive_md5(out: &mut Vec<u8>, archive: u32, start: u32, bytes: &[u8]) {
+    out.extend_from_slice(&archive.to_le_bytes());
+    out.extend_from_slice(&start.to_le_bytes());
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&hash::md5(bytes));
+}
+
+fn remove_stale_chunks(dir_path: &Path, keep: usize) {
+    let (Some(parent), Some(stem)) = (dir_path.parent(), dir_stem(dir_path)) else { return };
+    let prefix = format!("{}_", stem.to_ascii_lowercase());
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let lower = name.to_ascii_lowercase();
+        let Some(rest) = lower.strip_prefix(&prefix).and_then(|rest| rest.strip_suffix(".vpk")) else { continue };
+        if rest.len() == 3 && rest.bytes().all(|b| b.is_ascii_digit()) && rest.parse::<usize>().is_ok_and(|n| n >= keep) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn push_cstr(tree: &mut Vec<u8>, part: &str) {
@@ -607,5 +790,58 @@ mod tests {
         assert_eq!(entry.archive_index(), 3);
         assert_eq!(archive.read_entry(entry).unwrap(), b"PRHELLO");
         assert!(archive.verify_checksums().is_none());
+    }
+
+    #[test]
+    fn write_package_streams_aligned_numbered_data_files_with_archive_md5() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = dir.path().join("pak01_dir.vpk");
+        let stale = dir.path().join("pak01_001.vpk");
+        std::fs::write(&stale, b"stale chunk").unwrap();
+        let big = vec![0xABu8; MD5_CHUNK + 37];
+        let written = write_package(
+            &dir_path,
+            &[
+                PackFile { path: "scripts/items/items_game.txt", data: b"hello items" },
+                PackFile { path: "scripts/items/empty.txt", data: b"" },
+                PackFile { path: "models/a/big.vmdl_c", data: &big },
+                PackFile { path: "models/a/small.vmdl_c", data: &[1, 2, 3, 4, 5] },
+            ],
+        )
+        .unwrap();
+
+        let chunk_path = dir.path().join("pak01_000.vpk");
+        assert!(package_is_complete(&dir_path));
+        assert!(!stale.exists(), "higher-numbered chunks from an earlier package are cleaned up");
+        assert_eq!(written as u64, std::fs::metadata(&dir_path).unwrap().len() + std::fs::metadata(&chunk_path).unwrap().len());
+
+        let archive = Archive::open(&dir_path).unwrap();
+        assert_eq!(archive.version(), 2);
+        assert_eq!(archive.embedded_len, 0);
+        assert_eq!(archive.archive_md5_len, 2 * 28, "1 MB record plus the remainder");
+        assert!(archive.verify_checksums().unwrap().all_ok());
+        for entry in archive.entries() {
+            assert!(!entry.is_embedded());
+            assert_eq!(entry.archive_index(), 0);
+            assert_eq!(entry.offset() as usize % DATA_ALIGN, 0, "every entry is 16-byte aligned");
+        }
+        assert_eq!(archive.read("scripts/items/items_game.txt").unwrap().unwrap(), b"hello items");
+        assert_eq!(archive.read("scripts/items/empty.txt").unwrap().unwrap(), b"");
+        assert_eq!(archive.read("models/a/big.vmdl_c").unwrap().unwrap(), big);
+        assert_eq!(archive.read("models/a/small.vmdl_c").unwrap().unwrap(), [1, 2, 3, 4, 5]);
+
+        let chunk_bytes = std::fs::read(&chunk_path).unwrap();
+        let section_start = archive.header_len + archive.tree_len;
+        let section = &archive.data[section_start..section_start + archive.archive_md5_len];
+        for record in section.as_chunks::<28>().0 {
+            let idx = u32_at(record, 0);
+            let start = u32_at(record, 4) as usize;
+            let count = u32_at(record, 8) as usize;
+            assert_eq!(idx, 0);
+            assert_eq!(hash::md5(&chunk_bytes[start..start + count]), record[12..28]);
+        }
+
+        std::fs::remove_file(&chunk_path).unwrap();
+        assert!(!package_is_complete(&dir_path));
     }
 }

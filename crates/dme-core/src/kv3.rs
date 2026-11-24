@@ -5,6 +5,7 @@ const WHAT: &str = "a compiled file of sound events";
 const MAGIC: &[u8; 4] = b"\x053VK";
 const TRAILER: u32 = 0xFFEE_DD00;
 const HEADER: usize = 20 + 25 * 4;
+const UNPACKED: u32 = 0;
 const LZ4: u32 = 1;
 
 pub const ZERO: u8 = kind::INT_ZERO;
@@ -180,16 +181,27 @@ fn unpack(block: &[u8]) -> Result<(Header, Vec<u8>, Vec<u8>)> {
     for (index, number) in header.numbers.iter_mut().enumerate() {
         *number = u32_at(block, 20 + 4 * index)?;
     }
-    if header.get(Header::COMPRESSION) != LZ4 as usize {
-        return Err(Error::format(WHAT, "its values are compressed in a way this tool does not know"));
-    }
-    let first_packed = header.get(Header::FIRST_PACKED);
-    let second_packed = header.get(Header::SECOND_PACKED);
     let cut_short = || Error::format(WHAT, "its values are cut short");
-    let first = block.get(HEADER..HEADER + first_packed).ok_or_else(cut_short)?;
-    let second = block.get(HEADER + first_packed..HEADER + first_packed + second_packed).ok_or_else(cut_short)?;
-    let first = lz4::unpack(first, header.get(Header::FIRST_SIZE))?;
-    let second = lz4::unpack(second, header.get(Header::SECOND_SIZE))?;
+    let (first, second) = match header.numbers[Header::COMPRESSION] {
+        UNPACKED => {
+            if header.get(Header::FIRST_PACKED) != 0 || header.get(Header::SECOND_PACKED) != 0 {
+                return Err(Error::format(WHAT, "its values are not the size it says"));
+            }
+            let first_end = HEADER.checked_add(header.get(Header::FIRST_SIZE)).ok_or_else(cut_short)?;
+            let second_end = first_end.checked_add(header.get(Header::SECOND_SIZE)).ok_or_else(cut_short)?;
+            let first = block.get(HEADER..first_end).ok_or_else(cut_short)?.to_vec();
+            let second = block.get(first_end..second_end).ok_or_else(cut_short)?.to_vec();
+            (first, second)
+        }
+        LZ4 => {
+            let first_end = HEADER.checked_add(header.get(Header::FIRST_PACKED)).ok_or_else(cut_short)?;
+            let second_end = first_end.checked_add(header.get(Header::SECOND_PACKED)).ok_or_else(cut_short)?;
+            let first = block.get(HEADER..first_end).ok_or_else(cut_short)?;
+            let second = block.get(first_end..second_end).ok_or_else(cut_short)?;
+            (lz4::unpack(first, header.get(Header::FIRST_SIZE))?, lz4::unpack(second, header.get(Header::SECOND_SIZE))?)
+        }
+        _ => return Err(Error::format(WHAT, "its values are compressed in a way this tool does not know")),
+    };
     Ok((header, first, second))
 }
 
@@ -214,7 +226,7 @@ const KINDS: usize = 5;
 impl<'b> Reader<'b> {
     fn new(header: &Header, first: &'b [u8], second: &'b [u8]) -> Result<Reader<'b>> {
         let cut_short = || Error::format(WHAT, "its values are cut short");
-        let take = |buffer: &'b [u8], at: usize, len: usize| buffer.get(at..at + len).ok_or_else(cut_short);
+        let take = |buffer: &'b [u8], at: usize, len: usize| at.checked_add(len).and_then(|end| buffer.get(at..end)).ok_or_else(cut_short);
         let string_bytes = header.get(Header::STRING_BYTES);
         let blob = take(first, 0, string_bytes)?;
         let ints_at = align(string_bytes, 4);
@@ -222,7 +234,7 @@ impl<'b> Reader<'b> {
             return Err(Error::format(WHAT, "its first buffer is laid out in a way this tool does not know"));
         }
         let count = u32_at(first, ints_at)? as usize;
-        let mut strings = Vec::with_capacity(count);
+        let mut strings = Vec::with_capacity(count.min(blob.len()));
         let mut rest = blob;
         for _ in 0..count {
             let end = rest.iter().position(|&byte| byte == 0).ok_or_else(cut_short)?;
@@ -267,8 +279,9 @@ impl<'b> Reader<'b> {
             _ => self.kinds,
         };
         let at = self.at[stream];
-        let found = buffer.get(at..at + len).ok_or_else(|| Error::format(WHAT, "its values are cut short"))?;
-        self.at[stream] += len;
+        let end = at.checked_add(len).ok_or_else(|| Error::format(WHAT, "its values are cut short"))?;
+        let found = buffer.get(at..end).ok_or_else(|| Error::format(WHAT, "its values are cut short"))?;
+        self.at[stream] = end;
         Ok(found)
     }
 
@@ -461,6 +474,9 @@ pub fn write(value: &Value, like: &[u8]) -> Result<Vec<u8>> {
     if like.get(..4) != Some(MAGIC.as_slice()) || like.len() < HEADER {
         return Err(Error::format(WHAT, "its values are not KeyValues 3 of the fifth version"));
     }
+    if !matches!(u32_at(like, 20)?, UNPACKED | LZ4) {
+        return Err(Error::format(WHAT, "its values are compressed in a way this tool does not know"));
+    }
     let mut writer = Writer::default();
     writer.value(value, None)?;
 
@@ -486,24 +502,23 @@ pub fn write(value: &Value, like: &[u8]) -> Result<Vec<u8>> {
     second.extend_from_slice(&writer.kinds);
     second.extend_from_slice(&TRAILER.to_le_bytes());
 
-    let first_packed = lz4::pack(&first);
-    let second_packed = lz4::pack(&second);
     let room = |count: usize| u16::try_from(count).map_err(|_| Error::format(WHAT, "it would have too many objects or arrays"));
     let mut header = Header::default();
-    header.numbers[Header::COMPRESSION] = u32_at(like, 20)?;
-    header.numbers[1] = u32_at(like, 24)?;
+    header.numbers[Header::COMPRESSION] = UNPACKED;
+    header.numbers[1] = 0;
+    let total = first.len() + second.len();
     let numbers = [
         (Header::STRING_BYTES, string_bytes),
         (Header::FIRST_INTS, 1),
         (Header::FIRST_EIGHTS, writer.side.len() / 8),
         (Header::KINDS, writer.kinds.len()),
         (Header::ROOM, usize::from(room(writer.objects)?) | usize::from(room(writer.byte_arrays)?) << 16),
-        (Header::TOTAL, first.len() + second.len()),
-        (Header::TOTAL_PACKED, first_packed.len() + second_packed.len()),
+        (Header::TOTAL, total),
+        (Header::TOTAL_PACKED, total),
         (Header::FIRST_SIZE, first.len()),
-        (Header::FIRST_PACKED, first_packed.len()),
+        (Header::FIRST_PACKED, 0),
         (Header::SECOND_SIZE, second.len()),
-        (Header::SECOND_PACKED, second_packed.len()),
+        (Header::SECOND_PACKED, 0),
         (Header::BYTES, writer.bytes.len()),
         (Header::SHORTS, 0),
         (Header::INTS, writer.ints.len() / 4),
@@ -516,16 +531,13 @@ pub fn write(value: &Value, like: &[u8]) -> Result<Vec<u8>> {
     for (field, number) in numbers {
         header.numbers[field] = u32::try_from(number).map_err(|_| Error::format(WHAT, "it would be too big"))?;
     }
-    if header.numbers[Header::COMPRESSION] != LZ4 {
-        return Err(Error::format(WHAT, "its values are compressed in a way this tool does not know"));
-    }
 
     let mut out = like[..20].to_vec();
     for number in header.numbers {
         out.extend_from_slice(&number.to_le_bytes());
     }
-    out.extend_from_slice(&first_packed);
-    out.extend_from_slice(&second_packed);
+    out.extend_from_slice(&first);
+    out.extend_from_slice(&second);
     Ok(out)
 }
 
@@ -536,14 +548,14 @@ pub mod lz4 {
 
     pub fn unpack(src: &[u8], size: usize) -> Result<Vec<u8>> {
         let wrong = |detail: &str| Error::format(WHAT, detail);
-        let mut out = Vec::with_capacity(size);
+        let mut out = Vec::with_capacity(size.min(64 * 1024 * 1024));
         let mut at = 0;
         let length = |at: &mut usize, mut len: usize| -> Result<usize> {
             if len == 15 {
                 loop {
                     let byte = *src.get(*at).ok_or_else(|| wrong("it is cut short"))?;
                     *at += 1;
-                    len += usize::from(byte);
+                    len = len.checked_add(usize::from(byte)).ok_or_else(|| wrong("it is bigger than it says"))?;
                     if byte != 255 {
                         break;
                     }
@@ -555,18 +567,23 @@ pub mod lz4 {
             let token = src[at];
             at += 1;
             let literals = length(&mut at, usize::from(token >> 4))?;
-            out.extend_from_slice(src.get(at..at + literals).ok_or_else(|| wrong("it is cut short"))?);
-            at += literals;
+            let end = at.checked_add(literals).ok_or_else(|| wrong("it is cut short"))?;
+            let slice = src.get(at..end).ok_or_else(|| wrong("it is cut short"))?;
+            if out.len().checked_add(literals).is_none_or(|total| total > size) {
+                return Err(wrong("it is bigger than it says"));
+            }
+            out.extend_from_slice(slice);
+            at = end;
             if at == src.len() {
                 break;
             }
             let offset = usize::from(*src.get(at).ok_or_else(|| wrong("it is cut short"))?) | usize::from(*src.get(at + 1).ok_or_else(|| wrong("it is cut short"))?) << 8;
             at += 2;
-            let len = length(&mut at, usize::from(token & 15))? + 4;
+            let len = length(&mut at, usize::from(token & 15))?.checked_add(4).ok_or_else(|| wrong("it is bigger than it says"))?;
             if offset == 0 || offset > out.len() {
                 return Err(wrong("it refers to bytes before its start"));
             }
-            if out.len() + len > size {
+            if out.len().checked_add(len).is_none_or(|total| total > size) {
                 return Err(wrong("it is bigger than it says"));
             }
             let from = out.len() - offset;

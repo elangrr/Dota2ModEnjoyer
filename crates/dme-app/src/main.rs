@@ -44,6 +44,7 @@ pub struct Options {
     pub numbers_from: Option<String>,
     pub updated_from: Option<String>,
     pub game_language: Option<String>,
+    pub no_glass: bool,
 }
 
 impl Options {
@@ -55,6 +56,7 @@ impl Options {
                 "--ignore-running" => options.ignore_running = true,
                 "--no-start" => options.no_start = true,
                 "--no-restart" => options.no_restart = true,
+                "--no-glass" => options.no_glass = true,
                 "--update-from" => options.update_from = arguments.next(),
                 "--pretend-version" => options.pretend_version = arguments.next(),
                 "--updated-from" => options.updated_from = arguments.next(),
@@ -127,6 +129,8 @@ fn screen_room() -> Option<[f32; 2]> {
 const TRY_NO_GLASS: &str = "DME_TRY_NO_GLASS";
 const TRY_ONE_COPY: &str = "DME_TRY_ONE_COPY";
 
+pub const TRYING_GLASS_FILE: &str = "trying-glass";
+
 fn main() -> std::process::ExitCode {
     let options = Options::read(std::env::args().skip(1));
     let data_dir = options.data_dir.clone().unwrap_or_else(dme_core::engine::default_data_dir);
@@ -150,8 +154,18 @@ fn main() -> std::process::ExitCode {
     };
     let settings_file = data_dir.join(app::SETTINGS_FILE);
     let mut settings = settings::Settings::load(&settings_file);
+    let trying_glass = data_dir.join(TRYING_GLASS_FILE);
+    if !picture_only && !settings.no_glass && trying_glass.exists() {
+        let _ = std::fs::remove_file(&trying_glass);
+        settings.no_glass = true;
+        let _ = settings.save(&settings_file);
+    }
     let trying = std::env::var_os(TRY_NO_GLASS).is_some();
-    let glass = !settings.no_glass && (!picture_only || trying);
+    let glass = !settings.no_glass && !options.no_glass && (!picture_only || trying);
+    if glass && !picture_only {
+        let _ = dme_core::fsutil::create_dir_all(&data_dir);
+        let _ = std::fs::write(&trying_glass, b"1");
+    }
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(app::TITLE)
@@ -175,11 +189,13 @@ fn main() -> std::process::ExitCode {
                 if trying && glass {
                     panic!("{TRY_NO_GLASS} is set: the window is taken not to be see-through on this computer");
                 }
+                let app = app::App::new(creation, options, glass);
                 crash::making_window(false);
-                Ok(Box::new(app::App::new(creation, options, glass)))
+                Ok(Box::new(app))
             }),
         )
     }));
+    let _ = std::fs::remove_file(&trying_glass);
     let outcome = match shown {
         Ok(Ok(())) => Shown::Closed,
         Ok(Err(error)) => Shown::Failed(error.to_string()),
@@ -191,7 +207,7 @@ fn main() -> std::process::ExitCode {
             settings.no_glass = true;
             let _ = settings.save(&settings_file);
             drop(held);
-            let again = std::env::current_exe().and_then(|app| std::process::Command::new(app).args(std::env::args_os().skip(1)).spawn());
+            let again = std::env::current_exe().and_then(|app| std::process::Command::new(app).args(std::env::args_os().skip(1)).arg("--no-glass").spawn());
             if again.is_err() && !picture_only {
                 crash::tell(tr!(NoGlass));
             }
@@ -254,12 +270,12 @@ mod tests {
     #[test]
     fn testing_options_are_read() {
         let options = read(&[
-            "--dota", "C:\\copy", "--data-dir", "D:\\data", "--ignore-running", "--no-start", "--screenshot", "shot.png", "--open", "hero:axe",
+            "--dota", "C:\\copy", "--data-dir", "D:\\data", "--ignore-running", "--no-start", "--no-glass", "--screenshot", "shot.png", "--open", "hero:axe",
             "--size", "1000x700", "--unknown",
         ]);
         assert_eq!(options.dota, Some(PathBuf::from("C:\\copy")));
         assert_eq!(options.data_dir, Some(PathBuf::from("D:\\data")));
-        assert!(options.ignore_running && options.no_start);
+        assert!(options.ignore_running && options.no_start && options.no_glass);
         assert_eq!(options.screenshot, Some(PathBuf::from("shot.png")));
         assert_eq!(options.open.as_deref(), Some("hero:axe"));
         assert_eq!(options.size, Some([1000.0, 700.0]));

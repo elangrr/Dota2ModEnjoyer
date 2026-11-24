@@ -133,6 +133,11 @@ impl App {
         let looks = self.updater.is_some();
         let mut auto_update = self.settings.auto_update;
         let mut low_end = self.settings.low_end;
+        let mut shop_builds = self.settings.shop_builds;
+        let mut launch_map_dota = self.settings.launch_map_dota;
+        let mut launch_novid = self.settings.launch_novid;
+        let mut launch_high = self.settings.launch_high;
+        let mut no_glass = self.settings.no_glass;
         let mut effects_for = None;
         let room = (ctx.content_rect().height() - 200.0).max(160.0);
         let dota = self.engine.as_ref().map(|engine| engine.dota.root().display().to_string());
@@ -166,8 +171,24 @@ impl App {
                 ui.label(dim(tr!(EffectsForNote)).small());
 
                 views::settings::heading(ui, tr!(PlayHeading));
+                ui.checkbox(&mut shop_builds, RichText::new(tr!(ShopBuilds)).strong());
+                ui.label(dim(tr!(ShopBuildsHint)).small());
+                ui.add_space(6.0);
+                ui.checkbox(&mut launch_map_dota, RichText::new(tr!(LaunchMapDota)).strong());
+                ui.label(dim(tr!(LaunchMapDotaHint)).small());
+                ui.add_space(4.0);
+                ui.checkbox(&mut launch_novid, RichText::new(tr!(LaunchNovid)).strong());
+                ui.label(dim(tr!(LaunchNovidHint)).small());
+                ui.add_space(4.0);
+                ui.checkbox(&mut launch_high, RichText::new(tr!(LaunchHigh)).strong());
+                ui.label(dim(tr!(LaunchHighHint)).small());
+                ui.add_space(6.0);
                 ui.checkbox(&mut low_end, RichText::new(tr!(LowEnd)).strong());
                 ui.label(dim(tr!(LowEndHint)).small());
+
+                views::settings::heading(ui, tr!(WindowHeading));
+                ui.checkbox(&mut no_glass, RichText::new(tr!(PlainWindow)).strong());
+                ui.label(dim(tr!(PlainWindowHint)).small());
 
                 views::settings::heading(ui, tr!(UpdatesHeading));
                 ui.add_enabled(looks, egui::Checkbox::new(&mut auto_update, RichText::new(tr!(AutoUpdate)).strong()));
@@ -197,8 +218,21 @@ impl App {
             self.saved.set_effects_for(self.loadout.effects_for().clone());
             self.save_picks();
         }
-        if low_end != self.settings.low_end {
+        if low_end != self.settings.low_end
+            || shop_builds != self.settings.shop_builds
+            || launch_map_dota != self.settings.launch_map_dota
+            || launch_novid != self.settings.launch_novid
+            || launch_high != self.settings.launch_high
+        {
             self.settings.low_end = low_end;
+            self.settings.shop_builds = shop_builds;
+            self.settings.launch_map_dota = launch_map_dota;
+            self.settings.launch_novid = launch_novid;
+            self.settings.launch_high = launch_high;
+            self.save_settings();
+        }
+        if no_glass != self.settings.no_glass {
+            self.settings.no_glass = no_glass;
             self.save_settings();
         }
         if auto_update != self.settings.auto_update {

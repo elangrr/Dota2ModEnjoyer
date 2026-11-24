@@ -7,9 +7,11 @@ use std::time::Duration;
 use dme_core::apply::{EffectsFor, Pick};
 use dme_core::catalog::Catalog;
 use dme_core::engine::{Engine, Mended, ModState, Ready, Restored, Status};
+use dme_core::launch::{self, LaunchOptions};
 use dme_core::loadout::same_picks;
+use dme_core::process;
+use dme_core::shop_builds::ShopBuilds;
 use dme_core::vpk::Archive;
-use dme_core::{launch, process};
 use eframe::egui;
 
 use crate::crash;
@@ -19,10 +21,20 @@ const LOOK_AGAIN: u32 = 6;
 
 pub enum Job {
     Load { language: String },
-    Play { picks: Vec<Pick>, effects_for: EffectsFor, start: bool, low_end: bool },
+    Play {
+        picks: Vec<Pick>,
+        effects_for: EffectsFor,
+        start: bool,
+        launch: LaunchOptions,
+        shop_builds: Option<ShopBuilds>,
+    },
     Restore,
     Tidy,
-    Mend { picks: Vec<Pick>, effects_for: EffectsFor },
+    Mend {
+        picks: Vec<Pick>,
+        effects_for: EffectsFor,
+        shop_builds: Option<ShopBuilds>,
+    },
 }
 
 pub enum Reply {
@@ -57,11 +69,16 @@ pub struct GameState {
     pub steam_busy: bool,
     pub build: String,
     pub undone: bool,
+    pub shop_builds_tag: String,
 }
 
 impl GameState {
-    pub fn shows(&self, picks: &[Pick], effects_for: &EffectsFor) -> bool {
-        self.mods == ModState::On && self.package_is_current && same_picks(&self.applied, picks) && self.effects_for == *effects_for
+    pub fn shows(&self, picks: &[Pick], effects_for: &EffectsFor, shop_tag: &str) -> bool {
+        self.mods == ModState::On
+            && self.package_is_current
+            && same_picks(&self.applied, picks)
+            && self.effects_for == *effects_for
+            && self.shop_builds_tag == shop_tag
     }
 }
 
@@ -76,6 +93,7 @@ impl From<Status> for GameState {
             package_is_current: status.package_is_current,
             steam_busy: status.steam_busy,
             build: status.version.build,
+            shop_builds_tag: status.shop_builds_tag,
         }
     }
 }
@@ -134,6 +152,7 @@ impl Worker {
 
 fn run(engine: &Engine, jobs: &Receiver<Job>, replies: &Sender<Reply>, ctx: &egui::Context) {
     let mut running = None;
+    let mut loaded_archive: Option<(String, Arc<Archive>)> = None;
     let mut quiet: u32 = 0;
     let tell_state = |running: &mut Option<bool>| {
         if let Ok(Ok(status)) = catch_unwind(AssertUnwindSafe(|| engine.status())) {
@@ -147,10 +166,15 @@ fn run(engine: &Engine, jobs: &Receiver<Job>, replies: &Sender<Reply>, ctx: &egu
     loop {
         match jobs.recv_timeout(WATCH) {
             Ok(Job::Load { language }) => {
-                let _ = replies.send(Reply::Loaded(guarded(engine, "reading the game's files", || load(engine, &language))));
+                let outcome = guarded(engine, "reading the game's files", || load(engine, &language));
+                if let Ok(loaded) = &outcome {
+                    loaded_archive = (!loaded.build.is_empty()).then(|| (loaded.build.clone(), Arc::clone(&loaded.archive)));
+                }
+                let _ = replies.send(Reply::Loaded(outcome));
             }
-            Ok(Job::Play { picks, effects_for, start, low_end }) => {
-                let played = guarded(engine, "putting the picks in the game", || play(engine, &picks, &effects_for, start, low_end));
+            Ok(Job::Play { picks, effects_for, start, launch, shop_builds }) => {
+                let archive = cached_archive(engine, &loaded_archive);
+                let played = guarded(engine, "putting the picks in the game", || play(engine, &picks, &effects_for, start, &launch, shop_builds.as_ref(), archive));
                 let _ = replies.send(Reply::Played(played));
                 tell_state(&mut running);
             }
@@ -164,15 +188,15 @@ fn run(engine: &Engine, jobs: &Receiver<Job>, replies: &Sender<Reply>, ctx: &egu
                 let _ = replies.send(Reply::Tidied(tidied));
                 tell_state(&mut running);
             }
-            Ok(Job::Mend { picks, effects_for }) => {
+            Ok(Job::Mend { picks, effects_for, shop_builds }) => {
                 let doing = "putting the picks back in after a Dota update";
-                let mended = guarded(engine, doing, || engine.mend(&picks, &effects_for)).map(|mended| match mended {
+                let archive = cached_archive(engine, &loaded_archive);
+                let mended = guarded(engine, doing, || engine.mend_with_options(&picks, &effects_for, archive, shop_builds.as_ref())).map(|mended| match mended {
                     Mended::Back(_) => Mend::Back,
                     Mended::Later => Mend::Later,
                     Mended::Normal { why, .. } => {
                         let Failure { english, details, .. } = failure(engine, doing, &why);
-                        Mend::Normal(Failure { sentence: tr!(MendFailed).to_string(), english: tr_en!(MendFailed).to_string(), details: format!("{english}
-{details}") })
+                        Mend::Normal(Failure { sentence: tr!(MendFailed).to_string(), english: tr_en!(MendFailed).to_string(), details: format!("{english}\n{details}") })
                     }
                 });
                 let _ = replies.send(Reply::Mended(mended));
@@ -206,11 +230,25 @@ fn load(engine: &Engine, language: &str) -> dme_core::Result<Loaded> {
     Ok(Loaded { catalog, archive, build })
 }
 
-fn play(engine: &Engine, picks: &[Pick], effects_for: &EffectsFor, start: bool, low_end: bool) -> dme_core::Result<Played> {
-    let ready = engine.make_ready(picks, effects_for)?;
+fn cached_archive<'a>(engine: &Engine, cache: &'a Option<(String, Arc<Archive>)>) -> Option<&'a Archive> {
+    let (build, archive) = cache.as_ref()?;
+    let now = engine.dota.version().ok()?.build;
+    (now == *build).then_some(archive.as_ref())
+}
+
+fn play(
+    engine: &Engine,
+    picks: &[Pick],
+    effects_for: &EffectsFor,
+    start: bool,
+    launch: &LaunchOptions,
+    shop_builds: Option<&ShopBuilds>,
+    archive: Option<&Archive>,
+) -> dme_core::Result<Played> {
+    let ready = engine.make_ready_with_options(picks, effects_for, archive, shop_builds)?;
     let started = start && !process::is_dota_running();
     if started {
-        launch::start_dota(launch::settings(low_end))?;
+        launch::start_dota_with(launch)?;
     }
     Ok(Played { ready, started })
 }

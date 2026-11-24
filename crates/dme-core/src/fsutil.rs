@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -13,13 +13,20 @@ pub fn read(path: &Path) -> Result<Vec<u8>> {
 }
 
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic_with(path, |out| out.write_all(bytes))
+}
+
+pub fn write_atomic_with<T>(path: &Path, mut write: impl FnMut(&mut BufWriter<File>) -> std::io::Result<T>) -> Result<T> {
     let tmp = temp_sibling(path);
     let written = patiently(|| {
-        let mut file = File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()
+        let file = File::create(&tmp)?;
+        let mut out = BufWriter::new(file);
+        let value = write(&mut out)?;
+        out.flush()?;
+        out.into_inner().map_err(std::io::IntoInnerError::into_error)?.sync_all()?;
+        Ok(value)
     })
-    .and_then(|()| patiently(|| fs::rename(&tmp, path)));
+    .and_then(|value| patiently(|| fs::rename(&tmp, path)).map(|()| value));
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
     }

@@ -23,6 +23,70 @@ const TREND_SURE: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum Mode {
+    #[default]
+    AllPick,
+    CaptainsMode,
+}
+
+impl Mode {
+    pub const ALL: [Mode; 2] = [Mode::AllPick, Mode::CaptainsMode];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::AllPick => "All Pick",
+            Mode::CaptainsMode => "Captain's Mode",
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Mode::default()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Ban,
+    Pick,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CmStep {
+    pub first: bool,
+    pub action: Action,
+    pub phase: usize,
+    pub slot: usize,
+}
+
+pub const CAPTAINS_STEPS: [CmStep; 24] = [
+    CmStep { first: true, action: Action::Ban, phase: 0, slot: 0 },
+    CmStep { first: true, action: Action::Ban, phase: 0, slot: 1 },
+    CmStep { first: false, action: Action::Ban, phase: 0, slot: 0 },
+    CmStep { first: false, action: Action::Ban, phase: 0, slot: 1 },
+    CmStep { first: true, action: Action::Ban, phase: 0, slot: 2 },
+    CmStep { first: false, action: Action::Ban, phase: 0, slot: 2 },
+    CmStep { first: false, action: Action::Ban, phase: 0, slot: 3 },
+    CmStep { first: true, action: Action::Pick, phase: 0, slot: 0 },
+    CmStep { first: false, action: Action::Pick, phase: 0, slot: 0 },
+    CmStep { first: true, action: Action::Ban, phase: 1, slot: 3 },
+    CmStep { first: true, action: Action::Ban, phase: 1, slot: 4 },
+    CmStep { first: false, action: Action::Ban, phase: 1, slot: 4 },
+    CmStep { first: false, action: Action::Pick, phase: 1, slot: 1 },
+    CmStep { first: true, action: Action::Pick, phase: 1, slot: 1 },
+    CmStep { first: true, action: Action::Pick, phase: 1, slot: 2 },
+    CmStep { first: false, action: Action::Pick, phase: 1, slot: 2 },
+    CmStep { first: false, action: Action::Pick, phase: 1, slot: 3 },
+    CmStep { first: true, action: Action::Pick, phase: 1, slot: 3 },
+    CmStep { first: true, action: Action::Ban, phase: 2, slot: 5 },
+    CmStep { first: false, action: Action::Ban, phase: 2, slot: 5 },
+    CmStep { first: true, action: Action::Ban, phase: 2, slot: 6 },
+    CmStep { first: false, action: Action::Ban, phase: 2, slot: 6 },
+    CmStep { first: true, action: Action::Pick, phase: 2, slot: 4 },
+    CmStep { first: false, action: Action::Pick, phase: 2, slot: 4 },
+];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Style {
     #[default]
     Team,
@@ -120,7 +184,7 @@ impl Role {
         }
     }
 
-    fn place(self) -> usize {
+    pub fn place(self) -> usize {
         self as usize
     }
 
@@ -250,6 +314,7 @@ pub struct Suggestion {
     pub points: f32,
     pub win_rate: f32,
     pub matches: u64,
+    pub pick_rate: f32,
     pub reasons: Vec<Reason>,
 }
 
@@ -353,6 +418,59 @@ impl Numbers {
         suggestions
     }
 
+    pub fn to_ban_in_draft(&self, rank: Rank, role: Option<Role>, mine: &[&str], team: &[&str], enemies: &[&str], left_out: &[&str]) -> Vec<Suggestion> {
+        if team.is_empty() && enemies.is_empty() {
+            return self.to_ban(rank, role, mine, left_out);
+        }
+        let (ranked, paired) = (&self.ranks[rank.place()], &self.pairs[rank.pair()]);
+        let placed = |heroes: &[&str]| -> Vec<usize> { heroes.iter().filter_map(|hero| self.places.get(*hero).copied()).collect() };
+        let (mine, team, enemies, left_out) = (placed(mine), placed(team), placed(enemies), placed(left_out));
+        let targets = if team.is_empty() { &mine } else { &team };
+
+        let mut suggestions: Vec<Suggestion> = (0..self.heroes.len())
+            .filter(|hero| !mine.contains(hero) && !team.contains(hero) && !enemies.contains(hero) && !left_out.contains(hero))
+            .filter_map(|hero| {
+                let (matches, wins) = ranked.record(hero, None)?;
+                let share = wins as f64 / matches as f64;
+                let own = (share - 0.5) * 100.0 * matches as f64 / (matches as f64 + DOUBT);
+                let against_sum: f64 = targets.iter().map(|&ally| f64::from(paired.against[hero][ally]) / 10.0).sum();
+                let with_sum: f64 = enemies.iter().map(|&enemy| f64::from(paired.with[hero][enemy]) / 10.0).sum();
+                let threat = if targets.is_empty() { 0.0 } else { against_sum / targets.len() as f64 };
+                let synergy = if enemies.is_empty() { 0.0 } else { with_sum / enemies.len() as f64 };
+                let reasons = targets
+                    .iter()
+                    .map(|&ally| Reason { hero: self.heroes[ally].clone(), beside: false, points: f32::from(paired.against[hero][ally]) / 10.0 })
+                    .chain(enemies.iter().map(|&enemy| Reason { hero: self.heroes[enemy].clone(), beside: true, points: f32::from(paired.with[hero][enemy]) / 10.0 }))
+                    .collect();
+                let mut suggestion = Suggestion::of(self.heroes[hero].clone(), own, share, matches, reasons);
+                suggestion.points = (own + threat + synergy) as f32;
+                Some(suggestion)
+            })
+            .collect();
+        best_first(&mut suggestions);
+        suggestions
+    }
+
+    pub fn suggest_popular(&self, rank: Rank, role: Role, picked: &[&str]) -> Vec<Suggestion> {
+        let ranked = &self.ranks[rank.place()];
+        let picked: Vec<usize> = picked.iter().filter_map(|hero| self.places.get(*hero).copied()).collect();
+        let total_role_picks: u64 = ranked.played[role.place()].iter().sum();
+        let total_matches = (total_role_picks as f64 / 2.0).max(1.0);
+        let mut suggestions: Vec<Suggestion> = (0..self.heroes.len())
+            .filter(|hero| !picked.contains(hero))
+            .filter_map(|hero| {
+                let (matches, wins) = ranked.record(hero, Some(role))?;
+                let share = wins as f64 / matches as f64;
+                let own = (share - 0.5) * 100.0 * matches as f64 / (matches as f64 + DOUBT);
+                let mut suggestion = Suggestion::of(self.heroes[hero].clone(), own, share, matches, Vec::new());
+                suggestion.pick_rate = ((matches as f64 / total_matches) * 100.0).min(100.0) as f32;
+                Some(suggestion)
+            })
+            .collect();
+        suggestions.sort_by(|a, b| b.matches.cmp(&a.matches).then_with(|| b.win_rate.total_cmp(&a.win_rate)));
+        suggestions
+    }
+
     pub fn knows(&self, hero: &str) -> bool {
         self.places.contains_key(hero)
     }
@@ -433,7 +551,7 @@ impl Suggestion {
         let points = own as f32 + reasons.iter().map(|reason| reason.points).sum::<f32>();
         reasons.retain(|reason| reason.points != 0.0);
         reasons.sort_by(|a, b| b.points.abs().total_cmp(&a.points.abs()));
-        Suggestion { hero, points, win_rate: (share * 100.0) as f32, matches, reasons }
+        Suggestion { hero, points, win_rate: (share * 100.0) as f32, matches, pick_rate: 0.0, reasons }
     }
 }
 
@@ -832,5 +950,44 @@ mod tests {
         assert!(Rank::Archon.is_default() && !Rank::Immortal.is_default());
         assert_eq!(serde_json::to_string(&(Rank::Ancient, Role::SoftSupport)).unwrap(), r#"["ancient","soft_support"]"#);
         assert_eq!(Role::Mid.as_played(), "in mid");
+        assert_eq!(Mode::default(), Mode::AllPick);
+        assert!(Mode::AllPick.is_default() && !Mode::CaptainsMode.is_default());
+        assert_eq!(serde_json::to_string(&Mode::ALL).unwrap(), r#"["all_pick","captains_mode"]"#);
+    }
+
+    #[test]
+    fn captains_mode_steps_match_patch_740_24_step_order() {
+        assert_eq!(CAPTAINS_STEPS.len(), 24);
+        let first_bans: Vec<(usize, usize)> = CAPTAINS_STEPS.iter().filter(|s| s.first && s.action == Action::Ban).map(|s| (s.phase, s.slot)).collect();
+        let second_bans: Vec<(usize, usize)> = CAPTAINS_STEPS.iter().filter(|s| !s.first && s.action == Action::Ban).map(|s| (s.phase, s.slot)).collect();
+        let first_picks: Vec<(usize, usize)> = CAPTAINS_STEPS.iter().filter(|s| s.first && s.action == Action::Pick).map(|s| (s.phase, s.slot)).collect();
+        let second_picks: Vec<(usize, usize)> = CAPTAINS_STEPS.iter().filter(|s| !s.first && s.action == Action::Pick).map(|s| (s.phase, s.slot)).collect();
+        assert_eq!(first_bans, [(0, 0), (0, 1), (0, 2), (1, 3), (1, 4), (2, 5), (2, 6)]);
+        assert_eq!(second_bans, [(0, 0), (0, 1), (0, 2), (0, 3), (1, 4), (2, 5), (2, 6)]);
+        assert_eq!(first_picks, [(0, 0), (1, 1), (1, 2), (1, 3), (2, 4)]);
+        assert_eq!(second_picks, [(0, 0), (1, 1), (1, 2), (1, 3), (2, 4)]);
+    }
+
+    #[test]
+    fn popular_supports_rank_by_pick_count_and_report_pick_rate() {
+        let numbers = read(&file()).unwrap();
+        let popular = numbers.suggest_popular(Rank::Archon, Role::SoftSupport, &[]);
+        assert_eq!(names(&popular), [PUDGE, LINA]);
+        assert_eq!((popular[0].matches, popular[1].matches), (2000, 1000));
+        assert!((popular[0].pick_rate - 100.0).abs() < 0.01);
+        assert!((popular[1].pick_rate - 66.67).abs() < 0.1);
+        assert_eq!(names(&numbers.suggest_popular(Rank::Archon, Role::SoftSupport, &[PUDGE])), [LINA]);
+    }
+
+    #[test]
+    fn mid_draft_bans_weigh_counters_against_team_and_synergies_with_enemy() {
+        let numbers = read(&file()).unwrap();
+        assert_eq!(numbers.to_ban_in_draft(Rank::Legend, None, &[LINA], &[], &[], &[]), numbers.to_ban(Rank::Legend, None, &[LINA], &[]));
+        let mid = numbers.to_ban_in_draft(Rank::Legend, None, &[], &[LINA], &[AXE], &[]);
+        assert_eq!(names(&mid), [PUDGE, SVEN]);
+        assert!(mid[0].points > mid[1].points);
+        let against_axe_with_sven = numbers.to_ban_in_draft(Rank::Legend, None, &[], &[AXE], &[SVEN], &[]);
+        assert_eq!(names(&against_axe_with_sven), [LINA, PUDGE]);
+        assert!((against_axe_with_sven[0].points - 4.5).abs() < 0.01, "{}", against_axe_with_sven[0].points);
     }
 }

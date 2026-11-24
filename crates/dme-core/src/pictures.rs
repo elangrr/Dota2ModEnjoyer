@@ -180,6 +180,10 @@ fn decode_png(data: &[u8]) -> Result<Picture> {
     let mut decoder = png::Decoder::new(Cursor::new(data));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(bad)?;
+    let info = reader.info();
+    if [info.width, info.height].contains(&0) || info.width > LARGEST_SIDE || info.height > LARGEST_SIDE {
+        return Err(Error::format(WHAT, format!("a picture of {} by {} is not believable", info.width, info.height)));
+    }
     let size = reader.output_buffer_size().ok_or_else(|| Error::format(WHAT, "its PNG data is too large"))?;
     let mut pixels = vec![0; size];
     let frame = reader.next_frame(&mut pixels).map_err(bad)?;
@@ -473,5 +477,11 @@ pub(crate) mod tests {
         assert!(decode(&texture_file(8, 8, FORMAT_DXT5, &[0; 16])).is_err(), "too little data");
         assert!(read_texture(&texture_file(0, 2, 16, b"")).is_err(), "no width");
         assert!(read_texture(&texture_file(9000, 2, 16, b"")).is_err(), "too wide");
+        let mut huge_png = Picture { width: 1, height: 1, rgba: vec![0; 4] }.to_png();
+        huge_png[16..20].copy_from_slice(&9000u32.to_be_bytes());
+        huge_png[20..24].copy_from_slice(&9000u32.to_be_bytes());
+        let crc = crate::hash::crc32(&huge_png[12..29]);
+        huge_png[29..33].copy_from_slice(&crc.to_be_bytes());
+        assert!(decode(&texture_file(1, 1, 16, &huge_png)).is_err(), "PNG header claims too large a picture");
     }
 }

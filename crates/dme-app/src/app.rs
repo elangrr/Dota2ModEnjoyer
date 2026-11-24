@@ -13,6 +13,7 @@ use dme_core::engine::{self, Engine, ModState, Ready};
 use dme_core::items;
 use dme_core::loadout::Loadout;
 use dme_core::share;
+use dme_core::shop_builds::{self, ShopBuilds};
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{self, Align, Color32, CornerRadius, CursorIcon, FontId, Layout, Rect, Sense, Ui, pos2, vec2};
 
@@ -132,6 +133,7 @@ pub struct App {
     builds: Fetcher<Builds>,
     texts: Option<Arc<GameTexts>>,
     texts_coming: Option<Receiver<GameTexts>>,
+    shop_builds_cache: Option<ShopBuilds>,
     archive: Option<Arc<dme_core::vpk::Archive>>,
     han_in: bool,
     rarities_asked: BTreeSet<usize>,
@@ -146,6 +148,7 @@ pub struct App {
     whats_new: Option<Vec<changelog::Version>>,
     look: (theme::Theme, Option<egui::Theme>),
     backdrop: theme::Backdrop,
+    cleared_glass_marker: bool,
     footer_top: f32,
 
     updater: Option<Updater>,
@@ -239,6 +242,7 @@ impl App {
             builds,
             texts: None,
             texts_coming: None,
+            shop_builds_cache: None,
             archive: None,
             han_in,
             rarities_asked: BTreeSet::new(),
@@ -253,6 +257,7 @@ impl App {
             whats_new,
             look,
             backdrop,
+            cleared_glass_marker: false,
             footer_top: 0.0,
             updater,
             start_again: false,
@@ -387,10 +392,51 @@ impl App {
         }
         self.numbers.poll();
         self.builds.poll();
-        if let Some(texts) = self.texts_coming.as_ref().and_then(|coming| coming.try_recv().ok()) {
-            self.texts = Some(Arc::new(texts));
-            self.texts_coming = None;
+        if let Some(coming) = &self.texts_coming {
+            match coming.try_recv() {
+                Ok(texts) => {
+                    self.texts = Some(Arc::new(texts));
+                    self.texts_coming = None;
+                    self.shop_builds_cache = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.texts = Some(Arc::new(GameTexts::default()));
+                    self.texts_coming = None;
+                    self.shop_builds_cache = None;
+                }
+            }
         }
+        if self.settings.shop_builds {
+            self.builds.wanted(ctx);
+            self.read_texts(ctx);
+            self.refresh_shop_builds_cache();
+        } else {
+            self.shop_builds_cache = None;
+        }
+    }
+
+    fn refresh_shop_builds_cache(&mut self) {
+        let (Some(builds), Some(texts)) = (self.builds.get(), &self.texts) else {
+            self.shop_builds_cache = None;
+            return;
+        };
+        let wanted = format!(
+            "v1:{}:{}:{}:{}",
+            builds.made,
+            builds.patch,
+            self.settings.draft_rank.place(),
+            self.settings.draft_role.map_or(9, Role::place),
+        );
+        if self.shop_builds_cache.as_ref().is_some_and(|cached| cached.tag == wanted) {
+            return;
+        }
+        let generated = shop_builds::generate(builds, texts, self.settings.draft_rank, self.settings.draft_role);
+        self.shop_builds_cache = (!generated.files.is_empty()).then_some(generated);
+    }
+
+    fn current_shop_builds(&self) -> Option<ShopBuilds> {
+        self.settings.shop_builds.then(|| self.shop_builds_cache.clone()).flatten()
     }
 
     fn read_texts(&mut self, ctx: &egui::Context) {
@@ -400,7 +446,8 @@ impl App {
         let ctx = ctx.clone();
         let language = self.game_language().to_string();
         update::spawn("game texts", move || {
-            let _ = outbox.send(GameTexts::read_in(&archive, &language));
+            let texts = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| GameTexts::read_in(&archive, &language))).unwrap_or_default();
+            let _ = outbox.send(texts);
             ctx.request_repaint();
         });
     }
@@ -525,8 +572,9 @@ impl App {
 
     fn facts(&self, ctx: &egui::Context) -> Facts {
         let now = ctx.input(|input| input.time);
+        let shop_tag = self.shop_builds_cache.as_ref().filter(|_| self.settings.shop_builds).map_or("", |sb| sb.tag.as_str());
         let (running, mods, in_game) = match &self.game {
-            Some(game) => (game.running && !self.options.ignore_running, game.mods.clone(), game.shows(self.loadout.picks(), self.loadout.effects_for())),
+            Some(game) => (game.running && !self.options.ignore_running, game.mods.clone(), game.shows(self.loadout.picks(), self.loadout.effects_for(), shop_tag)),
             None => (false, ModState::Off, false),
         };
         let half_undone = mods.is_half_undone();
@@ -549,6 +597,7 @@ impl App {
             half_undone,
             undone,
             steam_busy: self.game.as_ref().is_some_and(|game| game.steam_busy),
+            shop_builds: !shop_tag.is_empty(),
         }
     }
 
@@ -568,13 +617,15 @@ impl App {
         }
         let Some(worker) = &self.worker else { return };
         let (tries, catalog_is_new, given_up) = self.mend_tries(game);
-        match after_an_update(!self.loadout.is_empty(), catalog_is_new, given_up, tries) {
+        let shop_builds = self.current_shop_builds();
+        let has_mods = !self.loadout.is_empty() || shop_builds.is_some();
+        match after_an_update(has_mods, catalog_is_new, given_up, tries) {
             AfterAnUpdate::Wait => {}
             AfterAnUpdate::PutBack => {
                 self.mends = (game.build.clone(), tries + 1);
                 self.busy = Some(Busy::Playing);
                 let effects_for = self.loadout.effects_for().clone();
-                worker.send(Job::Mend { picks: self.loadout.picks().to_vec(), effects_for });
+                worker.send(Job::Mend { picks: self.loadout.picks().to_vec(), effects_for, shop_builds });
             }
             AfterAnUpdate::Normal if half && !self.tidy_tried => {
                 self.tidy_tried = true;
@@ -604,11 +655,18 @@ impl App {
     }
 
     fn play(&mut self) {
+        self.refresh_shop_builds_cache();
         let Some(worker) = &self.worker else { return };
         self.busy = Some(Busy::Playing);
         self.banner = None;
         let effects_for = self.loadout.effects_for().clone();
-        worker.send(Job::Play { picks: self.loadout.picks().to_vec(), effects_for, start: !self.options.no_start, low_end: self.settings.low_end });
+        worker.send(Job::Play {
+            picks: self.loadout.picks().to_vec(),
+            effects_for,
+            start: !self.options.no_start,
+            launch: self.settings.launch_options(),
+            shop_builds: self.current_shop_builds(),
+        });
     }
 
     fn back_to_normal(&mut self) {
@@ -616,6 +674,11 @@ impl App {
         self.busy = Some(Busy::Restoring);
         self.banner = None;
         worker.send(Job::Restore);
+        if self.settings.shop_builds {
+            self.settings.shop_builds = false;
+            self.shop_builds_cache = None;
+            self.save_settings();
+        }
         self.loadout.put_away();
         self.saved = self.loadout.clone();
         self.save_picks();
@@ -838,6 +901,10 @@ impl eframe::App for App {
             }
         }
         self.pictures.end_frame();
+        if !self.cleared_glass_marker {
+            self.cleared_glass_marker = true;
+            let _ = std::fs::remove_file(self.data_dir.join(crate::TRYING_GLASS_FILE));
+        }
         if std::mem::take(&mut self.picks_changed) {
             self.picks_were_changed();
         }
@@ -1219,15 +1286,17 @@ impl App {
             rank: self.settings.draft_rank,
             role: self.settings.draft_role,
             style: self.settings.draft_style,
+            mode: self.settings.draft_mode,
             mine: &self.settings.draft_heroes,
             all_heroes: self.settings.draft_all_heroes,
             now,
         };
         let answer = views::draft::show(ui, view);
-        if answer.rank.is_some() || answer.role.is_some() || answer.style.is_some() || answer.all_heroes.is_some() {
+        if answer.rank.is_some() || answer.role.is_some() || answer.style.is_some() || answer.mode.is_some() || answer.all_heroes.is_some() {
             self.settings.draft_rank = answer.rank.unwrap_or(self.settings.draft_rank);
             self.settings.draft_role = answer.role.unwrap_or(self.settings.draft_role);
             self.settings.draft_style = answer.style.unwrap_or(self.settings.draft_style);
+            self.settings.draft_mode = answer.mode.unwrap_or(self.settings.draft_mode);
             self.settings.draft_all_heroes = answer.all_heroes.unwrap_or(self.settings.draft_all_heroes);
             self.save_settings();
         }
@@ -1284,11 +1353,13 @@ impl App {
             texts: texts.as_deref(),
             rank: self.settings.draft_rank,
             enemies: &enemies,
+            shop_builds: self.settings.shop_builds,
             now,
         };
         let answer = views::builds::show(ui, view);
-        if let Some(rank) = answer.rank {
-            self.settings.draft_rank = rank;
+        if answer.rank.is_some() || answer.shop_builds.is_some() {
+            self.settings.draft_rank = answer.rank.unwrap_or(self.settings.draft_rank);
+            self.settings.shop_builds = answer.shop_builds.unwrap_or(self.settings.shop_builds);
             self.save_settings();
         }
         if answer.try_again {

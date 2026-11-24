@@ -15,6 +15,7 @@ const SOCKET_PREFIX: &str = "static socket ";
 pub const SOCKETS: RangeInclusive<u32> = 1..=5;
 
 pub struct ItemsGame<'a> {
+    src: &'a [u8],
     items: Vec<Item<'a>>,
     by_id: HashMap<&'a str, usize>,
     by_name: HashMap<&'a str, usize>,
@@ -172,6 +173,16 @@ impl<'a> Item<'a> {
     pub fn first_effects_style(&self, number: u32) -> u32 {
         self.effects_styles(number).first().map_or(0, |style| style.index)
     }
+
+    pub fn persona_number(&self) -> Option<u32> {
+        let visuals = self.block.block("visuals")?;
+        visuals
+            .pairs()
+            .filter_map(|pair| pair.value.as_block())
+            .find(|block| block.str("type").is_some_and(|kind| kind.eq_ignore_ascii_case(b"persona")))?
+            .str("persona")
+            .and_then(number_of)
+    }
 }
 
 fn number_of(text: &[u8]) -> Option<u32> {
@@ -268,6 +279,7 @@ impl<'a> ItemsGame<'a> {
             }
         }
         let mut game = ItemsGame {
+            src,
             items,
             by_id,
             by_name,
@@ -280,7 +292,71 @@ impl<'a> ItemsGame<'a> {
             attached,
         };
         (game.hero_defaults, game.world_defaults) = game.find_defaults();
+        game.add_bundle_sets();
         Ok(game)
+    }
+
+    fn add_bundle_sets(&mut self) {
+        let existing_bundles: HashSet<&str> = self.sets.iter().filter_map(|set| set.bundle).collect();
+        let existing_item_sets: Vec<HashSet<&str>> = self
+            .sets
+            .iter()
+            .map(|set| set.item_names.iter().copied().collect())
+            .collect();
+        let mut extra = Vec::new();
+        for item in &self.items {
+            if !item.has_prefab("bundle") {
+                continue;
+            }
+            let Some(name) = item.name else { continue };
+            if existing_bundles.contains(name) || name.to_ascii_uppercase().contains("DO NOT USE") {
+                continue;
+            }
+            let Some(bundle) = item.block.block("bundle") else { continue };
+            let piece_names: Vec<&'a str> = bundle
+                .pairs()
+                .filter(|pair| pair.value.as_str().is_some_and(|v| v != b"0"))
+                .filter_map(|pair| as_str(pair.key))
+                .collect();
+            let mut hero: Option<&str> = None;
+            let mut single_hero = true;
+            let mut wearables: Vec<&'a str> = Vec::new();
+            for &piece_name in &piece_names {
+                let Some(piece) = self.item_named(piece_name) else { continue };
+                if piece.heroes.is_empty() || !piece.has_prefab("wearable") {
+                    continue;
+                }
+                if piece.heroes.len() != 1 {
+                    single_hero = false;
+                    break;
+                }
+                let piece_hero = piece.heroes[0];
+                match hero {
+                    None => hero = Some(piece_hero),
+                    Some(prev) if prev.eq_ignore_ascii_case(piece_hero) => {}
+                    Some(_) => {
+                        single_hero = false;
+                        break;
+                    }
+                }
+                wearables.push(piece_name);
+            }
+            if !single_hero || hero.is_none() || wearables.len() < 2 {
+                continue;
+            }
+            let wearable_set: HashSet<&str> = wearables.iter().copied().collect();
+            if existing_item_sets.iter().any(|known| wearable_set.is_subset(known)) {
+                continue;
+            }
+            extra.push(ItemSet {
+                key: name,
+                name_token: item.block.str("item_name").and_then(as_str),
+                item_names: wearables,
+                portrait: item.block.str("image_inventory").and_then(as_str),
+                bundle: Some(name),
+            });
+        }
+        self.sets.extend(extra);
     }
 
     pub fn attached_effects(&self) -> &[AttachedEffect<'a>] {
@@ -325,6 +401,10 @@ impl<'a> ItemsGame<'a> {
 
     pub fn items(&self) -> &[Item<'a>] {
         &self.items
+    }
+
+    pub(crate) fn src_slice(&self, block: Block<'_>) -> &'a [u8] {
+        &self.src[block.start()..block.end()]
     }
 
     pub fn sets(&self) -> &[ItemSet<'a>] {

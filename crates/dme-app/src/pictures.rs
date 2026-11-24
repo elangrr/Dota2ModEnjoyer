@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use dme_core::pictures;
 use dme_core::vpk::Archive;
@@ -54,7 +54,7 @@ impl Pictures {
     }
 
     pub fn use_archive(&mut self, archive: Arc<Archive>) {
-        *self.shared.archive.lock().unwrap() = Some(archive);
+        *self.shared.archive.lock().unwrap_or_else(PoisonError::into_inner) = Some(archive);
         self.known.clear();
     }
 
@@ -79,7 +79,7 @@ impl Pictures {
         if self.wanted.is_empty() {
             return;
         }
-        let mut waiting = self.shared.waiting.lock().unwrap();
+        let mut waiting = self.shared.waiting.lock().unwrap_or_else(PoisonError::into_inner);
         waiting.extend(self.wanted.drain(..).rev());
         if waiting.len() > MOST_WAITING {
             let stale = waiting.len() - MOST_WAITING;
@@ -143,7 +143,7 @@ impl Drop for Pictures {
 fn load_pictures(shared: &Shared, read: &Sender<(String, Option<egui::ColorImage>)>, ctx: &egui::Context) {
     loop {
         let path = {
-            let mut waiting = shared.waiting.lock().unwrap();
+            let mut waiting = shared.waiting.lock().unwrap_or_else(PoisonError::into_inner);
             loop {
                 if shared.closed.load(Ordering::Relaxed) {
                     return;
@@ -151,10 +151,10 @@ fn load_pictures(shared: &Shared, read: &Sender<(String, Option<egui::ColorImage
                 if let Some(path) = waiting.pop() {
                     break path;
                 }
-                waiting = shared.wake.wait(waiting).unwrap();
+                waiting = shared.wake.wait(waiting).unwrap_or_else(PoisonError::into_inner);
             }
         };
-        let archive = shared.archive.lock().unwrap().clone();
+        let archive = shared.archive.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let image = archive.and_then(|archive| std::panic::catch_unwind(|| read_picture(&archive, &path)).ok().flatten());
         if read.send((path, image)).is_err() {
             return;

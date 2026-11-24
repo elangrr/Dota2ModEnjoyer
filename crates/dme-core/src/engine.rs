@@ -6,17 +6,18 @@ use serde::{Deserialize, Serialize};
 use crate::apply::{self, Change, EffectsFor, Pick};
 use crate::dota::{DotaInstall, GameVersion, MOD_FOLDER};
 use crate::error::{Error, Result, VERIFY_HINT};
-use crate::heroes::HeroFiles;
+use crate::heroes::{HeroFiles, UnitFiles};
 use crate::items::ItemsGame;
 use crate::loadout::{Loadout, same_picks};
 use crate::resource::{self, Wholeness};
+use crate::shop_builds::ShopBuilds;
 use crate::signatures::{self, Signatures};
 use crate::vpk::{self, Archive, NewFile, PackFile};
 use crate::{bodies, effects, fsutil, gameinfo, map_effect, process, sounds, trees};
 
 pub const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
-const REWRITE_RULES: u32 = 12;
+const REWRITE_RULES: u32 = 15;
 
 const BRANCH_FILE: &str = "gameinfo_branchspecific.gi";
 
@@ -77,11 +78,13 @@ pub struct Status {
     pub package_is_current: bool,
     pub steam_busy: bool,
     pub applied_build: String,
+    pub shop_builds_tag: String,
 }
 
 impl Status {
     pub fn undone_by_an_update(&self) -> bool {
-        let other_build = !self.picks.is_empty() && !self.applied_build.is_empty() && self.applied_build != self.version.build;
+        let had_content = !self.picks.is_empty() || !self.shop_builds_tag.is_empty();
+        let other_build = had_content && !self.applied_build.is_empty() && self.applied_build != self.version.build;
         self.state.is_half_undone() || (other_build && matches!(self.state, ModState::Off | ModState::NeedsRepair(_)))
     }
 }
@@ -109,6 +112,8 @@ struct Saved {
     applied_unix: u64,
     #[serde(default)]
     rewrite_rules: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    shop_builds_tag: String,
 }
 
 struct GameFiles {
@@ -128,21 +133,57 @@ impl Engine {
     }
 
     pub fn make_ready(&self, picks: &[Pick], effects_for: &EffectsFor) -> Result<Ready> {
+        self.make_ready_with_archive(picks, effects_for, None)
+    }
+
+    pub fn make_ready_with_archive(&self, picks: &[Pick], effects_for: &EffectsFor, archive: Option<&Archive>) -> Result<Ready> {
+        self.make_ready_with_options(picks, effects_for, archive, None)
+    }
+
+    pub fn make_ready_with_options(
+        &self,
+        picks: &[Pick],
+        effects_for: &EffectsFor,
+        archive: Option<&Archive>,
+        shop_builds: Option<&ShopBuilds>,
+    ) -> Result<Ready> {
         let status = self.status()?;
-        if picks.is_empty() {
+        let shop = shop_builds.filter(|sb| !sb.files.is_empty());
+        let wanted_tag = shop.map_or("", |sb| sb.tag.as_str());
+        if picks.is_empty() && shop.is_none() {
             return match status.state {
                 ModState::Off => Ok(Ready::Normal(Restored::default())),
                 _ => self.restore().map(Ready::Normal),
             };
         }
-        if status.state == ModState::On && status.package_is_current && same_picks(&status.picks, picks) && status.effects_for == *effects_for {
+        if status.state == ModState::On
+            && status.package_is_current
+            && same_picks(&status.picks, picks)
+            && status.effects_for == *effects_for
+            && status.shop_builds_tag == wanted_tag
+        {
             return Ok(Ready::Already);
         }
-        self.apply_for(picks, effects_for).map(Ready::Applied)
+        self.apply_for_with_options(picks, effects_for, archive, shop).map(Ready::Applied)
     }
 
     pub fn mend(&self, picks: &[Pick], effects_for: &EffectsFor) -> Result<Mended> {
-        if picks.is_empty() {
+        self.mend_with_archive(picks, effects_for, None)
+    }
+
+    pub fn mend_with_archive(&self, picks: &[Pick], effects_for: &EffectsFor, archive: Option<&Archive>) -> Result<Mended> {
+        self.mend_with_options(picks, effects_for, archive, None)
+    }
+
+    pub fn mend_with_options(
+        &self,
+        picks: &[Pick],
+        effects_for: &EffectsFor,
+        archive: Option<&Archive>,
+        shop_builds: Option<&ShopBuilds>,
+    ) -> Result<Mended> {
+        let shop = shop_builds.filter(|sb| !sb.files.is_empty());
+        if picks.is_empty() && shop.is_none() {
             return Err(Error::Refused("there are no picks to put back".to_string()));
         }
         let status = self.status()?;
@@ -150,9 +191,9 @@ impl Engine {
         if !status.undone_by_an_update() || in_use || status.steam_busy {
             return Ok(Mended::Later);
         }
-        match self.apply_for(picks, effects_for) {
+        match self.apply_for_with_options(picks, effects_for, archive, shop) {
             Ok(applied) => Ok(Mended::Back(applied)),
-            Err(Error::DotaRunning) => Ok(Mended::Later),
+            Err(Error::DotaRunning | Error::SteamBusy) => Ok(Mended::Later),
             Err(why) => self.restore().map(|restored| Mended::Normal { why, restored }),
         }
     }
@@ -171,100 +212,143 @@ impl Engine {
     }
 
     pub fn apply_for(&self, picks: &[Pick], effects_for: &EffectsFor) -> Result<Applied> {
+        self.apply_for_with_archive(picks, effects_for, None)
+    }
+
+    pub fn apply_for_with_archive(&self, picks: &[Pick], effects_for: &EffectsFor, open_archive: Option<&Archive>) -> Result<Applied> {
+        self.apply_for_with_options(picks, effects_for, open_archive, None)
+    }
+
+    pub fn apply_for_with_options(
+        &self,
+        picks: &[Pick],
+        effects_for: &EffectsFor,
+        open_archive: Option<&Archive>,
+        shop_builds: Option<&ShopBuilds>,
+    ) -> Result<Applied> {
         self.check_not_running()?;
+        self.check_not_busy()?;
 
-        let archive = Archive::open(&self.dota.game_archive())?;
-        let vanilla = archive
-            .read(ITEMS_GAME)?
-            .ok_or_else(|| Error::format("the game's archive", format!("{ITEMS_GAME} is missing")))?;
-        let game = ItemsGame::parse(&vanilla)?;
-        let is_a_file = |pick: &Pick| trees::is_pick(pick) || map_effect::is_pick(pick);
-        let for_items: Vec<Pick> = picks.iter().filter(|pick| !is_a_file(pick)).cloned().collect();
-        let hero_files = for_items.iter().any(effects::is_emblem_pick).then(|| HeroFiles::read(&archive));
-        let live = |hero: &str, slot: &str| hero_files.as_ref().is_none_or(|files| files.has_slot(hero, slot));
-        let mut patched = apply::patch_for(&game, &vanilla, &for_items, &live, effects_for)?;
-
-        let mut missing = missing_files(&self.dota, &archive, &patched.changes);
-        let moved = moved_files(&archive, &patched.changes)?;
-        let is_there = |file: &String| moved.iter().any(|(path, _)| *path == format!("{}_c", resource::normal(file)));
-        missing.models.retain(|file| !is_there(file));
-        missing.others.retain(|file| !is_there(file));
-        if !missing.models.is_empty() {
-            return Err(Error::MissingModels(missing.models));
-        }
-        let compiled = |model: &str| format!("{}_c", resource::normal(model));
-        let moved_data = |path: &str| moved.iter().find(|(known, _)| known == path).map(|(_, data)| data.clone());
-        let exists = |model: &str| archive.contains(&compiled(model)) || moved_data(&compiled(model)).is_some();
-        apply::place_models(&game, &mut patched, &exists)?;
-        let after = ItemsGame::parse(&patched.bytes)?;
-        let body_swaps = bodies::swaps(&game, &after);
-        let bodies_placed = if body_swaps.is_empty() {
-            Vec::new()
+        let shop = shop_builds.filter(|sb| !sb.files.is_empty());
+        let (bytes, own_files, changes, missing_others) = if picks.is_empty() && shop.is_some() {
+            let mut own_files: Vec<NewFile> = shop.map(|sb| sb.files.clone()).unwrap_or_default();
+            dedup_own_files(&mut own_files);
+            (None, own_files, Vec::new(), Vec::new())
         } else {
+            let opened;
+            let archive = match open_archive {
+                Some(archive) => archive,
+                None => {
+                    opened = Archive::open(&self.dota.game_archive())?;
+                    &opened
+                }
+            };
+            let vanilla = archive
+                .read(ITEMS_GAME)?
+                .ok_or_else(|| Error::format("the game's archive", format!("{ITEMS_GAME} is missing")))?;
+            let game = ItemsGame::parse(&vanilla)?;
+            let is_a_file = |pick: &Pick| trees::is_pick(pick) || map_effect::is_pick(pick);
+            let for_items: Vec<Pick> = picks.iter().filter(|pick| !is_a_file(pick)).cloned().collect();
+            let needs_hero_files = for_items.iter().any(|pick| {
+                effects::is_emblem_pick(pick)
+                    || pick.slot.eq_ignore_ascii_case(apply::PERSONA_SELECTOR)
+                    || !crate::items::persona_of(&pick.slot).is_empty()
+            });
+            let hero_files = needs_hero_files.then(|| HeroFiles::read(archive));
+            let live = |hero: &str, slot: &str| hero_files.as_ref().is_none_or(|files| files.has_slot(hero, slot));
+            let mut patched = apply::patch_for(&game, &vanilla, &for_items, &live, effects_for)?;
+
+            let mut missing = missing_files(&self.dota, archive, &patched.changes);
+            let moved = moved_files(archive, &patched.changes)?;
+            let is_there = |file: &String| moved.iter().any(|(path, _)| *path == format!("{}_c", resource::normal(file)));
+            missing.models.retain(|file| !is_there(file));
+            missing.others.retain(|file| !is_there(file));
+            if !missing.models.is_empty() {
+                return Err(Error::MissingModels(missing.models));
+            }
+            let compiled = |model: &str| format!("{}_c", resource::normal(model));
+            let moved_data = |path: &str| moved.iter().find(|(known, _)| known == path).map(|(_, data)| data.clone());
+            let exists = |model: &str| archive.contains(&compiled(model)) || moved_data(&compiled(model)).is_some();
+            apply::place_models(&game, &mut patched, &exists)?;
             let read_now;
             let heroes = match &hero_files {
                 Some(files) => files,
                 None => {
-                    read_now = HeroFiles::read(&archive);
+                    read_now = HeroFiles::read(archive);
                     &read_now
                 }
             };
-            bodies::placements(&body_swaps, &|hero| heroes.model(hero).map(str::to_string), &exists, &patched.placed).0
+            let units = UnitFiles::read(archive);
+            let bodies_placed = bodies::place_all(
+                &game,
+                &mut patched,
+                &|hero| heroes.model(hero).map(str::to_string),
+                &|unit| units.model(unit).map(str::to_string),
+                &exists,
+            )?;
+            let after = ItemsGame::parse(&patched.bytes)?;
+            let mut placed_files: Vec<NewFile> = Vec::new();
+            for placed in patched.placed.iter().chain(&bodies_placed) {
+                let from = compiled(&placed.model);
+                let data = match archive.read(&from)? {
+                    Some(data) => data,
+                    None => moved_data(&from).ok_or_else(|| Error::format("the game's archive", format!("{from} is missing")))?,
+                };
+                placed_files.push((compiled(&placed.at), data));
+            }
+            let swaps = sounds::swaps(&game, &after);
+            drop(after);
+            let sound_files = if swaps.is_empty() { Vec::new() } else { sounds::Sounds::read(archive)?.files_for(&swaps)?.files };
+            let mut emblem_files: Vec<NewFile> = Vec::new();
+            for change in patched.changes.iter().filter(|change| change.hero.is_none() && change.slot == effects::EMBLEM_SLOT) {
+                for path in change.files.iter().map(|file| compiled(file)) {
+                    let held = archive.read(&path)?.and_then(|data| effects::held_on_the_hero(&data).ok().flatten());
+                    emblem_files.extend(held.map(|data| (path, data)));
+                }
+            }
+            let apply::Patched { bytes, mut changes, .. } = patched;
+            let mut own_files: Vec<NewFile> = moved;
+            own_files.extend(placed_files);
+            own_files.extend(sound_files);
+            own_files.extend(emblem_files);
+            let mut slots_taken: Vec<&str> = Vec::new();
+            for (place, pick) in picks.iter().enumerate().filter(|(_, pick)| is_a_file(pick)) {
+                if slots_taken.iter().any(|taken| taken.eq_ignore_ascii_case(&pick.slot)) {
+                    return Err(Error::Refused(format!("{} is picked more than once", pick.place())));
+                }
+                slots_taken.push(&pick.slot);
+                let (slot, id, name, files) = if trees::is_pick(pick) {
+                    let kind = trees::kind(&pick.item).ok_or_else(|| Error::NotFound(format!("there are no trees called {}", pick.item)))?;
+                    (trees::SLOT, kind.id, kind.name, kind.files(archive)?)
+                } else {
+                    let item = game.item(&pick.item).ok_or_else(|| Error::NotFound(format!("there is no item with id {}", pick.item)))?;
+                    (map_effect::SLOT, item.id, item.name.unwrap_or(item.id), map_effect::files(&game, archive, item)?)
+                };
+                own_files.extend(files);
+                let change = Change {
+                    hero: None,
+                    slot: slot.to_string(),
+                    default_id: String::new(),
+                    item_id: id.to_string(),
+                    item_name: name.to_string(),
+                    style: 0,
+                    model: None,
+                    files: Vec::new(),
+                };
+                changes.insert(place.min(changes.len()), change);
+            }
+            if let Some(sb) = shop {
+                own_files.extend(sb.files.iter().cloned());
+            }
+            dedup_own_files(&mut own_files);
+            (Some(bytes), own_files, changes, missing.others)
         };
-        let mut placed_files: Vec<NewFile> = Vec::new();
-        for placed in patched.placed.iter().chain(&bodies_placed) {
-            let from = compiled(&placed.model);
-            let data = match archive.read(&from)? {
-                Some(data) => data,
-                None => moved_data(&from).ok_or_else(|| Error::format("the game's archive", format!("{from} is missing")))?,
-            };
-            placed_files.push((compiled(&placed.at), data));
+        let mut pack_files: Vec<PackFile<'_>> = Vec::with_capacity(own_files.len() + usize::from(bytes.is_some()));
+        if let Some(bytes) = &bytes {
+            pack_files.push(PackFile { path: ITEMS_GAME, data: bytes });
         }
-        let swaps = sounds::swaps(&game, &after);
-        drop(after);
-        let sound_files = if swaps.is_empty() { Vec::new() } else { sounds::Sounds::read(&archive)?.files_for(&swaps)?.files };
-        let mut emblem_files: Vec<NewFile> = Vec::new();
-        for change in patched.changes.iter().filter(|change| change.hero.is_none() && change.slot == effects::EMBLEM_SLOT) {
-            for path in change.files.iter().map(|file| compiled(file)) {
-                let held = archive.read(&path)?.and_then(|data| effects::held_on_the_hero(&data).ok().flatten());
-                emblem_files.extend(held.map(|data| (path, data)));
-            }
-        }
-        let apply::Patched { bytes, mut changes, .. } = patched;
-        let mut own_files: Vec<NewFile> = moved;
-        own_files.retain(|(path, _)| !placed_files.iter().chain(&sound_files).chain(&emblem_files).any(|(placed, _)| placed == path));
-        own_files.extend(placed_files);
-        own_files.extend(sound_files);
-        own_files.extend(emblem_files);
-        let mut slots_taken: Vec<&str> = Vec::new();
-        for (place, pick) in picks.iter().enumerate().filter(|(_, pick)| is_a_file(pick)) {
-            if slots_taken.iter().any(|taken| taken.eq_ignore_ascii_case(&pick.slot)) {
-                return Err(Error::Refused(format!("{} is picked more than once", pick.place())));
-            }
-            slots_taken.push(&pick.slot);
-            let (slot, id, name, files) = if trees::is_pick(pick) {
-                let kind = trees::kind(&pick.item).ok_or_else(|| Error::NotFound(format!("there are no trees called {}", pick.item)))?;
-                (trees::SLOT, kind.id, kind.name, kind.files(&archive)?)
-            } else {
-                let item = game.item(&pick.item).ok_or_else(|| Error::NotFound(format!("there is no item with id {}", pick.item)))?;
-                (map_effect::SLOT, item.id, item.name.unwrap_or(item.id), map_effect::files(&game, &archive, item)?)
-            };
-            own_files.extend(files);
-            let change = Change {
-                hero: None,
-                slot: slot.to_string(),
-                default_id: String::new(),
-                item_id: id.to_string(),
-                item_name: name.to_string(),
-                style: 0,
-                model: None,
-                files: Vec::new(),
-            };
-            changes.insert(place.min(changes.len()), change);
-        }
-        let mut files = vec![PackFile { path: ITEMS_GAME, data: &bytes }];
-        files.extend(own_files.iter().map(|(path, data)| PackFile { path, data }));
-        let package = vpk::build(&files)?;
+        pack_files.extend(own_files.iter().map(|(path, data)| PackFile { path, data }));
+        vpk::validate(&pack_files)?;
 
         let files = self.read_game_files()?;
         if !files.branch_is_valves {
@@ -277,10 +361,12 @@ impl Engine {
         let new_signatures = format!("{}{our_line}{}", files.valve_signatures, files.line_break);
 
         self.check_not_running()?;
+        self.check_not_busy()?;
         self.back_up_originals(&files)?;
         self.forget_applied()?;
         fsutil::create_dir_all(&self.dota.mod_dir())?;
-        fsutil::write_atomic(&self.dota.mod_package(), &package)?;
+        self.write_loose_shop_builds(shop)?;
+        let package_len = vpk::write_package(&self.dota.mod_package(), &pack_files)?;
         fsutil::write_atomic(&self.dota.signatures(), new_signatures.as_bytes())?;
         fsutil::write_atomic(&self.dota.gameinfo_branch(), new_branch.as_bytes())?;
         self.save(&Saved {
@@ -289,21 +375,55 @@ impl Engine {
             game_build: self.dota.version().map(|v| v.build).unwrap_or_default(),
             applied_unix: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
             rewrite_rules: REWRITE_RULES,
+            shop_builds_tag: shop.map(|sb| sb.tag.clone()).unwrap_or_default(),
         })?;
 
-        Ok(Applied { changes, missing_files: missing.others, package_len: package.len() })
+        Ok(Applied { changes, missing_files: missing_others, package_len })
+    }
+
+    fn write_loose_shop_builds(&self, shop: Option<&ShopBuilds>) -> Result<()> {
+        let dir = self.dota.mod_itembuilds_dir();
+        fsutil::remove_dir_all_if_exists(&dir)?;
+        let Some(shop) = shop else { return Ok(()) };
+        fsutil::create_dir_all(&dir)?;
+        for (rel_path, data) in &shop.files {
+            if let Some(name) = rel_path.strip_prefix("itembuilds/")
+                && !name.is_empty()
+                && !name.contains(['/', '\\'])
+            {
+                fsutil::write_atomic(&dir.join(name), data)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn restore(&self) -> Result<Restored> {
         self.check_not_running()?;
-        let files = self.read_game_files()?;
+        self.check_not_busy()?;
+        let files = match self.read_game_files() {
+            Ok(files) => files,
+            Err(error) => {
+                if let Some(done) = self.restore_from_verified_backup()? {
+                    return Ok(done);
+                }
+                return Err(error);
+            }
+        };
         let mut done = Restored::default();
 
         if files.has_our_lines {
-            fsutil::write_atomic(&self.dota.gameinfo_branch(), files.branch_without_ours.as_bytes())?;
-            done.gameinfo_restored = true;
-        }
-        if !files.branch_is_valves {
+            if files.branch_is_valves {
+                fsutil::write_atomic(&self.dota.gameinfo_branch(), files.branch_without_ours.as_bytes())?;
+                done.gameinfo_restored = true;
+            } else if let Some(backup_branch) = self.verified_backup_branch(&files.valve_signatures) {
+                fsutil::write_atomic(&self.dota.gameinfo_branch(), &backup_branch)?;
+                done.gameinfo_restored = true;
+            } else {
+                fsutil::write_atomic(&self.dota.gameinfo_branch(), files.branch_without_ours.as_bytes())?;
+                done.gameinfo_restored = true;
+                done.notes.push(Note::BranchNotValves);
+            }
+        } else if !files.branch_is_valves {
             done.notes.push(Note::BranchNotValves);
         }
         if files.has_extra_lines {
@@ -319,9 +439,56 @@ impl Engine {
         Ok(done)
     }
 
+    fn verified_backup_branch(&self, valve_sigs: &str) -> Option<Vec<u8>> {
+        let parsed = Signatures::parse(valve_sigs.as_bytes()).ok()?;
+        let declared = parsed.valve_line_for(BRANCH_FILE)?;
+        let build = self.dota.version().ok()?.build;
+        let bytes = std::fs::read(self.data_dir.join("backup").join(build).join(BRANCH_FILE)).ok()?;
+        signatures::matches(&declared, &bytes).then_some(bytes)
+    }
+
+    fn restore_from_verified_backup(&self) -> Result<Option<Restored>> {
+        let Ok(build) = self.dota.version().map(|v| v.build) else { return Ok(None) };
+        let folder = self.data_dir.join("backup").join(build);
+        let Ok(backup_branch) = std::fs::read(folder.join(BRANCH_FILE)) else { return Ok(None) };
+
+        let live_sig_bytes = std::fs::read(self.dota.signatures()).ok();
+        let (valve_sigs_bytes, sigs_needed_restore) = match live_sig_bytes.as_deref().and_then(|b| Signatures::parse(b).ok()) {
+            Some(parsed) => (parsed.without_extra().into_bytes(), !parsed.extra.trim().is_empty()),
+            None => {
+                let Ok(backup_sigs) = std::fs::read(folder.join("dota.signatures")) else { return Ok(None) };
+                let Ok(parsed) = Signatures::parse(&backup_sigs) else { return Ok(None) };
+                if !parsed.extra.trim().is_empty() {
+                    return Ok(None);
+                }
+                (backup_sigs, true)
+            }
+        };
+
+        let Ok(parsed) = Signatures::parse(&valve_sigs_bytes) else { return Ok(None) };
+        let Some(declared) = parsed.valve_line_for(BRANCH_FILE) else { return Ok(None) };
+        if !signatures::matches(&declared, &backup_branch) {
+            return Ok(None);
+        }
+
+        let live_branch = std::fs::read(self.dota.gameinfo_branch()).ok();
+        let mut done = Restored::default();
+        if live_branch.as_deref() != Some(backup_branch.as_slice()) {
+            fsutil::write_atomic(&self.dota.gameinfo_branch(), &backup_branch)?;
+            done.gameinfo_restored = true;
+        }
+        if sigs_needed_restore {
+            fsutil::write_atomic(&self.dota.signatures(), &valve_sigs_bytes)?;
+            done.signatures_restored = true;
+        }
+        done.package_removed = fsutil::remove_dir_all_if_exists(&self.dota.mod_dir())?;
+        self.forget_applied()?;
+        Ok(Some(done))
+    }
+
     pub fn status(&self) -> Result<Status> {
         let files = self.read_game_files()?;
-        let package = self.dota.mod_package().is_file();
+        let package = vpk::package_is_complete(&self.dota.mod_package());
 
         let state = if !files.branch_is_valves {
             ModState::ChangedByOther(format!("{BRANCH_FILE} is not the file Valve shipped"))
@@ -350,6 +517,7 @@ impl Engine {
             steam_busy: self.dota.steam_is_busy(),
             state,
             applied_build: saved.game_build,
+            shop_builds_tag: saved.shop_builds_tag,
             picks: saved.picks,
             effects_for: saved.effects_for,
         })
@@ -358,6 +526,14 @@ impl Engine {
     fn check_not_running(&self) -> Result<()> {
         if self.refuse_while_running && process::is_dota_running() {
             Err(Error::DotaRunning)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_not_busy(&self) -> Result<()> {
+        if self.dota.steam_is_busy() {
+            Err(Error::SteamBusy)
         } else {
             Ok(())
         }
@@ -475,6 +651,19 @@ fn read_text(path: &Path) -> Result<String> {
         .map_err(|_| Error::format(path.display().to_string(), "the file is not plain text"))
 }
 
+fn dedup_own_files(files: &mut Vec<NewFile>) {
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(resource::normal(ITEMS_GAME));
+    let mut keep = vec![false; files.len()];
+    for (index, (path, _)) in files.iter().enumerate().rev() {
+        if seen.insert(resource::normal(path)) {
+            keep[index] = true;
+        }
+    }
+    let mut cursor = keep.into_iter();
+    files.retain(|_| cursor.next().unwrap_or(false));
+}
+
 fn is_branch_file(declared_path: &str) -> bool {
     declared_path
         .rsplit(['\\', '/'])
@@ -571,8 +760,15 @@ mod tests {
         let package = Archive::open(&dota.mod_package()).unwrap();
         assert_eq!(package.len(), 3);
         assert!(package.verify_checksums().unwrap().all_ok());
+        for entry in package.entries() {
+            assert!(!entry.is_embedded() && entry.archive_index() == 0 && entry.offset() % 16 == 0);
+        }
         let inside = package.read(ITEMS_GAME).unwrap().unwrap();
-        assert_eq!(applied.package_len, std::fs::metadata(dota.mod_package()).unwrap().len() as usize);
+        let data_file = dota.mod_dir().join("pak01_000.vpk");
+        assert_eq!(
+            applied.package_len,
+            (std::fs::metadata(dota.mod_package()).unwrap().len() + std::fs::metadata(&data_file).unwrap().len()) as usize
+        );
         let game = ItemsGame::parse(&inside).unwrap();
         assert_eq!(game.item("2").unwrap().model, Some("models/heroes/axe/axe_weapon.vmdl"));
 
@@ -708,16 +904,17 @@ mod tests {
         let package_of = |file: &[u8]| {
             let fake = fake_install_of(&items, &[(path, file)]);
             fake.engine.apply(&emblem).unwrap();
-            Archive::open(&fake.engine.dota.mod_package()).unwrap()
+            let package = Archive::open(&fake.engine.dota.mod_package()).unwrap();
+            (fake, package)
         };
 
-        let package = package_of(&emblem_file("self", Some("PATTACH_WORLDORIGIN")));
+        let (_fake, package) = package_of(&emblem_file("self", Some("PATTACH_WORLDORIGIN")));
         let written = package.read(path).unwrap().expect("the emblem's effect is in the package");
         assert_eq!(drivers_of(&written)[0], [("m_entityName".to_string(), text("parent"))]);
         assert_eq!(package.len(), 2);
 
-        assert!(!package_of(&emblem_file("parent", None)).contains(path));
-        assert!(!package_of(b"compiled").contains(path));
+        assert!(!package_of(&emblem_file("parent", None)).1.contains(path));
+        assert!(!package_of(b"compiled").1.contains(path));
     }
 
     #[test]
@@ -775,6 +972,11 @@ mod tests {
         let (signatures, ours) = (read(fake.engine.dota.signatures()), read(fake.engine.dota.gameinfo_branch()));
         std::fs::write(fake.engine.dota.gameinfo_branch(), BRANCH_TEXT).unwrap();
         assert!(state(&fake).is_half_undone());
+        fake.engine.apply(&picks()).unwrap();
+        assert_eq!(state(&fake), ModState::On);
+
+        std::fs::remove_file(fake.engine.dota.mod_dir().join("pak01_000.vpk")).unwrap();
+        assert!(matches!(state(&fake), ModState::NeedsRepair(_)) && !state(&fake).is_half_undone());
         fake.engine.apply(&picks()).unwrap();
         assert_eq!(state(&fake), ModState::On);
 
@@ -1188,5 +1390,122 @@ VersionDate=Nov 20 2026
         let inside = Archive::open(&fake.engine.dota.mod_package()).unwrap().read(ITEMS_GAME).unwrap().unwrap();
         assert_eq!(inside, SAMPLE.as_bytes());
         assert_eq!(state(&fake), ModState::On);
+    }
+
+    #[test]
+    fn nothing_is_written_while_steam_is_updating_dota() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("steamapps").join("common").join("dota 2 beta");
+        let game = root.join("game");
+        let (bin, dota_dir) = (game.join("bin").join("win64"), game.join("dota"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&dota_dir).unwrap();
+        std::fs::write(bin.join("dota2.exe"), b"").unwrap();
+        std::fs::write(dota_dir.join("gameinfo.gi"), GAMEINFO_TEXT).unwrap();
+        std::fs::write(dota_dir.join(BRANCH_FILE), BRANCH_TEXT).unwrap();
+        std::fs::write(dota_dir.join("steam.inf"), "ClientVersion=6973\r\nVersionDate=Nov 09 2026\r\n").unwrap();
+        let signatures = format!(
+            "{}\r\n{}\r\nDIGEST:0123456789ABCDEF\r\n",
+            signatures::make_line("...\\..\\..\\dota\\gameinfo.gi", GAMEINFO_TEXT.as_bytes()),
+            signatures::make_line("...\\..\\..\\dota\\gameinfo_branchspecific.gi", BRANCH_TEXT.as_bytes()),
+        );
+        std::fs::write(bin.join("dota.signatures"), &signatures).unwrap();
+        let mut files = vec![PackFile { path: ITEMS_GAME, data: SAMPLE.as_bytes() }];
+        files.extend(FILES.iter().map(|&path| PackFile { path, data: b"compiled".as_slice() }));
+        std::fs::write(dota_dir.join("pak01_dir.vpk"), vpk::build(&files).unwrap()).unwrap();
+
+        let engine = Engine {
+            dota: DotaInstall::at(&root).unwrap(),
+            data_dir: dir.path().join("data"),
+            refuse_while_running: false,
+        };
+        let manifest = engine.dota.app_manifest().unwrap();
+        std::fs::write(&manifest, "\"AppState\"\n{\n\t\"StateFlags\"\t\"1026\"\n}\n").unwrap();
+
+        assert!(matches!(engine.apply(&picks()), Err(Error::SteamBusy)));
+        assert!(matches!(engine.restore(), Err(Error::SteamBusy)));
+        assert!(!engine.dota.mod_dir().exists());
+
+        std::fs::write(&manifest, "\"AppState\"\n{\n\t\"StateFlags\"\t\"4\"\n}\n").unwrap();
+        engine.apply(&picks()).unwrap();
+        assert_eq!(engine.status().unwrap().state, ModState::On);
+        engine.restore().unwrap();
+        assert_eq!(engine.status().unwrap().state, ModState::Off);
+    }
+
+    #[test]
+    fn duplicate_own_files_keep_the_latest_and_never_collide_with_items_game() {
+        let mut files = vec![
+            (ITEMS_GAME.to_string(), b"wrong".to_vec()),
+            ("Particles\\A\\One.vpcf_c".to_string(), b"older".to_vec()),
+            ("particles/a/one.vpcf_c".to_string(), b"newer".to_vec()),
+            ("models/b.vmdl_c".to_string(), b"only".to_vec()),
+        ];
+        dedup_own_files(&mut files);
+        assert_eq!(files, vec![("particles/a/one.vpcf_c".to_string(), b"newer".to_vec()), ("models/b.vmdl_c".to_string(), b"only".to_vec())]);
+    }
+
+    #[test]
+    fn restore_recovers_from_verified_backup_when_markers_or_signatures_are_damaged() {
+        let fake = fake_install(&FILES);
+        let dota = &fake.engine.dota;
+        fake.engine.apply(&picks()).unwrap();
+
+        let damaged = read(dota.gameinfo_branch()).replace(gameinfo::END_MARK, "");
+        std::fs::write(dota.gameinfo_branch(), damaged).unwrap();
+        let restored = fake.engine.restore().unwrap();
+        assert!(restored.gameinfo_restored && restored.signatures_restored && restored.package_removed);
+        assert!(restored.notes.is_empty());
+        assert_eq!(read(dota.gameinfo_branch()), BRANCH_TEXT);
+        assert_eq!(read(dota.signatures()), fake.signatures);
+        assert_eq!(state(&fake), ModState::Off);
+
+        fake.engine.apply(&picks()).unwrap();
+        std::fs::write(dota.signatures(), "corrupt garbage").unwrap();
+        let restored = fake.engine.restore().unwrap();
+        assert!(restored.gameinfo_restored && restored.signatures_restored && restored.package_removed);
+        assert_eq!(read(dota.gameinfo_branch()), BRANCH_TEXT);
+        assert_eq!(read(dota.signatures()), fake.signatures);
+        assert_eq!(state(&fake), ModState::Off);
+
+        fake.engine.apply(&picks()).unwrap();
+        let backup_branch = fake.engine.data_dir.join("backup").join("6973").join(BRANCH_FILE);
+        std::fs::write(&backup_branch, "tampered backup").unwrap();
+        let damaged = read(dota.gameinfo_branch()).replace(gameinfo::END_MARK, "");
+        std::fs::write(dota.gameinfo_branch(), damaged).unwrap();
+        assert!(fake.engine.restore().is_err(), "never restores a backup that fails Valve's hash");
+    }
+
+    #[test]
+    fn shop_builds_work_alone_and_alongside_cosmetics_and_clean_up_on_restore() {
+        let fake = fake_install(&FILES);
+        let dota = &fake.engine.dota;
+        let shop = ShopBuilds {
+            tag: "v1:100:7.42:3:9".to_string(),
+            files: vec![("itembuilds/default_axe.txt".to_string(), b"\"itembuilds\"\n{\n}\n".to_vec())],
+        };
+
+        assert!(matches!(fake.engine.make_ready_with_options(&[], &EffectsFor::Every, None, Some(&shop)).unwrap(), Ready::Applied(_)));
+        assert_eq!(state(&fake), ModState::On);
+        assert!(dota.mod_itembuilds_dir().join("default_axe.txt").is_file());
+        let package = Archive::open(&dota.mod_package()).unwrap();
+        assert!(package.contains("itembuilds/default_axe.txt"));
+        assert!(!package.contains(ITEMS_GAME), "no cosmetic picks means items_game.txt is untouched");
+        assert!(matches!(fake.engine.make_ready_with_options(&[], &EffectsFor::Every, None, Some(&shop)).unwrap(), Ready::Already));
+
+        assert!(matches!(fake.engine.make_ready_with_options(&picks(), &EffectsFor::Every, None, Some(&shop)).unwrap(), Ready::Applied(_)));
+        let package = Archive::open(&dota.mod_package()).unwrap();
+        assert!(package.contains(ITEMS_GAME));
+        assert!(package.contains("itembuilds/default_axe.txt"));
+        assert!(dota.mod_itembuilds_dir().join("default_axe.txt").is_file());
+
+        assert!(matches!(fake.engine.make_ready_with_options(&picks(), &EffectsFor::Every, None, None).unwrap(), Ready::Applied(_)));
+        assert!(!dota.mod_itembuilds_dir().exists());
+        assert_eq!(fake.engine.status().unwrap().shop_builds_tag, "");
+
+        assert!(matches!(fake.engine.make_ready_with_options(&[], &EffectsFor::Every, None, Some(&shop)).unwrap(), Ready::Applied(_)));
+        fake.engine.restore().unwrap();
+        assert_eq!(state(&fake), ModState::Off);
+        assert!(!dota.mod_dir().exists());
     }
 }

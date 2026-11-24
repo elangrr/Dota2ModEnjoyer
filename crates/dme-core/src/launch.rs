@@ -28,14 +28,30 @@ pub const LOW_END: &[Setting] = &[
     ("r_dashboard_render_quality", "0"),
 ];
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LaunchOptions {
+    pub low_end: bool,
+    pub map_dota: bool,
+    pub novid: bool,
+    pub high: bool,
+}
+
 pub fn settings(low_end: bool) -> &'static [Setting] {
     if low_end { LOW_END } else { &[] }
 }
 
 pub fn start_dota(settings: &[Setting]) -> Result<()> {
+    spawn_steam(launch_arguments(settings))
+}
+
+pub fn start_dota_with(options: &LaunchOptions) -> Result<()> {
+    spawn_steam(launch_arguments_for(options))
+}
+
+fn spawn_steam(arguments: Vec<String>) -> Result<()> {
     let steam = find_steam(&dota::steam_folders()).ok_or(Error::NoSteam)?;
     Command::new(&steam)
-        .args(launch_arguments(settings))
+        .args(arguments)
         .spawn()
         .map(drop)
         .map_err(|error| Error::Launch(format!("{} did not start ({error}).", steam.display())))
@@ -48,6 +64,23 @@ fn find_steam(folders: &[PathBuf]) -> Option<PathBuf> {
 fn launch_arguments(settings: &[Setting]) -> Vec<String> {
     let mut arguments = vec!["-applaunch".to_string(), DOTA_APP_ID.to_string()];
     for (name, value) in settings {
+        arguments.extend([format!("+{name}"), value.to_string()]);
+    }
+    arguments
+}
+
+pub fn launch_arguments_for(options: &LaunchOptions) -> Vec<String> {
+    let mut arguments = vec!["-applaunch".to_string(), DOTA_APP_ID.to_string()];
+    if options.map_dota {
+        arguments.extend(["-map".to_string(), "dota".to_string()]);
+    }
+    if options.novid {
+        arguments.push("-novid".to_string());
+    }
+    if options.high {
+        arguments.push("-high".to_string());
+    }
+    for (name, value) in settings(options.low_end) {
         arguments.extend([format!("+{name}"), value.to_string()]);
     }
     arguments
@@ -83,6 +116,18 @@ mod tests {
         let arguments = launch_arguments(&[("dota_cheap_water", "1"), ("r_ssao", "0")]);
         assert_eq!(arguments, ["-applaunch", "570", "+dota_cheap_water", "1", "+r_ssao", "0"]);
         assert_eq!(launch_arguments(settings(true)).len(), 2 + 2 * LOW_END.len());
+    }
+
+    #[test]
+    fn launch_options_pass_boosters_before_low_end_settings() {
+        assert_eq!(launch_arguments_for(&LaunchOptions::default()), ["-applaunch", "570"]);
+        let all = LaunchOptions { low_end: true, map_dota: true, novid: true, high: true };
+        let args = launch_arguments_for(&all);
+        assert_eq!(&args[..6], ["-applaunch", "570", "-map", "dota", "-novid", "-high"]);
+        assert_eq!(args.len(), 6 + 2 * LOW_END.len());
+
+        let only_map = LaunchOptions { map_dota: true, ..LaunchOptions::default() };
+        assert_eq!(launch_arguments_for(&only_map), ["-applaunch", "570", "-map", "dota"]);
     }
 
     #[test]

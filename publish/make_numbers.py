@@ -54,8 +54,9 @@ API = "https://api.stratz.com/graphql"
 CAPACITY = "at capacity"
 BUSY_WAIT = 60
 BUSY_TRIES = 10
-# OpenDota's database of pro matches, which takes a question in SQL.
+# OpenDota's database of pro matches, which takes a question in SQL, and its ability id map.
 PRO_API = "https://api.opendota.com/api/explorer?sql="
+OPENDOTA_ABILITY_IDS = "https://api.opendota.com/api/constants/ability_ids"
 
 # The pairs of ranks, in the order the file has them. STRATZ counts hero against hero for a
 # pair as a whole (the first name), and wins by role for each of its two ranks (the two names
@@ -156,18 +157,20 @@ LOST_BY_STRATZ = {"item_bottle"}
 # Neutral items: what pros take in each tier, from OpenDota's pro matches of the newest patch
 # alone, since a patch changes the trinkets of each tier (7.42 brought four new ones and made
 # Revenant's Brooch a trinket). A hero in a role is said where at least LEAST_NEUTRAL_PROS pros
-# played it so, as for what pros buy; where fewer did, the hero in any role, where at least as
-# many played it. A tier is said where at least LEAST_NEUTRAL_TIER of them got as far, and a
-# trinket or enhancement where at least NEUTRAL_SHARE of those took it, and two at the least:
-# one pro is nobody to go by. No more than MOST_TRINKETS and MOST_ENHANCEMENTS of each tier.
-# The newest patch's pro matches are counted over no more than NEUTRAL_MOST_DAYS, which only
-# bounds the question.
-LEAST_NEUTRAL_PROS = 8
-LEAST_NEUTRAL_TIER = 5
+# played it so; where fewer did, the hero in any role, where at least as many played it. A tier
+# is said where at least LEAST_NEUTRAL_TIER of them got as far, and a trinket or enhancement
+# where at least NEUTRAL_SHARE of those took it, and two at the least: one pro is nobody to go
+# by. No more than MOST_TRINKETS and MOST_ENHANCEMENTS of each tier. The newest patch's pro
+# matches are counted over no more than NEUTRAL_MOST_DAYS, which only bounds the question.
+LEAST_NEUTRAL_PROS = 5
+LEAST_NEUTRAL_TIER = 3
 NEUTRAL_SHARE = 0.15
 MOST_TRINKETS, MOST_ENHANCEMENTS = 3, 2
 NEUTRAL_TIERS = 4
 NEUTRAL_MOST_DAYS = 180
+# Pro fallback for heroes whose skill order or talents STRATZ lacks (such as Kez and Largo).
+PRO_SKILLS_DAYS = 90
+LEAST_PRO_SKILLS = 8
 # The role of a hero's neutral items that are of every role it was played in.
 ANY_ROLE = 5
 # What OpenDota calls a neutral item where the game's files call it otherwise.
@@ -534,11 +537,15 @@ def neutral_rows(now):
             FROM placed
         ), made AS (
             SELECT r.hero_id, r.role, h.tier, COALESCE(h.made->>'item_neutral', '') AS trinket,
-                COALESCE(h.made->>'item_neutral_enhancement', '') AS enhancement
+                COALESCE(h.made->>'item_neutral_enhancement', '') AS enhancement,
+                CASE WHEN (h.made->>'time') ~ '^[0-9]+$' THEN (h.made->>'time')::int END AS made_time
             FROM roled r, unnest(r.history) WITH ORDINALITY AS h(made, tier)
             WHERE h.tier <= %(tiers)d
         )
         SELECT 'm' AS kind, 0 AS hero_id, 0 AS role, 0 AS tier, (SELECT patch FROM newest) AS name, count(*) AS count FROM games
+        UNION ALL
+        SELECT 'a', 0, 0, tier, '', COALESCE(round(avg(made_time) / 60.0)::int, 0)
+        FROM made WHERE made_time IS NOT NULL GROUP BY tier
         UNION ALL
         SELECT 'p', hero_id, CASE WHEN GROUPING(role) = 1 THEN %(any)d ELSE role END, 0, '', count(*)
         FROM roled GROUP BY GROUPING SETS ((hero_id, role), (hero_id)) HAVING GROUPING(role) = 1 OR role IS NOT NULL
@@ -564,18 +571,21 @@ def neutral_rows(now):
 
 def neutrals_of(rows):
     """The pros' neutral items, made of the rows of `neutral_rows`: the patch, how many pro
-    matches, the names of the trinkets and enhancements, by the names the game's files know
-    them by, and for each hero, by its number, the roles enough pros played it in, each with
-    how many and its tiers. ANY_ROLE stands for every role together, which is there where
-    some role of the hero is not. A tier is its number, how many got as far, how many of
-    those kept the trinket they had, and the trinkets and the enhancements taken, each by its
-    place in the names and how many took it, the most taken first."""
+    matches, average craft minutes per tier, the names of the trinkets and enhancements, by the
+    names the game's files know them by, and for each hero, by its number, the roles enough pros
+    played it in, each with how many and its tiers. ANY_ROLE stands for every role together,
+    which is there where some role of the hero is not. A tier is its number, how many got as
+    far, how many of those kept the trinket they had, and the trinkets and the enhancements
+    taken, each by its place in the names and how many took it, the most taken first."""
     patch, matches = "", 0
+    minutes = [0] * NEUTRAL_TIERS
     players, reached, taken = {}, collections.Counter(), {}
     for row in rows:
         kind, hero, role, tier, name, count = row["kind"], int(row["hero_id"]), int(row["role"]), int(row["tier"]), row["name"] or "", int(row["count"])
         if kind == "m":
             patch, matches = name, count
+        elif kind == "a" and 1 <= tier <= NEUTRAL_TIERS:
+            minutes[tier - 1] = max(0, count)
         elif kind == "p":
             players[(hero, role)] = count
         elif kind == "t" and not name:
@@ -608,7 +618,94 @@ def neutrals_of(rows):
                 tiers.append([tier, got, of_tier["kept"], most(of_tier["t"], MOST_TRINKETS), most(of_tier["e"], MOST_ENHANCEMENTS)])
             if tiers:
                 heroes.setdefault(hero, []).append([role, players[(hero, role)], tiers])
-    return {"source": "OpenDota", "patch": patch, "matches": matches, "names": names, "heroes": heroes}
+    out = {"source": "OpenDota", "patch": patch, "matches": matches, "names": names, "heroes": heroes}
+    if any(minutes):
+        out["minutes"] = minutes
+    return out
+
+
+def pro_skills_from_rows(rows, ability_names):
+    """Computes pro skill orders and talent pick/win counts per (hero, role) and per (hero, ANY_ROLE)
+    from OpenDota rows: each row has hero_id, role (or None), win (bool), and upgrades (list of
+    ability IDs). Used to fill in heroes whose skill orders or talents STRATZ lacks (such as Kez
+    and Largo)."""
+    orders_by = collections.defaultdict(list)
+    talents_by = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0]))
+    for row in rows:
+        hero = int(row["hero_id"])
+        role = row.get("role")
+        role = int(role) if role is not None else None
+        won = 1 if row.get("win") else 0
+        upgrades = [ability_names.get(str(aid)) for aid in (row.get("upgrades") or [])]
+        upgrades = [name for name in upgrades if name and name != "special_bonus_attributes"]
+        if not upgrades:
+            continue
+        keys = [(hero, ANY_ROLE)] + ([(hero, role)] if role is not None else [])
+        for key in keys:
+            orders_by[key].append(upgrades)
+            for name in set(upgrades):
+                if name.startswith("special_bonus"):
+                    counts = talents_by[key][name]
+                    counts[0] += 1
+                    counts[1] += won
+    orders = {}
+    for key, lists in orders_by.items():
+        if len(lists) >= LEAST_PRO_SKILLS:
+            order = usual_order(lists)
+            if order:
+                orders[key] = (len(lists), order)
+    talents = {}
+    for key, counts in talents_by.items():
+        if len(orders_by[key]) >= LEAST_PRO_SKILLS:
+            taken = sorted(([name, m, w] for name, (m, w) in counts.items() if m > 0), key=lambda entry: (-entry[1], entry[0]))
+            if taken:
+                talents[key] = taken
+    return orders, talents
+
+
+def pro_skills_and_talents(now, hero_ids):
+    """Fetches pro skill orders and talent counts from OpenDota for `hero_ids` (heroes whose
+    skill orders or talents STRATZ lacks, such as Kez and Largo). Returns ({(hero, role): (n, [names])},
+    {(hero, role): [[talent_name, matches, wins]]}). Fails soft to empty dicts."""
+    if not hero_ids:
+        return {}, {}
+    try:
+        req = urllib.request.Request(OPENDOTA_ABILITY_IDS, headers={"User-Agent": "make-numbers/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as answer:
+            ability_names = json.load(answer)
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        print(f"  OpenDota ability map could not be fetched ({error}): no pro skill fallback")
+        return {}, {}
+    id_list = ",".join(str(int(h)) for h in sorted(set(hero_ids)))
+    sql = """
+        WITH players AS (
+            SELECT pm.match_id, pm.player_slot, pm.player_slot < 128 AS radiant, pm.lane_role, pm.hero_id,
+                (pm.player_slot < 128) = m.radiant_win AS win,
+                pm.ability_upgrades_arr AS upgrades, COALESCE(pm.lh_t[11], 0) AS lh10
+            FROM player_matches pm JOIN matches m USING (match_id)
+            WHERE m.start_time >= %(since)d AND m.start_time < %(now)d
+                AND pm.hero_id IN (%(heroes)s) AND pm.ability_upgrades_arr IS NOT NULL
+        ), placed AS (
+            SELECT *, row_number() OVER (PARTITION BY match_id, radiant, lane_role ORDER BY lh10 DESC, player_slot) AS place
+            FROM players
+        )
+        SELECT hero_id, win, upgrades,
+            CASE WHEN lane_role = 1 AND place = 1 THEN 0 WHEN lane_role = 2 AND place = 1 THEN 1
+                WHEN lane_role = 3 AND place = 1 THEN 2 WHEN lane_role = 3 AND place = 2 THEN 3
+                WHEN lane_role = 1 AND place = 2 THEN 4 END AS role
+        FROM placed
+    """ % {"since": now - PRO_SKILLS_DAYS * 24 * 3600, "now": now, "heroes": id_list}
+    try:
+        asked = urllib.request.Request(PRO_API + urllib.parse.quote(" ".join(sql.split())), headers={"User-Agent": "make-numbers/1.0"})
+        with urllib.request.urlopen(asked, timeout=180) as answer:
+            said = json.load(answer)
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        print(f"  OpenDota pro skills could not be asked ({error}): no pro skill fallback")
+        return {}, {}
+    if said.get("err") or not isinstance(said.get("rows"), list):
+        print(f"  OpenDota did not like the pro skills question ({said.get('err')})")
+        return {}, {}
+    return pro_skills_from_rows(said["rows"], ability_names)
 
 
 def sample_of(asker, hero, role):
@@ -740,6 +837,34 @@ def make_builds(asker, now, numbers, heroes, few, patch):
                 orders.setdefault(hero, []).append([role, len(matches), order])
         if (count + 1) % 20 == 0:
             print(f"  single matches of {count + 1} heroes, {sampled:,} in all, {asker.asked} questions asked")
+
+    # Pro fallback for heroes whose skill orders or talents STRATZ lacks (such as Kez and Largo).
+    missing_skill_heroes = sorted({
+        hero for hero, builds in of_hero.items()
+        if any(not made["talents"] for made in builds)
+        or any(not any(entry[0] == role for entry in orders.get(hero, [])) for role in {made["role"] for made in builds})
+    })
+    if missing_skill_heroes:
+        pro_orders, pro_talents = pro_skills_and_talents(now, missing_skill_heroes)
+        added_orders, added_talents = 0, 0
+        for hero in missing_skill_heroes:
+            builds = of_hero[hero]
+            have_order = {entry[0] for entry in orders.get(hero, [])}
+            for role in sorted({made["role"] for made in builds}):
+                if role not in have_order:
+                    got = pro_orders.get((hero, role)) or pro_orders.get((hero, ANY_ROLE))
+                    if got:
+                        count_pro, seq = got
+                        orders.setdefault(hero, []).append([role, count_pro, [place_of(skills, name) for name in seq]])
+                        added_orders += 1
+            for made in builds:
+                if not made["talents"]:
+                    got = pro_talents.get((hero, made["role"])) or pro_talents.get((hero, ANY_ROLE))
+                    if got:
+                        made["talents"] = [[place_of(skills, name), m, w] for name, m, w in got]
+                        added_talents += 1
+        if added_orders or added_talents:
+            print(f"  pro skill/talent fallback: {added_orders} skill orders, {added_talents} builds with talents")
     # Only what some build has among its items is said to be bought against a hero.
     in_a_build = set(items)
     against = {}
@@ -1138,16 +1263,20 @@ def check():
     assert "in 0 of 750" in hollow(builds_of(items=3)), "builds with three items"
 
     # Neutral items. Hero 1: 10 pros as carry and 3 as mid. All 13 made tier 1, 6 of the
-    # carries tier 2, and 4 tier 3, which is too few to say.
+    # carries tier 2, and 2 tier 3, which is too few to say.
     def row(kind, hero, role, tier, name, count):
         return {"kind": kind, "hero_id": hero, "role": role, "tier": tier, "name": name, "count": str(count)}
 
-    rows = [row("m", 0, 0, 0, "7.42", 40), row("p", 1, 0, 0, "", 10), row("p", 1, 1, 0, "", 3), row("p", 1, ANY_ROLE, 0, "", 13), row("p", 2, 4, 0, "", 5), row("p", 2, ANY_ROLE, 0, "", 5)]
+    rows = [
+        row("m", 0, 0, 0, "7.42", 40), row("a", 0, 0, 1, "", 9), row("a", 0, 0, 2, "", 18),
+        row("p", 1, 0, 0, "", 10), row("p", 1, 1, 0, "", 3), row("p", 1, ANY_ROLE, 0, "", 13), row("p", 2, 4, 0, "", 4), row("p", 2, ANY_ROLE, 0, "", 4),
+    ]
     rows += [row("t", 1, 0, 1, "pogo_stick", 7), row("t", 1, 0, 1, "guardian_shell", 2), row("t", 1, 0, 1, "chipped_vest", 1), row("e", 1, 0, 1, "enhancement_alert", 9), row("e", 1, 0, 1, "enhancement_vital", 1)]
-    rows += [row("t", 1, 0, 2, "brick", 4), row("t", 1, 0, 2, "", 2), row("e", 1, 0, 2, "enhancement_alert", 6), row("t", 1, 0, 3, "balmhook", 4)]
+    rows += [row("t", 1, 0, 2, "brick", 4), row("t", 1, 0, 2, "", 2), row("e", 1, 0, 2, "enhancement_alert", 6), row("t", 1, 0, 3, "balmhook", 2)]
     rows += [row("t", 1, ANY_ROLE, 1, "pogo_stick", 10), row("t", 1, ANY_ROLE, 1, "guardian_shell", 3), row("e", 1, ANY_ROLE, 1, "enhancement_alert", 13)]
     made = neutrals_of(rows)
     assert (made["patch"], made["matches"], made["source"]) == ("7.42", 40, "OpenDota")
+    assert made["minutes"] == [9, 18, 0, 0], "pro average craft minutes per tier"
     assert list(made["heroes"]) == [1], "hero 2: too few pros in any role"
     carry, any_role = made["heroes"][1]
     names = made["names"]
@@ -1156,9 +1285,17 @@ def check():
     assert [names[place] for place, _ in tier_1[3]] == ["item_pogo_stick", "item_defiant_shell"], "the game's own names, the most taken first; one pro is nobody to go by"
     assert tier_1[:3] == [1, 10, 0] and [names[place] for place, _ in tier_1[4]] == ["item_enhancement_alert"]
     assert tier_2[:3] == [2, 6, 2] and tier_2[3] == [[names.index("item_brick"), 4]], "2 of the 6 kept the trinket they had"
-    assert len(carry[2]) == 2, "tier 3: 4 pros got as far, too few"
+    assert len(carry[2]) == 2, "tier 3: 2 pros got as far, too few"
     empty = neutrals_of([])
-    assert empty["heroes"] == {} and empty["matches"] == 0 and empty["names"] == [], "nothing asked, nothing said"
+    assert empty["heroes"] == {} and empty["matches"] == 0 and empty["names"] == [] and "minutes" not in empty, "nothing asked, nothing said"
+
+    # Pro skill order and talent fallback (such as Kez and Largo).
+    ab = {"1": "kez_echo_slash", "2": "kez_kazurai_katana", "3": "special_bonus_unique_kez_1", "4": "special_bonus_attributes"}
+    pro_rows = [{"hero_id": 145, "role": 0, "win": i % 2 == 0, "upgrades": [1, 2, 1, 3, 4]} for i in range(10)]
+    pro_ord, pro_tal = pro_skills_from_rows(pro_rows, ab)
+    assert pro_ord[(145, 0)] == (10, ["kez_echo_slash", "kez_kazurai_katana", "kez_echo_slash", "special_bonus_unique_kez_1"])
+    assert pro_tal[(145, 0)] == [["special_bonus_unique_kez_1", 10, 5]], "attributes excluded, wins counted"
+    assert pro_ord[(145, ANY_ROLE)][0] == 10
     print("The sums are right.")
 
 

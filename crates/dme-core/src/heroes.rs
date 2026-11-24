@@ -5,6 +5,7 @@ use crate::kv::{self, Block};
 use crate::vpk::Archive;
 
 pub const HERO_FILES: &str = "scripts/npc/heroes/";
+pub const UNIT_FILE: &str = "scripts/npc/npc_units.txt";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeroSlot {
@@ -167,6 +168,78 @@ impl HeroFiles {
 
     pub fn is_empty(&self) -> bool {
         self.by_hero.is_empty()
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct UnitFiles {
+    models: HashMap<String, String>,
+}
+
+impl UnitFiles {
+    pub fn read(archive: &Archive) -> UnitFiles {
+        let mut files = UnitFiles::default();
+        if let Ok(Some(bytes)) = archive.read(UNIT_FILE) {
+            files.add(&bytes);
+        }
+        files
+    }
+
+    pub fn add(&mut self, file: &[u8]) {
+        if kv::validate(file, "the game's unit list").is_err() {
+            return;
+        }
+        let Some(units) = Block::document(file).block("DOTAUnits") else { return };
+        for unit in units.pairs() {
+            let Some(body) = unit.value.as_block() else { continue };
+            let Some(model) = body.str("Model").and_then(|value| std::str::from_utf8(value).ok()) else { continue };
+            let model = model.trim();
+            if !model.is_empty() {
+                self.models.insert(String::from_utf8_lossy(unit.key).to_ascii_lowercase(), model.to_string());
+            }
+        }
+    }
+
+    pub fn model(&self, unit: &str) -> Option<&str> {
+        let key = unit.trim().to_ascii_lowercase();
+        let lookup = |name: &str| -> Option<&str> {
+            if let Some(model) = self.models.get(name) {
+                return Some(model.as_str());
+            }
+            for suffix in ["1", "_1", "1_top"] {
+                if let Some(model) = self.models.get(&format!("{name}{suffix}")) {
+                    return Some(model.as_str());
+                }
+            }
+            None
+        };
+        if let Some(model) = lookup(&key) {
+            return Some(model);
+        }
+        let stripped = key.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end_matches('_');
+        if !stripped.is_empty() && stripped != key && let Some(model) = lookup(stripped) {
+            return Some(model);
+        }
+        if let Some(base) = stripped.strip_suffix("_scepter") && let Some(model) = lookup(base) {
+            return Some(model);
+        }
+        if let Some(base) = key.replace("_greater_", "_").ne(&key).then(|| key.replace("_greater_", "_"))
+            && let Some(model) = lookup(&base)
+        {
+            return Some(model);
+        }
+        if matches!(key.as_str(), "npc_dota_eidolon" | "npc_dota_greater_eidolon" | "npc_dota_dire_eidolon") {
+            return lookup("npc_dota_lesser_eidolon");
+        }
+        None
+    }
+
+    pub fn len(&self) -> usize {
+        self.models.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.models.is_empty()
     }
 }
 
@@ -339,5 +412,38 @@ pub(crate) mod tests {
             files.add(odd.as_bytes());
         }
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn unit_files_resolve_exact_and_tiered_unit_names() {
+        let txt = r#"
+"DOTAUnits"
+{
+    "npc_dota_phoenix_sun" { "Model" "models/heroes/phoenix/phoenix_egg.vmdl" }
+    "npc_dota_lycan_wolf1" { "Model" "models/heroes/lycan/summon_wolves.vmdl" }
+    "npc_dota_venomancer_plague_ward" { "Model" "models/heroes/venomancer/venomancer_ward.vmdl" }
+    "npc_dota_shadow_shaman_ward_1" { "Model" "models/heroes/shadowshaman/shadowshaman_totem.vmdl" }
+    "npc_dota_visage_familiar1" { "Model" "models/heroes/visage/visage_familiar.vmdl" }
+    "npc_dota_warlock_golem" { "Model" "models/heroes/warlock/warlock_demon.vmdl" }
+    "npc_dota_beastmaster_boar" { "Model" "models/heroes/beastmaster/beastmaster_beast.vmdl" }
+    "npc_dota_lesser_eidolon" { "Model" "models/heroes/enigma/eidelon.vmdl" }
+    "npc_dota_observer_wards" { "Model" "models/props_gameplay/default_ward.vmdl" }
+    "npc_dota_goodguys_tower1_top" { "Model" "models/props_structures/tower_good.vmdl" }
+}
+"#;
+        let mut units = UnitFiles::default();
+        units.add(txt.as_bytes());
+        assert_eq!(units.len(), 10);
+        assert_eq!(units.model("npc_dota_phoenix_sun"), Some("models/heroes/phoenix/phoenix_egg.vmdl"));
+        assert_eq!(units.model("npc_dota_lycan_wolf"), Some("models/heroes/lycan/summon_wolves.vmdl"));
+        assert_eq!(units.model("npc_dota_venomancer_plague_ward_1"), Some("models/heroes/venomancer/venomancer_ward.vmdl"));
+        assert_eq!(units.model("npc_dota_shadow_shaman_ward"), Some("models/heroes/shadowshaman/shadowshaman_totem.vmdl"));
+        assert_eq!(units.model("npc_dota_visage_familiar2"), Some("models/heroes/visage/visage_familiar.vmdl"));
+        assert_eq!(units.model("npc_dota_warlock_golem_scepter_"), Some("models/heroes/warlock/warlock_demon.vmdl"));
+        assert_eq!(units.model("npc_dota_beastmaster_greater_boar"), Some("models/heroes/beastmaster/beastmaster_beast.vmdl"));
+        assert_eq!(units.model("npc_dota_eidolon"), Some("models/heroes/enigma/eidelon.vmdl"));
+        assert_eq!(units.model("npc_dota_observer_wards"), Some("models/props_gameplay/default_ward.vmdl"));
+        assert_eq!(units.model("npc_dota_goodguys_tower"), Some("models/props_structures/tower_good.vmdl"));
+        assert_eq!(units.model("npc_dota_missing"), None);
     }
 }

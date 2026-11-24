@@ -245,7 +245,7 @@ fn larger_look(ui: &mut Ui, pictures: &mut Pictures, look: Look, tile: &Tile<'_>
 pub fn flow(ui: &mut Ui, count: usize, look: Look, mut draw: impl FnMut(&mut Ui, usize, Look)) {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-        let (columns, look) = look.to_fill(ui.available_width() - SCROLL_BAR);
+        let (columns, look) = look.to_fill((ui.available_width() - SCROLL_BAR).max(0.0));
         for row in 0..count.div_ceil(columns) {
             ui.horizontal(|ui| {
                 for index in row * columns..((row + 1) * columns).min(count) {
@@ -287,7 +287,7 @@ pub fn fit(size: Vec2, room: Rect) -> Rect {
 pub fn grid(ui: &mut Ui, id: impl Hash + Debug, count: usize, look: Look, mut draw: impl FnMut(&mut Ui, usize, Look)) {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-        let (columns, look) = look.to_fill(ui.available_width() - SCROLL_BAR);
+        let (columns, look) = look.to_fill((ui.available_width() - SCROLL_BAR).max(0.0));
         let rows = count.div_ceil(columns);
         egui::ScrollArea::vertical().id_salt(id).auto_shrink(false).show_rows(ui, look.size().y, rows, |ui, visible| {
             for row in visible {

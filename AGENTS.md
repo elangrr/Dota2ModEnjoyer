@@ -74,7 +74,7 @@ whether a request is one of the above, ask the person before writing code.
 | `dota.rs`, `process.rs`, `launch.rs` | Finding Dota, whether it runs, starting it through Steam |
 | `update.rs` | The app updating itself: manifest, checks, putting the new file in place (SPEC 4) |
 | `draft.rs` | The draft helper: reading its file of numbers, and which heroes to pick against and beside which (SPEC 5) |
-| `builds.rs` | The build helper: reading its file of builds, and what the game's own files call the items, skills and talents in them (SPEC 6) |
+| `builds.rs`, `shop_builds.rs` | The build helper: reading its file of builds, what the game's own files call the items, skills and talents in them, and generating in-game shop guides (SPEC 6) |
 | `crates/dme-app/src/` | The window, made with `egui`/`eframe` |
 | `app.rs`, `app/sheets.rs`, `views/` | The app's state, the side bar, the bar at the bottom, the messages; what opens in front of the window (notice, tour, what is new, help, settings, support) with its texts; and the pages: hero grid and search, slots and tiles, all picks and presets, rarity chips, settings, the drawings beside the pages' names |
 | `worker.rs` | The one thread that reads and writes game files |

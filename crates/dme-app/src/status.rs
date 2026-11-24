@@ -28,16 +28,22 @@ pub struct Facts {
     pub half_undone: bool,
     pub undone: bool,
     pub steam_busy: bool,
+    pub shop_builds: bool,
 }
 
 impl Facts {
+    fn has_mods(&self) -> bool {
+        self.picks > 0 || self.shop_builds
+    }
+
     pub fn sentence(&self) -> (Tone, String) {
         let plain = |text: &str| (Tone::Plain, text.to_string());
         let good = |text: &str| (Tone::Good, text.to_string());
         let warn = |text: &str| (Tone::Warn, text.to_string());
 
         match self.busy {
-            Some(Busy::Playing) if self.picks == 0 => return plain(tr!(GettingNormalReady)),
+            Some(Busy::Playing) if !self.has_mods() => return plain(tr!(GettingNormalReady)),
+            Some(Busy::Playing) if self.picks == 0 => return plain(tr!(PuttingShopBuildsIn)),
             Some(Busy::Playing) => return plain(tr!(PuttingPicksIn)),
             Some(Busy::Restoring) => return plain(tr!(GoingBackToNormal)),
             None => {}
@@ -49,7 +55,7 @@ impl Facts {
             return good(tr!(DotaStarting));
         }
         let ours_in_game = matches!(self.mods, ModState::On | ModState::NeedsRepair(_));
-        let to_put_back = self.undone && self.picks > 0;
+        let to_put_back = self.undone && self.has_mods();
         if self.running {
             return if self.half_undone && to_put_back {
                 warn(tr!(HalfUndonePutBack))
@@ -57,12 +63,12 @@ impl Facts {
                 warn(tr!(HalfUndone))
             } else if to_put_back {
                 warn(tr!(UndoneRunning))
-            } else if self.picks == 0 && ours_in_game {
+            } else if !self.has_mods() && ours_in_game {
                 warn(tr!(RunningCloseForNormal))
-            } else if self.picks == 0 {
+            } else if !self.has_mods() {
                 plain(tr!(Running))
             } else if self.in_game {
-                good(tr!(RunningWithPicks))
+                good(if self.picks == 0 { tr!(RunningWithShopBuilds) } else { tr!(RunningWithPicks) })
             } else {
                 warn(tr!(RunningCloseForNew))
             };
@@ -73,13 +79,19 @@ impl Facts {
         if to_put_back {
             return if self.steam_busy { plain(tr!(Updating)) } else { plain(tr!(PuttingBack)) };
         }
-        if self.picks == 0 {
+        if self.steam_busy {
+            return plain(tr!(SteamUpdating));
+        }
+        if !self.has_mods() {
             return match (self.away, ours_in_game) {
                 (true, false) => plain(tr!(BackToNormalAway)),
                 (true, true) => plain(tr!(AwayPressPlay)),
                 (false, false) => plain(tr!(PickSomething)),
                 (false, true) => plain(tr!(NoPicksPressPlay)),
             };
+        }
+        if self.picks == 0 {
+            return if self.in_game { good(tr!(ShopBuildsInGame)) } else { plain(tr!(ShopBuildsReady)) };
         }
         if self.reach_nobody {
             return warn(tr!(ReachNobody));
@@ -95,14 +107,14 @@ impl Facts {
             return None;
         }
         let ours_in_game = matches!(self.mods, ModState::On | ModState::NeedsRepair(_));
-        Some(match (&self.mods, self.picks, self.in_game) {
+        Some(match (&self.mods, self.has_mods(), self.in_game) {
             (ModState::ChangedByOther(_), ..) => (Tone::Warn, tr!(BadgeAttention)),
             _ if self.half_undone && self.running => (Tone::Warn, tr!(BadgeAttention)),
             _ if self.updating() => (Tone::Plain, tr!(BadgeUpdating)),
-            (_, 0, _) if ours_in_game => (Tone::Warn, tr!(BadgeOldPicks)),
-            (_, 0, _) => (Tone::Plain, tr!(BadgeNormal)),
-            (_, _, true) => (Tone::Good, tr!(BadgeOn)),
-            (_, _, false) => (Tone::Warn, tr!(BadgeNotYet)),
+            (_, false, _) if ours_in_game => (Tone::Warn, tr!(BadgeOldPicks)),
+            (_, false, _) => (Tone::Plain, tr!(BadgeNormal)),
+            (_, true, true) => (Tone::Good, tr!(BadgeOn)),
+            (_, true, false) => (Tone::Warn, tr!(BadgeNotYet)),
         })
     }
 
@@ -116,7 +128,7 @@ impl Facts {
     }
 
     fn updating(&self) -> bool {
-        self.undone && self.picks > 0 && self.steam_busy && !self.running
+        self.steam_busy && !self.running
     }
 
     pub fn can_play(&self) -> bool {
@@ -151,7 +163,7 @@ impl Facts {
         } else if self.brings_back() {
             true
         } else {
-            !self.running && !self.updating() && (self.picks > 0 || self.mods != ModState::Off)
+            !self.running && !self.updating() && (self.has_mods() || self.mods != ModState::Off)
         }
     }
 
@@ -189,6 +201,7 @@ mod tests {
             half_undone: false,
             undone: false,
             steam_busy: false,
+            shop_builds: false,
         }
     }
 
@@ -224,6 +237,14 @@ mod tests {
         assert_eq!(Facts { busy: Some(Busy::Playing), ..undone.clone() }.sentence().1, "Putting your picks in the game…");
         let away = Facts { picks: 0, away: true, running: true, ..undone };
         assert_eq!(away.sentence(), (Tone::Warn, tr!(HalfUndone).to_string()));
+
+        let steam_busy = Facts { picks: 2, mods: ModState::On, steam_busy: true, ..facts() };
+        assert_eq!(steam_busy.sentence(), (Tone::Plain, tr!(SteamUpdating).to_string()));
+        assert_eq!(steam_busy.badge(), Some((Tone::Plain, "Dota updating")));
+        assert!(!steam_busy.can_play() && !steam_busy.can_switch());
+        assert_eq!(steam_busy.play_label(), "Steam is updating");
+        assert_eq!(steam_busy.why_no_switch(), "Wait until Steam has updated Dota.");
+        assert!(Facts { away: true, steam_busy: true, ..facts() }.can_switch());
     }
 
     #[test]
@@ -358,5 +379,26 @@ mod tests {
         assert_eq!(Facts { picks: 1, ..facts() }.tip(), Some(tr!(Tip)));
         assert_eq!(Facts { picks: 1, running: true, mods: ModState::On, ..facts() }.tip(), Some(tr!(Tip)));
         assert_eq!(Facts { picks: 1, loaded: false, ..facts() }.tip(), None);
+    }
+
+    #[test]
+    fn shop_builds_alone_have_clear_status_and_enable_back_to_normal() {
+        let in_game = Facts { shop_builds: true, mods: ModState::On, in_game: true, ..facts() };
+        assert!(in_game.can_switch());
+        assert_eq!(in_game.sentence(), (Tone::Good, "In-game shop builds are in Dota. Press Play.".into()));
+
+        let not_in_game = Facts { shop_builds: true, mods: ModState::On, in_game: false, ..facts() };
+        assert!(not_in_game.can_switch());
+        assert_eq!(
+            not_in_game.sentence(),
+            (Tone::Plain, "In-game shop builds are ready. Press Play to put them in Dota.".into()),
+        );
+
+        let ready = Facts { shop_builds: true, mods: ModState::Off, ..facts() };
+        assert!(ready.can_switch());
+        assert_eq!(
+            ready.sentence(),
+            (Tone::Plain, "In-game shop builds are ready. Press Play to put them in Dota.".into()),
+        );
     }
 }

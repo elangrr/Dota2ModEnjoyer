@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use dme_core::catalog;
-use dme_core::draft::{Rank, Role, Style};
+use dme_core::draft::{Mode, Rank, Role, Style};
 use dme_core::engine::Note;
 use dme_core::error::{Error, Plain};
 use dme_core::heroes::Attribute;
@@ -14,6 +14,7 @@ pub fn error(error: &Error, dota: &Path) -> String {
         Plain::Held { dota: false } => tr!(HeldOwn).to_string(),
         Plain::DiskFull => tr!(DiskFull).to_string(),
         Plain::DotaRunning => tr!(DotaRunning).to_string(),
+        Plain::SteamBusy => tr!(SteamBusy).to_string(),
         Plain::DotaNotFound([]) => tr!(NoSteamFolder).to_string(),
         Plain::DotaNotFound(folders) => tr!(LookedIn, folders = folders.join("; ")),
         Plain::NotDota(folder) => tr!(NotDota, folder = folder.display()),
@@ -95,6 +96,13 @@ pub fn style(style: Style) -> &'static str {
     match style {
         Style::Team => tr!(StyleTeam),
         Style::Lane => tr!(StyleLane),
+    }
+}
+
+pub fn mode(mode: Mode) -> &'static str {
+    match mode {
+        Mode::AllPick => tr!(ModeAllPick),
+        Mode::CaptainsMode => tr!(ModeCaptains),
     }
 }
 
@@ -190,6 +198,7 @@ mod tests {
             Error::io("write", &dota.join("game"), std::io::Error::from_raw_os_error(112)),
             Error::io("read", &dota.join("game"), std::io::Error::from_raw_os_error(3)),
             Error::DotaRunning,
+            Error::SteamBusy,
             Error::DotaNotFound(Vec::new()),
             Error::DotaNotFound(vec![r"D:\a".to_string(), r"E:\b".to_string()]),
             Error::NotDota(dota.to_path_buf()),

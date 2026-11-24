@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/5c9482ed8d7ec9924441f6f09549225d73963b6cbb68a9c587f682e0eea6facb"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2071%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 71 scanners flag it" height="40"></a><!-- /virustotal -->
+  <!-- virustotal --><a href="https://www.virustotal.com/gui/file/40d846c11dd2f343193720a9f651a0121862c17875152233e2a7a53f2b2f4221"><img src="https://img.shields.io/badge/VirusTotal-2%20of%2070%20scanners%20flag%20it-dfb317?style=for-the-badge&logo=virustotal&logoColor=white" alt="VirusTotal: 2 of 70 scanners flag it" height="40"></a><!-- /virustotal -->
   &nbsp;
   <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
@@ -50,7 +50,8 @@ change it at the top of Settings.
 - The courier, ward, terrain, weather, music, announcer, HUD, loading screen and more.
 - Effects of past events, such as teleports, Blink Dagger and emblems. They go on the heroes you
   picked something for, and Settings can make that every hero.
-- Other trees, an event's look for the whole map, and a mode for low-end PCs (experiments).
+- Other trees, an event's look for the whole map, one-click Dota launch options (`-map dota`,
+  `-novid`, `-high`), and a mode for low-end PCs (in Settings).
 
 Just type to search, for heroes, items and sets. **My picks** lists everything you picked.
 There you can save your picks as a preset, and **Share** copies a short code that a friend
@@ -70,10 +71,12 @@ lane more often. For a carry or an offlaner, the enemy core in the lane counts m
 support.
 
 In Settings, under **My Hero Pool**, you choose the heroes you play, and your own list then
-shows only those. Before the first pick the page names heroes to ban, and with nothing picked
-it lists the best heroes this week for your role, with the ones rising and falling. **Suggest
-to my team**, beside the three best heroes of your list, copies a line for Dota's chat, such as
-"Invoker is a good pick against the enemy".
+shows only those. Switch between **All Pick** and **Captain's Mode** (the patch 7.40+ 24-step
+ban/pick order with a First Pick toggle and live mid-draft ban recommendations). In All Pick,
+before the first pick the page names heroes to ban, lists the best heroes this week for your role
+with the ones rising and falling, and ranks the most popular supports for first-phase picks.
+**Suggest to my team**, beside the three best heroes of your list, copies a line for Dota's chat,
+such as "Invoker is a good pick against the enemy".
 
 ![The Draft page, with the heroes for the last pick in mid](assets/screens/draft.jpg)
 
@@ -81,8 +84,10 @@ to my team**, beside the three best heroes of your list, copies a line for Dota'
 items come in the order they are bought, with how many of 100 players buy each. Other items
 move up when they are bought more often against the enemy heroes of your draft. Skills has a
 point for every level. Talents show how many players take each side. Neutral items show what
-pros take in each tier of the newest patch, for the heroes enough pros have played. **Go to
-build** on the Draft page opens your own hero's.
+pros take in each tier of the newest patch, with the average minute pros craft each tier. Turn on
+**In-game shop** on Builds or in Settings to put every hero's build directly into Dota's in-game
+Default Guide (removed cleanly by **Back to normal Dota**). **Go to build** on the Draft page
+opens your own hero's.
 
 ![The Builds page, with Slark as a carry](assets/screens/builds.jpg)
 
@@ -153,6 +158,7 @@ link opens the full result for that file. A release that Microsoft's scanner fla
 
 | Version | The app | The command-line tool |
 |---|---|---|
+| 0.6.0 | [2 of 70 scanners flag it](https://www.virustotal.com/gui/file/40d846c11dd2f343193720a9f651a0121862c17875152233e2a7a53f2b2f4221) | [1 of 69 scanners flag it](https://www.virustotal.com/gui/file/3bc6bb02a6ab009431f7eefa06bf1fd0b24a8ff4405215c53689971956b01df6) |
 | 0.5.0 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/5c9482ed8d7ec9924441f6f09549225d73963b6cbb68a9c587f682e0eea6facb) | [1 of 70 scanners flag it](https://www.virustotal.com/gui/file/bedd95c6fb62d976dae4893aaff05c47f4165eaa64dd518ee0c0f7096aa78f4e) |
 | 0.4.3 | [2 of 69 scanners flag it](https://www.virustotal.com/gui/file/931e5e43d3b87d14dd126a9fbf5ab2853ae20e2b6b3b796566194b55fa294826) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/277135a736edf2c54ea397a892a2134d0458c7583591b9c8a13cc25f072683b6) |
 | 0.4.2 | [2 of 71 scanners flag it](https://www.virustotal.com/gui/file/fbf1b73db1a1b64d870718a7629c2b731eb76d1ee765873232af3fa6d22ea503) | [1 of 71 scanners flag it](https://www.virustotal.com/gui/file/423fccffb74a826886ed2e2d32276d8ff8632651db29f98fc9c8b69d4e8fee31) |

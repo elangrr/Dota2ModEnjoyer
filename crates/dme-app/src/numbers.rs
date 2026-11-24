@@ -102,28 +102,43 @@ impl<T: Send + 'static> Fetcher<T> {
         let (testing, kept, limit, parse) = (self.testing, self.kept.clone(), self.kind.limit, self.kind.parse);
         let (outbox, ctx) = (self.outbox.clone(), ctx.clone());
         crate::update::spawn("fetching", move || {
-            let fetched = crate::update::fetch(&source, limit, testing).and_then(|bytes| {
-                let read = parse(&bytes).map_err(|error| error.to_string())?;
-                let _ = keep(&kept, &bytes);
-                Ok(read)
-            });
+            let worked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::update::fetch(&source, limit, testing).and_then(|bytes| {
+                    let read = parse(&bytes).map_err(|error| error.to_string())?;
+                    let _ = keep(&kept, &bytes);
+                    Ok(read)
+                })
+            }));
+            let fetched = match worked {
+                Ok(result) => result,
+                Err(_) => Err(crate::crash::last().unwrap_or_else(|| "something went wrong inside the app".to_string())),
+            };
             let _ = outbox.send(fetched);
             ctx.request_repaint();
         });
     }
 
     pub fn poll(&mut self) {
-        while let Ok(fetched) = self.inbox.try_recv() {
-            self.fetching = false;
-            match fetched {
-                Ok(read) => self.read = Some(Arc::new(read)),
-                Err(error) => {
-                    let source = self.source.as_deref().unwrap_or_default();
-                    self.failure = Some(Failure {
-                        sentence: crate::lang::t(self.kind.failed).to_string(),
-                        english: crate::lang::text_in(crate::lang::LANGUAGES[0], self.kind.failed).to_string(),
-                        details: format!("Dota 2 Mod Enjoyer {}\nWhile fetching {source}: {error}", env!("CARGO_PKG_VERSION")),
-                    });
+        loop {
+            match self.inbox.try_recv() {
+                Ok(fetched) => {
+                    self.fetching = false;
+                    match fetched {
+                        Ok(read) => self.read = Some(Arc::new(read)),
+                        Err(error) => {
+                            let source = self.source.as_deref().unwrap_or_default();
+                            self.failure = Some(Failure {
+                                sentence: crate::lang::t(self.kind.failed).to_string(),
+                                english: crate::lang::text_in(crate::lang::LANGUAGES[0], self.kind.failed).to_string(),
+                                details: format!("Dota 2 Mod Enjoyer {}\nWhile fetching {source}: {error}", env!("CARGO_PKG_VERSION")),
+                            });
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.fetching = false;
+                    break;
                 }
             }
         }

@@ -646,8 +646,16 @@ impl Reader<'_, '_> {
         let can_show = |pick: &Pick| {
             self.hero_files.has_slot(hero, &pick.slot) && self.game.item(&pick.item).is_some_and(|item| self.has_model_of(item))
         };
-        let pieces: Vec<Pick> = found.picks.into_iter().filter(can_show).collect();
+        let mut pieces: Vec<Pick> = found.picks.into_iter().filter(can_show).collect();
         let first = self.game.item(&pieces.first()?.item)?;
+        if !pieces.iter().any(|pick| pick.slot.eq_ignore_ascii_case(PERSONA_SELECTOR))
+            && let Some(number) = pieces
+                .iter()
+                .find_map(|pick| items::persona_of(&pick.slot).strip_prefix("_persona_").and_then(|n| n.parse::<u32>().ok()))
+            && let Some(persona) = self.game.items_for(Some(hero), PERSONA_SELECTOR).into_iter().find(|item| item.persona_number() == Some(number))
+        {
+            pieces.insert(0, Pick::hero(hero, PERSONA_SELECTOR, persona.id));
+        }
 
         let name = match set.name_token.and_then(|token| self.names.get(token)) {
             Some(name) => plain(name).to_string(),
@@ -701,7 +709,16 @@ impl Reader<'_, '_> {
     }
 
     fn is_whole(&self, blocks: &[kv::Pair<'_>]) -> bool {
-        blocks.iter().filter_map(file_of).filter(|file| !self.wholeness.is_whole(file)).count() == 0
+        blocks
+            .iter()
+            .filter(|pair| {
+                let kind = pair.value.as_block().and_then(|b| b.str("type")).map(<[u8]>::to_ascii_lowercase);
+                !matches!(kind.as_deref(), Some(b"model" | b"additional_wearable"))
+            })
+            .filter_map(file_of)
+            .filter(|file| !self.wholeness.is_whole(file))
+            .count()
+            == 0
     }
 
     fn style(&self, item: &Item<'_>, style: &Style<'_>, item_picture: Option<&str>) -> Option<StyleEntry> {
@@ -752,7 +769,34 @@ impl Reader<'_, '_> {
     }
 
     fn has_model_of(&self, item: &Item<'_>) -> bool {
-        item.model.is_none_or(|model| self.has_model(model))
+        if let Some(model) = item.model {
+            return self.has_model(model);
+        }
+        if item.heroes.is_empty()
+            && let Some(visuals) = item.block.block("visuals")
+        {
+            let mut declared = 0usize;
+            let mut present = 0usize;
+            for pair in visuals.pairs() {
+                let Some(block) = pair.value.as_block() else { continue };
+                let kind = block.str("type").map(<[u8]>::to_ascii_lowercase);
+                if !matches!(kind.as_deref(), Some(b"courier" | b"courier_flying" | b"entity_model" | b"entity_clientside_model")) {
+                    continue;
+                }
+                if let Some(model) = block.str("modifier").and_then(text)
+                    && model.to_ascii_lowercase().ends_with(".vmdl")
+                {
+                    declared += 1;
+                    if self.has_model(model) {
+                        present += 1;
+                    }
+                }
+            }
+            if declared > 0 && present == 0 {
+                return false;
+            }
+        }
+        true
     }
 
     fn has_model(&self, model: &str) -> bool {
@@ -819,12 +863,13 @@ mod tests {
     use crate::vpk::{self, PackFile};
 
     const AXE: &str = "npc_dota_hero_axe";
-    const MODELS: [&str; 5] = [
+    const MODELS: [&str; 6] = [
         "models/items/axe/vanguard_weapon/vanguard_weapon.vmdl_c",
         "models/items/axe/vanguard_head/vanguard_head.vmdl_c",
         "models/items/axe/vanguard_misc/vanguard_misc.vmdl_c",
         "models/items/axe/crested/crested.vmdl_c",
         "models/items/axe/crested/crested_gold.vmdl_c",
+        "models/courier/drodo/drodo.vmdl_c",
     ];
     const PICTURES: [&str; 6] = [
         "panorama/images/heroes/npc_dota_hero_axe_png.vtex_c",
@@ -960,7 +1005,8 @@ mod tests {
 
         let bare = catalog(&[]);
         assert!(bare.heroes.is_empty());
-        assert_eq!(bare.world.len(), 3);
+        assert!(bare.slot(None, "courier").is_none());
+        assert_eq!(bare.world.len(), 2);
     }
 
     #[test]
@@ -979,9 +1025,10 @@ mod tests {
         assert_eq!(settled(gem), Some(Pick::world("courier", "10003")));
     }
 
-    const GEM_FILES: [&str; 16] = [
+    const GEM_FILES: [&str; 17] = [
         "models/items/axe/red_axe.vmdl_c",
         "models/items/axe/glowing_axe.vmdl_c",
+        "models/courier/drodo/drodo.vmdl_c",
         "particles/econ/courier/courier_trail_01/courier_trail_01.vpcf_c",
         "particles/econ/courier/courier_trail_03/courier_trail_03.vpcf_c",
         "particles/econ/events/fall_2021/frostbloom.vpcf_c",

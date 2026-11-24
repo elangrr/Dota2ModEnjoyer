@@ -182,6 +182,7 @@ pub struct Placed {
 }
 
 const MODEL_KEYS: &[&str] = &["model_player", "model_player1", "model_player2", "model_player3"];
+pub const EMPTY_MODEL: &str = "models/props_nature/prop_null.vmdl";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Skipped {
@@ -360,8 +361,27 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
     }
     for persona in &personas {
         let base = plan_for(&mut plans, persona.base, Some(&persona.hero));
-        base.look = Some(Look { index: persona.index, slot: persona.base_slot.to_string(), item: persona.item, style: persona.style, effect: None, reported: true });
+        base.look = Some(Look { index: persona.index, slot: persona.base_slot.to_string(), item: persona.item, style: persona.style, effect: None, reported: persona.reported });
         base.persona_base = true;
+        let mut mirrored = persona.base_slot == HERO_BASE;
+        let mirror_blocks: Vec<Pair<'a>> = if mirrored {
+            Vec::new()
+        } else {
+            persona
+                .item
+                .block
+                .block("visuals")
+                .into_iter()
+                .flat_map(|visuals| visuals.pairs())
+                .filter(|pair| {
+                    pair.value.as_block().is_some_and(|block| {
+                        let kind = block.str("type").map(<[u8]>::to_ascii_lowercase);
+                        !matches!(kind.as_deref(), Some(b"persona" | b"entity_model"))
+                            && block.str("style").and_then(parse_number).is_none_or(|s| s == persona.style)
+                    })
+                })
+                .collect()
+        };
         for part in &persona.parts {
             let plan = plan_for(&mut plans, part.default, Some(&persona.hero));
             match &part.worn {
@@ -376,6 +396,13 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
                 }
                 None => plan.bare = true,
             }
+            if !mirrored && !mirror_blocks.is_empty() && (part.slot == AMBIENT_SLOT || part.worn.is_some()) {
+                plan.persona_visuals.extend(mirror_blocks.iter().copied());
+                mirrored = true;
+            }
+        }
+        if !mirrored && !mirror_blocks.is_empty() && let Some(first) = persona.parts.first() {
+            plan_for(&mut plans, first.default, Some(&persona.hero)).persona_visuals.extend(mirror_blocks);
         }
     }
 
@@ -415,10 +442,17 @@ pub fn patch_for<'a>(game: &ItemsGame<'a>, vanilla: &'a [u8], picks: &[Pick], li
         let emblem = emblem.as_ref().filter(|_| plan.emblem);
         let mut added = Vec::new();
         let mut blocks = None;
-        if !plan.effects.is_empty() || gem.is_some() || carries || emblem.is_some() || plan.persona_base {
+        if !plan.effects.is_empty() || gem.is_some() || carries || emblem.is_some() || plan.persona_base || !plan.persona_visuals.is_empty() {
             let mut visuals = Visuals::of(&rewritten.parts)?;
             if plan.persona_base {
                 visuals.shown.retain(|visual| visual.kind.as_deref() != Some(PERSONA_TYPE));
+            }
+            for pair in &plan.persona_visuals {
+                let text = match pair.value.as_block().filter(|b| b.get("style").is_some()) {
+                    Some(block) => without_key(vanilla, pair, block, "style"),
+                    None => vanilla[pair.start..pair.end].to_vec(),
+                };
+                visuals.add(Visual::new(pair, text));
             }
             added = add_effects(vanilla, &layout, &mut visuals, &plan.effects)?;
             if let Some(effect) = gem {
@@ -504,61 +538,189 @@ pub fn place_models(before: &ItemsGame<'_>, patched: &mut Patched, exists: &dyn 
     let mut edits: Vec<(Range<usize>, Vec<u8>)> = Vec::new();
     let mut placed: Vec<Placed> = Vec::new();
     let mut places: Vec<(String, &str)> = Vec::new();
+    let mut placed_set: HashSet<String> = HashSet::new();
     {
         let after = ItemsGame::parse(&patched.bytes)?;
-        let named_otherwise = named_otherwise(&after);
+        let model_swaps = hero_model_swaps(&after);
         for own in before.items().iter().filter(|item| item.is_default() && !item.heroes.is_empty()) {
             let Some(rewritten) = after.item(own.id) else { continue };
+            let hero_key = own.heroes.first().map(|hero| hero.to_ascii_lowercase());
+            let hero_map = hero_key.as_deref().and_then(|hero| model_swaps.get(hero));
+            let resolve_swap = |initial: &str| -> String {
+                let mut current = initial.to_string();
+                if let Some(map) = hero_map {
+                    for _ in 0..4 {
+                        let norm = resource::normal(&current);
+                        let Some(next) = map.get(&norm) else { break };
+                        if resource::normal(next) == norm || !exists(next) {
+                            break;
+                        }
+                        current = next.clone();
+                    }
+                }
+                current
+            };
+
             for &key in MODEL_KEYS {
-                let (Some(at), Some(model)) = (own.block.str(key).and_then(as_text), rewritten.block.str(key).and_then(as_text)) else {
-                    continue;
-                };
-                let (at_path, model_path) = (resource::normal(at), resource::normal(model));
-                let swapped = named_otherwise.contains(&at_path) || named_otherwise.contains(&model_path);
-                if at_path == model_path || shared.contains(&at_path) || swapped || !exists(model) {
+                let Some(at) = own.block.str(key).and_then(as_text) else { continue };
+                let at_path = resource::normal(at);
+                if shared.contains(&at_path) {
                     continue;
                 }
-                let Some(pair) = rewritten.block.pairs().find(|pair| is(pair.key, key)) else { continue };
-                if placed.iter().any(|known| resource::normal(&known.at) == at_path) {
-                    return Err(Error::Refused(format!("two picks would put their models where the game looks for {at}")));
+                match rewritten.block.str(key).and_then(as_text) {
+                    Some(written) => {
+                        let resolved = resolve_swap(written);
+                        let resolved_path = resource::normal(&resolved);
+                        if at_path == resolved_path || !exists(&resolved) {
+                            continue;
+                        }
+                        if !placed_set.insert(at_path.clone()) {
+                            return Err(Error::Refused(format!("two picks would put their models where the game looks for {at}")));
+                        }
+                        if resource::normal(written) != at_path
+                            && let Some(pair) = rewritten.block.pairs().find(|pair| is(pair.key, key))
+                        {
+                            edits.push((pair.start..pair.end, string_pair(key, at.as_bytes())));
+                            places.push((own.id.to_string(), key));
+                        }
+                        placed.push(Placed { at: at.to_string(), model: resolved });
+                    }
+                    None => {
+                        if exists(EMPTY_MODEL) && !placed_set.contains(&at_path) {
+                            placed_set.insert(at_path);
+                            placed.push(Placed { at: at.to_string(), model: EMPTY_MODEL.to_string() });
+                        }
+                    }
                 }
-                edits.push((pair.start..pair.end, string_pair(key, at.as_bytes())));
-                placed.push(Placed { at: at.to_string(), model: model.to_string() });
-                places.push((own.id.to_string(), key));
+            }
+
+            let changed_visuals = own.block.block("visuals").map(|b| before.src_slice(b))
+                != rewritten.block.block("visuals").map(|b| &patched.bytes[b.start()..b.end()]);
+            if !changed_visuals {
+                continue;
+            }
+            let own_aw: Vec<&str> = additional_wearables(own);
+            let mut aw_used = 0usize;
+            if let Some(vis_pair) = rewritten.block.pairs().find(|pair| is(pair.key, "visuals"))
+                && let Some(vis_block) = vis_pair.value.as_block()
+            {
+                let mut new_parts: Vec<Cow<'_, [u8]>> = Vec::new();
+                let mut vis_changed = false;
+                for pair in vis_block.pairs() {
+                    let Some(block) = pair.value.as_block() else {
+                        new_parts.push(Cow::Borrowed(&patched.bytes[pair.start..pair.end]));
+                        continue;
+                    };
+                    let kind = block.str("type").map(<[u8]>::to_ascii_lowercase);
+                    if kind.as_deref() == Some(b"model")
+                        && block.str("asset").and_then(as_text).is_some_and(|a| resource::normal(a).ends_with(".vmdl"))
+                    {
+                        vis_changed = true;
+                        continue;
+                    }
+                    if kind.as_deref() == Some(b"additional_wearable") {
+                        let Some(model_aw) = block.str("asset").and_then(as_text) else {
+                            vis_changed = true;
+                            continue;
+                        };
+                        if let Some(&at_aw) = own_aw.get(aw_used) {
+                            aw_used += 1;
+                            let at_path = resource::normal(at_aw);
+                            let model_path = resource::normal(model_aw);
+                            if at_path == model_path {
+                                new_parts.push(Cow::Borrowed(&patched.bytes[pair.start..pair.end]));
+                            } else if !shared.contains(&at_path) && exists(model_aw) && placed_set.insert(at_path) {
+                                placed.push(Placed { at: at_aw.to_string(), model: model_aw.to_string() });
+                                new_parts.push(Cow::Owned(replace_key(&patched.bytes, &pair, block, "asset", at_aw.as_bytes())));
+                                vis_changed = true;
+                            } else {
+                                vis_changed = true;
+                            }
+                        } else {
+                            vis_changed = true;
+                        }
+                        continue;
+                    }
+                    new_parts.push(Cow::Borrowed(&patched.bytes[pair.start..pair.end]));
+                }
+                if vis_changed {
+                    edits.push((vis_pair.start..vis_pair.end, rewrite_pair(&patched.bytes, &vis_pair, vis_block, &new_parts)));
+                }
+            }
+            for &at_aw in own_aw.iter().skip(aw_used) {
+                let at_path = resource::normal(at_aw);
+                if !shared.contains(&at_path) && exists(EMPTY_MODEL) && placed_set.insert(at_path) {
+                    placed.push(Placed { at: at_aw.to_string(), model: EMPTY_MODEL.to_string() });
+                }
             }
         }
     }
-    if placed.is_empty() {
+    if edits.is_empty() && placed.is_empty() {
         return Ok(());
     }
-    let bytes = splice(&patched.bytes, edits)?;
-    let wrong = |detail: String| Error::format("the edited item database", detail);
-    let after = ItemsGame::parse(&bytes)?;
-    if after.items().len() != before.items().len() || after.sets().len() != before.sets().len() {
-        return Err(wrong("the number of items or sets changed as models were put in place".to_string()));
-    }
-    for (placed, (id, key)) in placed.iter().zip(&places) {
-        if after.item(id).and_then(|item| item.block.str(key)) != Some(placed.at.as_bytes()) {
-            return Err(wrong(format!("item {id} does not name {} after its model was put in place", placed.at)));
+    if !edits.is_empty() {
+        let bytes = splice(&patched.bytes, edits)?;
+        let wrong = |detail: String| Error::format("the edited item database", detail);
+        let after = ItemsGame::parse(&bytes)?;
+        if after.items().len() != before.items().len() || after.sets().len() != before.sets().len() {
+            return Err(wrong("the number of items or sets changed as models were put in place".to_string()));
         }
+        for (id, key) in &places {
+            let expected = before.item(id).and_then(|item| item.block.str(key));
+            if after.item(id).and_then(|item| item.block.str(key)) != expected {
+                return Err(wrong(format!("item {id} does not name its default model after placement")));
+            }
+        }
+        patched.bytes = bytes;
     }
-    patched.bytes = bytes;
     patched.placed = placed;
     Ok(())
 }
 
-fn named_otherwise(game: &ItemsGame<'_>) -> HashSet<String> {
-    let mut named = HashSet::new();
-    for item in game.items().iter().filter(|item| item.is_default()) {
-        for block in item.block.pairs().filter(|pair| !listed(MODEL_KEYS, pair.key)).filter_map(|pair| pair.value.as_block()) {
-            block.for_each_string(&mut |_, value| {
-                if let Some(text) = as_text(value) {
-                    named.insert(resource::normal(text));
+fn hero_model_swaps(game: &ItemsGame<'_>) -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
+    let mut by_hero: std::collections::HashMap<String, std::collections::HashMap<String, String>> = std::collections::HashMap::new();
+    for item in game.items().iter().filter(|item| item.is_default() && !item.heroes.is_empty()) {
+        let swaps = item.visuals_of_type("model", false);
+        if swaps.is_empty() {
+            continue;
+        }
+        for &hero in &item.heroes {
+            let map = by_hero.entry(hero.to_ascii_lowercase()).or_default();
+            for block in &swaps {
+                let (Some(asset), Some(modifier)) = (block.str("asset").and_then(as_text), block.str("modifier").and_then(as_text)) else {
+                    continue;
+                };
+                let asset = resource::normal(asset);
+                let modifier = modifier.trim();
+                if asset.ends_with(".vmdl") && !modifier.is_empty() {
+                    map.entry(asset).or_insert_with(|| modifier.to_string());
                 }
-            });
+            }
         }
     }
-    named
+    by_hero
+}
+
+fn additional_wearables<'a>(item: &Item<'a>) -> Vec<&'a str> {
+    item.visuals_of_type("additional_wearable", false)
+        .into_iter()
+        .filter_map(|block| block.str("asset").and_then(as_text))
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+pub(crate) fn replace_key(src: &[u8], pair: &Pair<'_>, block: Block<'_>, key: &str, new_value: &[u8]) -> Vec<u8> {
+    let parts: Vec<Cow<'_, [u8]>> = block
+        .pairs()
+        .map(|inner| {
+            if is(inner.key, key) {
+                Cow::Owned(string_pair(key, new_value))
+            } else {
+                Cow::Borrowed(&src[inner.start..inner.end])
+            }
+        })
+        .collect();
+    rewrite_pair(src, pair, block, &parts)
 }
 
 fn shared_models(game: &ItemsGame<'_>) -> HashSet<String> {
@@ -574,7 +736,7 @@ fn shared_models(game: &ItemsGame<'_>) -> HashSet<String> {
     shared
 }
 
-fn as_text(bytes: &[u8]) -> Option<&str> {
+pub(crate) fn as_text(bytes: &[u8]) -> Option<&str> {
     std::str::from_utf8(bytes).ok()
 }
 
@@ -586,13 +748,14 @@ struct Plan<'g, 'a> {
     emblem: bool,
     bare: bool,
     persona_base: bool,
+    persona_visuals: Vec<Pair<'a>>,
 }
 
 fn plan_for<'p, 'g, 'a>(plans: &'p mut Vec<Plan<'g, 'a>>, default: &'g Item<'a>, hero: Option<&str>) -> &'p mut Plan<'g, 'a> {
     let at = match plans.iter().position(|plan| plan.default.id == default.id) {
         Some(at) => at,
         None => {
-            plans.push(Plan { default, hero: hero.map(str::to_string), look: None, effects: Vec::new(), emblem: false, bare: false, persona_base: false });
+            plans.push(Plan { default, hero: hero.map(str::to_string), look: None, effects: Vec::new(), emblem: false, bare: false, persona_base: false, persona_visuals: Vec::new() });
             plans.len() - 1
         }
     };
@@ -660,6 +823,7 @@ struct Persona<'g, 'a> {
     hero: String,
     item: &'g Item<'a>,
     style: u32,
+    reported: bool,
     base: &'g Item<'a>,
     base_slot: &'static str,
     parts: Vec<PersonaSlot<'g, 'a>>,
@@ -692,43 +856,76 @@ impl<'g, 'a> Persona<'g, 'a> {
 }
 
 fn persona_number(item: &Item<'_>) -> Option<u32> {
-    let visuals = item.block.block("visuals")?;
-    visuals.pairs().filter_map(|pair| pair.value.as_block()).find(|block| block.str("type").is_some_and(|kind| kind.eq_ignore_ascii_case(PERSONA_TYPE)))?.str("persona").and_then(parse_number)
+    item.persona_number()
 }
 
+const PERSONA_DIRECT_SLOTS: &[&str] = &["shapeshift", "summon", "voice"];
+
 fn personas<'g, 'a>(game: &'g ItemsGame<'a>, picks: &[Pick], live: &dyn Fn(&str, &str) -> bool) -> Result<Vec<Persona<'g, 'a>>> {
-    let mut found: Vec<Persona<'g, 'a>> = Vec::new();
+    let mut active: Vec<(usize, String, &'g Item<'a>, u32, u32, bool)> = Vec::new();
     for (index, pick) in picks.iter().enumerate() {
         let Some(hero) = pick.hero.as_deref().filter(|_| pick.slot.eq_ignore_ascii_case(PERSONA_SELECTOR)) else { continue };
         let Some(item) = game.item(&pick.item).filter(|item| game.fits(item, Some(hero), PERSONA_SELECTOR)) else { continue };
         let Some(number) = persona_number(item) else { continue };
-        if found.iter().any(|persona| persona.hero.eq_ignore_ascii_case(hero)) {
+        if active.iter().any(|(_, known, ..)| known.eq_ignore_ascii_case(hero)) {
             return Err(Error::Refused(format!("{} is picked more than once", pick.place())));
         }
-        let place = pick.place();
-        let (base, base_slot) = match game.default_item(Some(hero), HERO_BASE) {
+        active.push((index, hero.to_string(), item, pick.style, number, true));
+    }
+    for (index, pick) in picks.iter().enumerate() {
+        let Some(hero) = pick.hero.as_deref() else { continue };
+        if active.iter().any(|(_, known, ..)| known.eq_ignore_ascii_case(hero)) {
+            continue;
+        }
+        let suffix = items::persona_of(&pick.slot);
+        let Some(number) = suffix.strip_prefix("_persona_").and_then(|n| n.parse::<u32>().ok()) else { continue };
+        let has_normal_conflict = picks.iter().any(|other| {
+            other.hero.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(hero)) && persona_takes_the_place_of(&other.slot)
+        });
+        if has_normal_conflict {
+            continue;
+        }
+        if let Some(item) = game.items_for(Some(hero), PERSONA_SELECTOR).into_iter().find(|item| persona_number(item) == Some(number)) {
+            active.push((index, hero.to_string(), item, 0, number, false));
+        }
+    }
+
+    let mut found: Vec<Persona<'g, 'a>> = Vec::new();
+    for (index, hero, item, style, number, reported) in active {
+        let place = format!("{}'s {} slot", items::hero_short_name(&hero), PERSONA_SELECTOR);
+        let (base, base_slot) = match game.default_item(Some(&hero), HERO_BASE) {
             Some(base) => (base, HERO_BASE),
-            None => (game.default_item(Some(hero), PERSONA_SELECTOR).ok_or_else(|| Error::NotFound(format!("the game has no default item for {place}")))?, PERSONA_SELECTOR),
+            None => (game.default_item(Some(&hero), PERSONA_SELECTOR).ok_or_else(|| Error::NotFound(format!("the game has no default item for {place}")))?, PERSONA_SELECTOR),
         };
         let suffix = format!("_persona_{number}");
-        let slots = game.hero_slots(hero);
-        let worn_by_hero: Vec<(&'g str, &'g Item<'a>)> = slots.iter().copied().filter(|(slot, _)| items::persona_of(slot).is_empty() && carries_an_emblem(slot) && live(hero, slot)).collect();
+        let slots = game.hero_slots(&hero);
+        let worn_by_hero: Vec<(&'g str, &'g Item<'a>)> = slots.iter().copied().filter(|(slot, _)| items::persona_of(slot).is_empty() && carries_an_emblem(slot) && live(&hero, slot)).collect();
         let mut parts: Vec<Worn<'g, 'a>> = Vec::new();
+        let mut direct_parts: Vec<PersonaSlot<'g, 'a>> = Vec::new();
         for (slot, default) in slots.iter().copied() {
             let Some(stands_for) = slot.to_ascii_lowercase().strip_suffix(&suffix).map(str::to_string) else { continue };
-            if !carries_an_emblem(&stands_for) || !live(hero, slot) {
+            if !live(&hero, slot) {
                 continue;
             }
-            let picked = picks.iter().enumerate().find(|(_, other)| other.hero.as_deref().is_some_and(|owner| owner.eq_ignore_ascii_case(hero)) && other.slot.eq_ignore_ascii_case(slot));
+            let picked = picks.iter().enumerate().find(|(_, other)| other.hero.as_deref().is_some_and(|owner| owner.eq_ignore_ascii_case(&hero)) && other.slot.eq_ignore_ascii_case(slot));
             let worn = match picked {
                 Some((at, other)) => {
-                    let part = game.item(&other.item).filter(|part| game.fits(part, Some(hero), slot));
+                    let part = game.item(&other.item).filter(|part| game.fits(part, Some(&hero), slot));
                     let part = part.ok_or_else(|| Error::NotFound(format!("{} does not go in {}", other.item, other.place())))?;
                     Worn { slot, default, item: part, style: if part.switches_styles_itself() { 0 } else { other.style }, effect: other.effect, index: Some(at) }
                 }
                 None => Worn { slot, default, item: default, style: 0, effect: None, index: None },
             };
-            parts.push(worn);
+            if carries_an_emblem(&stands_for) {
+                parts.push(worn);
+            } else if PERSONA_DIRECT_SLOTS.contains(&stands_for.as_str())
+                && let Some((hero_slot, hero_default)) = slots.iter().copied().find(|(s, _)| s.eq_ignore_ascii_case(&stands_for) && live(&hero, s))
+            {
+                let hero_picked = picks.iter().any(|other| other.hero.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(&hero)) && other.slot.eq_ignore_ascii_case(hero_slot));
+                if !hero_picked && hero_default.heroes.len() == 1 {
+                    direct_parts.push(PersonaSlot { slot: hero_slot, default: hero_default, worn: Some(worn) });
+                }
+            }
         }
         let mut placed: Vec<Option<Worn<'g, 'a>>> = worn_by_hero.iter().map(|_| None).collect();
         let mut homeless = Vec::new();
@@ -746,8 +943,9 @@ fn personas<'g, 'a>(game: &'g ItemsGame<'a>, picks: &[Pick], live: &dyn Fn(&str,
                 None => return Err(Error::Refused(format!("{place}: the hero has no slot left for the persona's {}", part.slot))),
             }
         }
-        let parts = worn_by_hero.iter().zip(placed).map(|((slot, default), worn)| PersonaSlot { slot, default, worn }).collect();
-        found.push(Persona { index, hero: hero.to_string(), item, style: pick.style, base, base_slot, parts });
+        let mut mapped: Vec<PersonaSlot<'g, 'a>> = worn_by_hero.iter().zip(placed).map(|((slot, default), worn)| PersonaSlot { slot, default, worn }).collect();
+        mapped.extend(direct_parts);
+        found.push(Persona { index, hero, item, style, reported, base, base_slot, parts: mapped });
     }
     Ok(found)
 }
@@ -1177,7 +1375,7 @@ fn without_key(src: &[u8], pair: &Pair<'_>, effect: Block<'_>, key: &str) -> Vec
     rewrite_pair(src, pair, effect, &parts)
 }
 
-fn rewrite_pair(src: &[u8], pair: &Pair<'_>, block: Block<'_>, parts: &[Cow<'_, [u8]>]) -> Vec<u8> {
+pub(crate) fn rewrite_pair(src: &[u8], pair: &Pair<'_>, block: Block<'_>, parts: &[Cow<'_, [u8]>]) -> Vec<u8> {
     let mut text = src[pair.start..block.start()].to_vec();
     text.extend_from_slice(&write_block(src, block, parts));
     text.push(b'}');
@@ -1268,7 +1466,7 @@ fn referenced_files(content: &[u8]) -> Vec<String> {
     files
 }
 
-fn splice(src: &[u8], mut edits: Vec<(Range<usize>, Vec<u8>)>) -> Result<Vec<u8>> {
+pub(crate) fn splice(src: &[u8], mut edits: Vec<(Range<usize>, Vec<u8>)>) -> Result<Vec<u8>> {
     edits.sort_by_key(|(range, _)| range.start);
     let mut out = Vec::with_capacity(src.len() + edits.iter().map(|(_, new)| new.len()).sum::<usize>());
     let mut at = 0;

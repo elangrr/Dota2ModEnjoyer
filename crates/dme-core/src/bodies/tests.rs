@@ -87,3 +87,42 @@ fn bodies_that_cannot_be_put_in_place_are_left_with_why() {
     assert!(placed.is_empty(), "a model put in place for a piece keeps its place");
     assert_eq!(left.len(), 1);
 }
+
+#[test]
+fn place_all_rewrites_hero_summon_and_ward_modifiers_back_to_default_paths() {
+    let before = format!(
+        "\"items_game\"\n{{\n\"player_loadout_slots\" {{ \"0\" \"ward\" }}\n\"prefabs\" {{ \"ward\" {{ \"item_slot\" \"ward\" \"baseitem\" \"1\" }} }}\n\"items\"\n{{\n{}{}{}\n}}\n}}\n",
+        default_item("1", "npc_dota_hero_axe", ""),
+        default_item("2", "npc_dota_hero_phoenix", ""),
+        "\"596\"\n{\n\"name\" \"Default Ward\"\n\"prefab\" \"ward\"\n\"visuals\"\n{\n\"asset_modifier0\" { \"type\" \"entity_model\" \"asset\" \"npc_dota_observer_wards\" \"modifier\" \"models/props_gameplay/default_ward.vmdl\" }\n\"asset_modifier1\" { \"type\" \"entity_model\" \"asset\" \"npc_dota_sentry_wards\" \"modifier\" \"models/props_gameplay/default_ward.vmdl\" }\n}\n}\n",
+    );
+    let after = format!(
+        "\"items_game\"\n{{\n\"player_loadout_slots\" {{ \"0\" \"ward\" }}\n\"prefabs\" {{ \"ward\" {{ \"item_slot\" \"ward\" \"baseitem\" \"1\" }} }}\n\"items\"\n{{\n{}{}{}\n}}\n}}\n",
+        default_item("1", "npc_dota_hero_axe", &block("entity_model", "npc_dota_hero_axe", "models/items/axe/bare.vmdl", "")),
+        default_item("2", "npc_dota_hero_phoenix", &block("entity_model", "npc_dota_phoenix_sun", "models/items/phoenix/sun.vmdl", "")),
+        "\"596\"\n{\n\"name\" \"Default Ward\"\n\"prefab\" \"ward\"\n\"visuals\"\n{\n\"asset_modifier0\" { \"type\" \"entity_model\" \"asset\" \"npc_dota_observer_wards\" \"modifier\" \"models/items/wards/eye.vmdl\" }\n\"asset_modifier1\" { \"type\" \"entity_model\" \"asset\" \"npc_dota_sentry_wards\" \"modifier\" \"models/items/wards/eye.vmdl\" }\n}\n}\n",
+    );
+    let before_game = ItemsGame::parse(before.as_bytes()).unwrap();
+    let mut patched = Patched { bytes: after.into_bytes(), changes: Vec::new(), placed: Vec::new() };
+    let unit_model = |unit: &str| match unit {
+        "npc_dota_phoenix_sun" => Some("models/heroes/phoenix/phoenix_egg.vmdl".to_string()),
+        "npc_dota_observer_wards" | "npc_dota_sentry_wards" => Some("models/props_gameplay/default_ward.vmdl".to_string()),
+        _ => None,
+    };
+    let placed = place_all(&before_game, &mut patched, &hero_model, &unit_model, &|_| true).unwrap();
+    assert_eq!(
+        placed,
+        vec![
+            Placed { at: "models/heroes/axe/axe.vmdl".to_string(), model: "models/items/axe/bare.vmdl".to_string() },
+            Placed { at: "models/heroes/phoenix/phoenix_egg.vmdl".to_string(), model: "models/items/phoenix/sun.vmdl".to_string() },
+            Placed { at: "models/props_gameplay/default_ward.vmdl".to_string(), model: "models/items/wards/eye.vmdl".to_string() },
+        ]
+    );
+    let rewritten = ItemsGame::parse(&patched.bytes).unwrap();
+    assert_eq!(rewritten.item("1").unwrap().visuals_of_type("entity_model", true)[0].str("modifier").unwrap(), b"models/heroes/axe/axe.vmdl");
+    assert_eq!(rewritten.item("2").unwrap().visuals_of_type("entity_model", true)[0].str("modifier").unwrap(), b"models/heroes/phoenix/phoenix_egg.vmdl");
+    let ward_mods = rewritten.item("596").unwrap().visuals_of_type("entity_model", true);
+    assert_eq!(ward_mods.len(), 2);
+    assert_eq!(ward_mods[0].str("modifier").unwrap(), b"models/props_gameplay/default_ward.vmdl");
+    assert_eq!(ward_mods[1].str("modifier").unwrap(), b"models/props_gameplay/default_ward.vmdl");
+}

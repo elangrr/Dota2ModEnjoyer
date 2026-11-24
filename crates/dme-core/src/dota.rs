@@ -106,6 +106,10 @@ impl DotaInstall {
         self.file(&["game", MOD_FOLDER, "pak01_dir.vpk"])
     }
 
+    pub fn mod_itembuilds_dir(&self) -> PathBuf {
+        self.file(&["game", MOD_FOLDER, "itembuilds"])
+    }
+
     pub fn version(&self) -> Result<GameVersion> {
         let path = self.steam_inf();
         let text = String::from_utf8_lossy(&fsutil::read(&path)?).into_owned();

@@ -64,8 +64,8 @@ fn the_header_says_how_much_of_each_there_is() {
     let block = write(&events(), &like()).unwrap();
     let number = |field: usize| u32_at(&block, 20 + 4 * field).unwrap();
     assert_eq!(&block[..20], &like()[..20], "the magic and the format's id are kept");
-    assert_eq!(number(Header::COMPRESSION), LZ4);
-    assert_eq!(number(1), 0x4000_0000);
+    assert_eq!(number(Header::COMPRESSION), UNPACKED);
+    assert_eq!(number(1), 0);
     assert_eq!(number(Header::FIRST_INTS), 1);
     assert_eq!(number(Header::FIRST_EIGHTS), 3, "the position's numbers");
     assert_eq!(number(Header::OBJECTS), 3);
@@ -75,14 +75,37 @@ fn the_header_says_how_much_of_each_there_is() {
     assert_eq!(number(Header::SHORT_ARRAY_ITEMS), 2 + 1 + 1);
     assert_eq!(number(Header::KINDS) - number(Header::VALUES), 4, "one kind for the items of each typed array");
     assert_eq!(number(Header::TOTAL), number(Header::FIRST_SIZE) + number(Header::SECOND_SIZE));
-    assert_eq!(number(Header::TOTAL_PACKED), number(Header::FIRST_PACKED) + number(Header::SECOND_PACKED));
-    assert_eq!(block.len(), HEADER + number(Header::TOTAL_PACKED) as usize);
+    assert_eq!(number(Header::TOTAL_PACKED), number(Header::TOTAL));
+    assert_eq!(number(Header::FIRST_PACKED), 0);
+    assert_eq!(number(Header::SECOND_PACKED), 0);
+    assert_eq!(block.len(), HEADER + number(Header::TOTAL) as usize);
+}
+
+#[test]
+fn an_lz4_compressed_block_is_read_and_written_back_uncompressed() {
+    let plain = write(&events(), &like()).unwrap();
+    let (mut numbers, first, second) = unpacked(&plain).unwrap();
+    let (first_packed, second_packed) = (lz4::pack(&first), lz4::pack(&second));
+    numbers[Header::COMPRESSION] = LZ4;
+    numbers[1] = 0x4000_0000;
+    numbers[Header::FIRST_PACKED] = first_packed.len() as u32;
+    numbers[Header::SECOND_PACKED] = second_packed.len() as u32;
+    numbers[Header::TOTAL_PACKED] = (first_packed.len() + second_packed.len()) as u32;
+    let mut packed = plain[..20].to_vec();
+    for number in numbers {
+        packed.extend_from_slice(&number.to_le_bytes());
+    }
+    packed.extend_from_slice(&first_packed);
+    packed.extend_from_slice(&second_packed);
+
+    assert_eq!(read(&packed).unwrap(), events());
+    assert_eq!(write(&read(&packed).unwrap(), &packed).unwrap(), plain);
 }
 
 #[test]
 fn a_string_is_listed_once_where_it_is_first_used() {
     let block = write(&events(), &like()).unwrap();
-    let first = lz4::unpack(&block[HEADER..HEADER + u32_at(&block, 20 + 4 * Header::FIRST_PACKED).unwrap() as usize], u32_at(&block, 20 + 4 * Header::FIRST_SIZE).unwrap() as usize).unwrap();
+    let first = &block[HEADER..HEADER + u32_at(&block, 20 + 4 * Header::FIRST_SIZE).unwrap() as usize];
     let strings = &first[..u32_at(&block, 20 + 4 * Header::STRING_BYTES).unwrap() as usize];
     let listed: Vec<&[u8]> = strings.split(|&byte| byte == 0).filter(|text| !text.is_empty()).collect();
     assert_eq!(&listed[..4], &[b"Hero_Axe.Attack".as_slice(), b"type", b"dota_src1_3d", b"volume"]);

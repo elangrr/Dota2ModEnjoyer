@@ -18,7 +18,7 @@ Paths below are relative to the Dota folder, normally
 | `game\dota\gameinfo.gi` | The game's list of content folders | read |
 | `game\dota\gameinfo_branchspecific.gi` | Where our content folder is added | read, **edit** |
 | `game\bin\win64\dota.signatures` | Where the edited file is declared | read, **edit** |
-| `game\mod_enjoyer\pak01_dir.vpk` | Our mod package | **create, delete** |
+| `game\mod_enjoyer\pak01_dir.vpk`, `pak01_NNN.vpk` | Our mod package | **create, delete** |
 
 Read from inside the game's archive:
 
@@ -45,6 +45,7 @@ Nothing else under the Dota folder is written. Our own files live in
 | `settings.json` | What the app remembers about itself: that the notice was read, a Dota folder pointed out by hand, the mode for a low-end computer (3.18), the version whose news was last shown (4.2), that the window could not be made see-through on this computer (3.13), the rank and role chosen on the Draft page (5.3) |
 | `presets.json` | The picks a player kept under a name in the app (3.13) |
 | `crash.txt` | What made the app close, when something went wrong inside it; read and taken away at the next start (3.13) |
+| `trying-glass` | Written while starting with frosted glass and deleted on the first frame; if left behind by a native crash, the next start switches to a plain window (3.13) |
 | `draft.json` | The numbers of the draft helper as they were last fetched (5.4) |
 | `builds.json` | The builds of the build helper as they were last fetched (6.4) |
 | `backup\<game build>\` | The two game files as Valve shipped them |
@@ -129,9 +130,12 @@ After the tree and the embedded file data, a version 2 file has:
    the tree; the archive checksum section; and everything in the file before this third value.
 3. The signature section. May be empty.
 
-The package we write holds its files embedded: the item database and, for some picks, a few
-small files beside it (3.17, 3.20). It has correct CRC32 and MD5 values and an empty signature
-section. Dota mounts it. **(confirmed in game)**
+The package we write follows Valve's own archive layout: `pak01_dir.vpk` holds only the directory
+tree, the archive MD5 section (one 28-byte record per 1 MB of each numbered data file) and the
+other MD5 section, with an empty embedded file data section and empty signature section; the file
+contents are streamed into 16-byte aligned numbered data files (`pak01_000.vpk` ..., split near
+100 MB), holding the item database and any rewritten models, sounds, effects, trees or map looks.
+All CRC32 and MD5 checksums are verified. Dota mounts it. **(to confirm in game)**
 
 ### 2.3 `dota.signatures`
 
@@ -701,9 +705,10 @@ A compiled file of events is a list of blocks, as in 2.13. The block `DATA` hold
 KeyValues 3 in binary, of the fifth version (it starts with `\x05` and `3VK`):
 
 - 16 bytes that name the format, then 25 four-byte numbers. The first says how the two buffers
-  that follow are compressed (1 is LZ4, a single block each); the others say how big each part
-  below is, and how many objects and arrays there are. Numbers 13 to 16 are the sizes of the two
-  buffers, unpacked and packed, and 7 and 8 their sums.
+  that follow are compressed (`0` uncompressed, `1` LZ4 as a single block each); the others say how
+  big each part below is, and how many objects and arrays there are. Numbers 13 to 16 are the sizes
+  of the two buffers, unpacked and packed (0 for both packed sizes when uncompressed), and 7 and 8
+  their sums (`TOTAL_PACKED == TOTAL` when uncompressed).
 - The first buffer: every string, each ending in a zero byte, in the order they are first used;
   then their number; then the numbers of arrays that keep them here (positions, below).
 - The second buffer, in streams that are read side by side: the number of members of each
@@ -717,9 +722,8 @@ more, 24 an array of up to 255 items of one kind, its kind written once after it
 the same with doubles from the first buffer (the `position` of a sound in the world). The other
 blocks of the file, such as `RED2`, are about how it was made.
 
-`dme dev sounds` reads every such file and writes it again: 940 come out the same, byte for byte
-once unpacked, and 6 are compressed another way and are not read (music, fan voices and one of
-the tools'; none is a hero's).
+`dme dev sounds` reads every such file and writes it again uncompressed: 944 of 946 come out the
+same, byte for byte once unpacked (the other 2 are empty Valve files, neither a hero's).
 
 ### 2.15 Particle files, and what holds an effect
 
@@ -965,8 +969,13 @@ Before the first edit, copies of both original files are saved under
 ### 3.7 Restore
 
 1. Remove our lines from `gameinfo_branchspecific.gi` and check the SHA-1 against Valve's line.
-2. Cut `dota.signatures` back to the end of the `DIGEST` line.
-3. Delete `game\mod_enjoyer`.
+   If our markers are damaged, or if `dota.signatures` itself was truncated or lost its `DIGEST`
+   line, fall back to the saved backup for the exact current game build (`backup\<game build>\`):
+   each backed-up file is checked against Valve's `dota.signatures` line (SHA-1 and CRC) before
+   being restored, and a wrong-build or unverified backup is refused so another program's edits
+   are never overwritten blindly.
+2. Cut `dota.signatures` back to the end of the `DIGEST` line (or restore the verified backup).
+3. Delete `game\mod_enjoyer` (including any in-game shop builds in `game\mod_enjoyer\itembuilds\`).
 
 Steam's "Verify integrity of game files" has the same effect on the two game files. Restoring
 gives back normal Dota. **(confirmed in game)**
@@ -984,9 +993,9 @@ The tool decides what state the game is in from the files alone:
 
 ### 3.9 Safety rules
 
-- Refuse to write while `dota2.exe` is running. This is looked at twice: before the work starts,
-  and again right before the first write, since working things out takes a moment in which the
-  game may have been started.
+- Refuse to write while `dota2.exe` is running or while Steam is busy with Dota's files
+  (`StateFlags` other than `4` in `appmanifest_570.acf`). Both are checked before work starts and
+  again right before the first write, and also before restoring.
 - Work everything out in memory and check it before the first write.
 - Never write a game file in place: write a temporary file next to it, then rename. The
   temporary file's name has the number of the process that writes it
@@ -1136,9 +1145,10 @@ Two files keep apart what the player wants and what is in the game.
   place (3.22). The file also says whether the picks are put away (`"off": true`), and which
   heroes get the effects of events and an emblem where that is not every hero (3.21).
 - `state.json` is written when a package is. It holds the picks in the package, the game build it
-  was made from, the number of the rewrite rules it was made by, and which heroes got the effects
-  of events. The number goes up whenever sections 3.3, 3.4 or 3.14 to 3.22 change what is written
-  for the same picks; it is 11 now. The file is deleted before the first of the game's files is
+  was made from, the number of the rewrite rules it was made by, which heroes got the effects
+  of events, and the tag of any in-game shop builds (`shop_builds_tag`, 6.6). The number goes up
+  whenever sections 3.3, 3.4, 3.14 to 3.26 or 6.6 change what is written
+  for the same picks; it is 15 now. The file is deleted before the first of the game's files is
   written and written again after the last, so that a write that fails on the way leaves no
   picks that pass for the ones in the game, and the next Play writes them all. Going back to
   normal Dota deletes it too.
@@ -1241,7 +1251,11 @@ way a faint glow of the app's colour sits in one corner. A picture the app takes
 a blurred desktop of the app's own making behind it, since Windows' is not in the picture.
 A computer whose graphics cannot make a window see-through makes the window library give up
 as the window is being made. The app then notes that in `settings.json` (`"no_glass": true`)
-and starts itself again, without: the plain backdrop from then on.
+and starts itself again with `--no-glass`: the plain backdrop from then on. While starting with a
+see-through window the app also writes a marker file (`trying-glass`) and removes it once the
+first frame draws, so even a native driver or overlay crash before that frame switches the next
+start to a plain window automatically. Settings also offers a "Plain window (turn off frosted
+glass)" checkbox directly.
 Nothing in the window scrolls under a panel. Play and the buttons like it are a calm shade of
 the app's colour; the page in view has a quiet sheet and a short mark of that colour beside its
 name. The app has two looks, Night and Day, and a switch with a sun and a moon at the
@@ -1590,27 +1604,33 @@ of the normal map's models. That did not show in the game, and was dropped.
 
 **(to confirm in game)**
 
-### 3.18 Starting Dota for a low-end computer (an experiment)
+### 3.18 Launch options and starting Dota for a low-end computer
 
-With this mode on, Play starts the game with a list of settings after the game's number:
+Settings offers one-click Dota launch options (`LaunchOptions` in `launch.rs`) passed to
+`steam.exe -applaunch 570` before any low-end settings, kept in `settings.json` (all off by
+default):
+
+- Preload map (`launch_map_dota`): `-map dota`
+- Skip intro video (`launch_novid`): `-novid`
+- High CPU priority (`launch_high`): `-high`
+- Low-end PC mode (`low_end`): 17 of Dota's own video settings at their lightest (`+name value`)
 
 ```
-steam.exe -applaunch 570 +cl_globallight_shadow_mode 0 +dota_cheap_water 1 ...
+steam.exe -applaunch 570 -map dota -novid -high +cl_globallight_shadow_mode 0 +dota_cheap_water 1 ...
 ```
 
-Steam hands what follows the number on to the game, where `+name value` gives a setting a
-value for that run. The settings are 17 of the options of Dota's own video settings at their
-lightest: no shadows, simple water and lighting, no fog, no smoothing of edges, no grass, no
-wind in the trees, and so on. Each name was checked to be in the game's own program files on
-build 6973, and two of them are used by Valve's own `cfg/perftest.cfg`. Nothing is on the list
-that takes away what a player has to see: the effects of spells and the size of the picture are
-left as they are.
+Steam hands what follows the game's number on to Dota, where `-flag` sets a launch flag and
+`+name value` gives a video setting a value for that run. The 17 low-end settings are: no shadows,
+simple water and lighting, no fog, no smoothing of edges, no grass, no wind in the trees, and so
+on. Each name was checked to be in the game's own program files on build 6973, and two of them are
+used by Valve's own `cfg/perftest.cfg`. Nothing is on the list that takes away what a player has
+to see: the effects of spells and the size of the picture are left as they are.
 
 Nothing is written anywhere for this, neither a file of the game's nor one of the player's, such
-as an `autoexec.cfg`. The mode is a setting of the app (`"low_end": true` in `settings.json`),
-not a pick, and `dme play --low-end` does the same from the command line.
+as an `autoexec.cfg`. These are settings of the app, not picks, and `dme play --low-end` does
+low-end mode from the command line.
 
-It is not known yet whether the game takes these values over the ones saved in its video
+It is not known yet whether the game takes the `+` video values over the ones saved in its video
 settings, and whether it then saves them as the player's own. If it does, turning the mode off
 does not bring the old settings back; they are set again in Dota's video options.
 
@@ -1784,22 +1804,30 @@ hero's model is (Juggernaut's, in `hero_base`, 3.3):
 
 1. The default item that stands for the hero as a whole, the one of `hero_base`, takes the
    persona's look (3.3, 3.4), without its block of type `persona`. A hero without a default for
-   `hero_base` (Anti-Mage and Crystal Maiden on build 6973) has it on the default of
-   `persona_selector`.
-2. Each of the persona's slots that stands in for a slot the hero wears things in (3.19 says
+   `hero_base` (10 of the 12 persona heroes) has it on the default of `persona_selector`, and the
+   persona's non-`persona`, non-`entity_model` visuals (sounds, particles, ability icons) are
+   mirrored onto an always-worn hero default slot so they also take effect online.
+2. Picking a persona set or any `*_persona_N` piece automatically includes and activates the
+   hero's matching `persona_selector` item (27 of 30 persona sets in `items_game.txt` omit
+   `persona_selector`), even when the player does not own the persona.
+3. Each of the persona's slots that stands in for a slot the hero wears things in (3.19 says
    which those are) gives its part: what is picked for the persona's slot, or else that slot's
    default item. The part goes on the default item of the hero's slot it stands in for, as
    `head_persona_1` does for `head`, looking like it (3.3). A part whose slot the hero has not
    (Pudge's `armor_persona_1`) goes in the first slot of the hero's, in the game's order, that the
-   persona has no part for.
-3. Every other slot the hero wears things in looks like nothing: its default item keeps its
-   own pairs except its looks (3.3), and has no model.
-4. A pick for the effects of an ability of the persona's (3.14) rides on the default item of the
+   persona has no part for. Non-worn persona slots with a matching hero slot (`shapeshift_persona_N`,
+   `summon_persona_N`, `voice_persona_N`) carry onto the hero's corresponding default slot where
+   not shared across heroes and not separately picked.
+4. Every other slot the hero wears things in looks like nothing: its default item keeps its
+   own pairs except its looks (3.3), has no model, and in 3.24 its default model file is replaced
+   with Valve's empty model (`models/props_nature/prop_null.vmdl`) so adult pieces never clip over
+   the persona body.
+5. A pick for the effects of an ability of the persona's (3.14) rides on the default item of the
    hero's slot that wears the part it would ride on.
 
-A persona takes the place of what its hero wears, so a pick for one of those slots, or for
-`hero_base`, cannot go with it and is refused; `picks.json` keeps only the later of the two
-(3.12). The persona's own default items are left as they are.
+A persona (or any `*_persona_N` slot) takes the place of what its hero wears, so a pick for one of
+those slots, or for `hero_base`, cannot go with it and is refused; `picks.json` keeps only the
+later of the two (3.12). The persona's own default items are left as they are.
 
 It is not known whether a model put on a default item this way shows in a match on Valve's
 servers. Juggernaut's arcana showed so; a persona is a larger change.
@@ -1850,12 +1878,23 @@ game looks for the default's own:
 
 1. Each rewritten default item of a hero that names a model of its own (`model_player`, and
    `model_player1` to `3` where it has them) names that model again, in the place of the
-   picked one.
+   picked one. Per-hero `"type" "model"` refit swaps (such as Windranger Arcana refitting
+   `wr_arcana_shoulder_refit_legacy.vmdl` to `wr_arcana_shoulder.vmdl`, or Faceless Void Arcana
+   refitting default bracers/shoulders) are resolved at build time (up to 4 hops), the final
+   refitted model is placed at the default path, and runtime `"type" "model"` `.vmdl` swaps are
+   stripped from rewritten hero default items so the client never asks for unprecached refit paths.
 2. The picked model's compiled file goes in the package under the default model's name:
    `models/heroes/dragon_knight/weapon.vmdl_c` holds the bytes of the picked sword's
    `.vmdl_c`. A compiled model names its materials and the rest by their full paths (2.13), so
-   it finds them where it is put.
-3. Everything else of the rewrite stays: the picked item's effects, name, icon, portrait and
+   it finds them where it is put. Unused hero default slots cleared for a persona (3.22) receive
+   `models/props_nature/prop_null.vmdl_c` under their default model's name.
+3. `"type" "additional_wearable"` blocks on rewritten hero default items are reconciled against
+   the vanilla default item's own `additional_wearable`s: paired blocks (such as Phoenix's default
+   `phoenix_wings_fx.vmdl` receiving a picked back's `*_fx.vmdl`) are placed at the default's
+   precached path and rewritten back to it; leftover vanilla `additional_wearable`s are hidden
+   with `prop_null.vmdl`; extra unprecached `additional_wearable` blocks that have no vanilla slot
+   are stripped so they cannot spawn a red `ERROR`.
+4. Everything else of the rewrite stays: the picked item's effects, name, icon, portrait and
    the skin of a style (3.4). The model of a style is the one that is put in place: 3.4 works
    in the first style too where it names a model of its own (146 items on build 6975, 11 of
    them another model than the item's), since the game would otherwise load it by its name.
@@ -1870,15 +1909,9 @@ Left as 3.3 has it:
   hero's body; what is picked for them is not known to show online;
 - a model that more than one default item names, or one item under two keys (Troll Warlord's
   four default weapons share one), since a file put there would show on each of them;
-- a model that a default item names other than as its own, such as the `asset` of a swap of
-  models: Faceless Void's arcana head swaps his own bracers, belt and shoulders for ones that
-  go with it, and a picked bracer put where his own is would be swapped too. 30 such swaps
-  are in items that can be picked, on build 6975;
-- a picked model that a default item names that way: the same arcana refits certain bracers
-  and shoulders by their own names, and would not find one put under the default's name. 450
-  such swaps are in items that can be picked;
 - a model the game does not have, which stays named and does not show, as before;
-- world slots, and the models a style switches to by itself (2.6).
+- world slots (handled by 3.26 for wards and couriers), and the models a style switches to by
+  itself (2.6).
 
 Other items that use a default's model with another skin, such as the 108 Diretide Shimmer
 items, show the picked model on whoever wears one, on this computer only.
@@ -1914,8 +1947,10 @@ So the game is given the sound the server asks for, made like the item's. After 
    none does on build 6975 (Lifestealer's Dark Maw Inhibitor names its event only to count how
    often it plays, and that is not playing it).
 4. Each hero's file with a swap in it goes in the package under its own path, with the same
-   blocks before `DATA` and its events written again (2.14). The buffers are written without
-   compressing them, as a single LZ4 block of literals, which every reader of LZ4 unpacks.
+   blocks before `DATA` and its events written again uncompressed (2.14, compression `0`, `nums[1]`
+   `0`, packed sizes `0`, `TOTAL_PACKED == TOTAL`), matching Valve's own uncompressed sound event
+   files. (0.4.0 to 0.5.0 wrote them as a single LZ4 block of literals with packed sizes larger
+   than unpacked sizes, which Valve's own files never have.)
 
 Whoever on Valve's servers asks for the hero's sound then plays the item's, on this computer,
 for every hero that the server gives the default sound: the same as models (3.10). A player whose
@@ -1926,26 +1961,34 @@ of a hero on its own: 321 of the 331 swaps are made. **(to confirm in a match)**
 
 ### 3.26 The body a picked item gives the hero, where the hero's own is
 
-Some items swap a hero's whole body for another model, and the server decides a hero's model
-the way it decides its sounds (3.25), so online such an item showed on the hero's own body. Two
-kinds of blocks in `visuals` do it:
+Some items swap a hero's whole body, a hero summon, or a world ward/courier for another model,
+and the server decides those models the way it decides sounds (3.25). Moreover, leaving an
+unprecached `models/items/...` path in `entity_model`'s `modifier` makes the client render a red
+`ERROR` online (seen on Windranger Arcana and Phoenix Supernova). `bodies::place_all` handles all
+four kinds of blocks in `visuals`:
 
 - `entity_model` whose `asset` is a hero, as `npc_dota_hero_nevermore`: the hero's body. Arcanas
-  (Demon Eater, Manifold Paradox, Axe Unleashed's bare body), personas (3.22) and Tiny's sets,
-  which name his sizes (2.10).
+  (Demon Eater, Manifold Paradox, Compass of the Rising Gale, Axe Unleashed's bare body), personas
+  (3.22) and Tiny's sets, which name his sizes (2.10).
 - `hero_model_change`: the model of a form the hero takes, named in `asset`, as
   `models/heroes/lycan/lycan_wolf.vmdl` for Lycan's Shapeshift, and also Terrorblade's
   Metamorphosis, Dragon Knight's dragon, Lone Druid's and Muerta's true forms and Undying's
   golem.
+- `entity_model` whose `asset` is a hero summon/unit (`npc_dota_phoenix_sun`,
+  `npc_dota_warlock_golem`, `npc_dota_visage_familiar`, `npc_dota_shadow_shaman_ward`, etc.) or
+  world ward (`npc_dota_observer_wards`, `npc_dota_sentry_wards`), resolved to its precached
+  default model via `scripts/npc/npc_units.txt` (`UnitFiles`).
+- `courier` and `courier_flying` on the world courier default item, placed at Valve's default
+  courier paths (`models/props_gameplay/donkey*.vmdl`).
 
-After the rewrite, the swaps are those that the default items of heroes have and did not have
-in Valve's file, of the first style, each once (as 3.25 takes sounds). Each puts the item's
-compiled model in the package where the game looks for the hero's body (its own file says,
-2.10) or for the form's, as 3.24 does with pieces. It is left out where the place is not in
-`models/heroes/` (something other heroes could have too), where the model is swapped for
-itself, where the game lacks the item's model, and where another swap or a piece (3.24) put a
-model there first. On build 6975, 145 items of heroes swap a body; `dme dev bodies` puts 150 of
-their 151 swaps in place, the one left being a model swapped for itself.
+After the rewrite and 3.24, `bodies::place_all` places each picked model at the server-precached
+default path (`models/heroes/`, `particles/models/heroes/`, or `models/props_gameplay/` for
+wards/couriers) AND rewrites the block's `"modifier"` inside `items_game.txt` back to that default
+path so the client never asks for an unprecached `.vmdl`. Swaps are left out where the target is
+outside those folders, where the model is swapped for itself, where the game lacks the item's
+model, or where another placement already claimed that path for a different model. On build 6975,
+145 items of heroes swap a body; `dme dev bodies` puts 150 of their 151 swaps in place, the one
+left being a model swapped for itself.
 
 Left out on purpose: the models of a hex (`hex_model`), as the item database names most of them
 only as `hex` and the game's files do not say which model each hero's hex is, nor whether
@@ -2536,6 +2579,33 @@ copied the way "Copy details" is, so that a window that is only there to have it
 taken writes it to `copied.txt` in its data folder and leaves the clipboard alone, and a
 message says what was copied and that it is pasted in Dota's chat with Ctrl+V.
 
+### 5.9 Captain's Mode and popular first-phase supports
+
+A switch beside "My rank" and "My role" chooses between **All Pick** and **Captain's Mode**
+(`draft_mode` in `settings.json`, All Pick by default).
+
+- **Popular first-phase supports (All Pick):** In All Pick, while the list is for a soft or hard
+  support in Team composition or Lane winning and no enemy hero has been picked yet (and no
+  teammate for synergy), the list ranks heroes by their pick count in that rank and role
+  (`Numbers::suggest_popular`), showing each hero's pick rate in percent and win rate in the
+  line under its name. Once a hero is picked on the other team, or for core roles, normal win
+  and counter scoring takes over.
+- **Captain's Mode (patch 7.40+ 24-step order):** Shows a "First pick: Us / Enemy" toggle,
+  groups each team's five pick slots as `1-3-1`, and adds a 7-slot ban row under each team
+  grouped `3-2-2` for first pick and `4-1-2` for second pick, following the live patch 7.40–7.42
+  24-step order (`CAPTAINS_STEPS` in `draft.rs`):
+  1. First ban phase (7): 1st, 1st, 2nd, 2nd, 1st, 2nd, 2nd.
+  2. First pick phase (2): 1st, 2nd.
+  3. Second ban phase (3): 1st, 1st, 2nd.
+  4. Second pick phase (6): 2nd, 1st, 1st, 2nd, 2nd, 1st.
+  5. Third ban phase (4): 1st, 2nd, 1st, 2nd.
+  6. Third pick phase (2): 1st, 2nd.
+  A banner above the list names the current step ("Ban 1 of 7 — Your team", "Pick 2 of 5 — Enemy"),
+  and filling any slot auto-advances to the next free step. During ban steps, the list shows
+  context-aware ban recommendations (`Numbers::to_ban_in_draft`) that weigh each hero's rank
+  strength, how hard it counters already-picked heroes on the banning team (or the hero pool
+  before picks exist), and how well it pairs with already-picked heroes on the opposing team.
+
 ## 6. The build helper
 
 The Builds page says what the players of a hero buy and skill in a role, in the player's rank.
@@ -2805,13 +2875,42 @@ enhancement. One without a trinket kept the one before. What comes after the fou
 again at tier 4 and is not counted. OpenDota calls the Defiant Shell `guardian_shell`, and the
 maker gives it the game's name. The roles are told apart as for what pros buy (6.1).
 
-A hero in a role is said where at least 8 pros played it so, as for what pros buy. For the
-other roles, the hero in every role together is said, where at least 8 pros played it at all.
-A tier is said where at least 5 of them made something of it, and a trinket or an enhancement
-where at least 15 of 100 of those, and two at the least, took it: three trinkets and two
-enhancements of each tier at the most. On the fourth day of 7.42, 12 heroes in a role had
-their own and 24 heroes one of every role. The part had 6,169 bytes then. With every hero in
-every role it would come to some hundreds of thousands, far inside the 8 MB the file may have.
+A hero in a role is said where at least 5 pros played it so (`LEAST_NEUTRAL_PROS`). For the
+other roles, the hero in every role together is said, where at least 5 pros played it at all.
+A tier is said where at least 3 of them made something of it (`LEAST_NEUTRAL_TIER`), and a
+trinket or an enhancement where at least 15 of 100 of those, and two at the least, took it:
+three trinkets and two enhancements of each tier at the most. The maker also records an optional
+`"minutes"` array with the average minute pros crafted each tier (rounded to the nearest whole
+minute from `neutral_item_history` timestamps), so Tier 1 shows the real pro craft minute (for
+example around minute 9) instead of the game file's `0 min` when present; older files without
+`"minutes"` fall back to `neutral_items.txt`'s `start_time`.
+
+For heroes whose skill orders or talents STRATZ does not report (such as Kez and Largo), the
+maker asks OpenDota's Explorer SQL (`pro_skills_and_talents`, last 90 days of pro matches using
+`ability_upgrades_arr` mapped via `constants/ability_ids`) to fill missing `orders` and
+`talents` automatically.
+
+### 6.6 In-game shop builds
+
+Settings (under Play) and the Builds page header offer an "In-game shop builds" toggle
+(`shop_builds` in `settings.json`, off by default). When turned on and builds data has been
+loaded, Play generates a Valve KeyValues item build file (`itembuilds/default_<short>.txt`,
+matching `game\dota\itembuilds\default_<hero>.txt`) for every hero using the player's selected
+rank and preferred role (`shop_builds::generate` in `crates/dme-core/src/shop_builds.rs`):
+
+- `#DOTA_Item_Build_Starting_Items`: starting items within 600 gold, with repeated copies.
+- `#DOTA_Item_Build_Early_Game`: core and pro core items bought before minute 15.
+- `#DOTA_Item_Build_Mid_Items`: core and pro core items bought from minute 15 through 26.
+- `#DOTA_Item_Build_Late_Items`: core and pro core items bought after minute 26 (promoting up to
+  3 late situational items if fewer than 3 core items fall past minute 26).
+- `#DOTA_Item_Build_Other_Items`: remaining situational items.
+
+Play writes the generated files both as loose files under `game\mod_enjoyer\itembuilds\` and
+inside `game\mod_enjoyer\pak01_dir.vpk` so Source 2's `Game mod_enjoyer` search path overrides
+the game's default guides. Shop builds work alongside cosmetic picks or on their own (with 0
+cosmetic picks, `items_game.txt` is left untouched). Turning the option off removes
+`game\mod_enjoyer\itembuilds\` on the next Play, and "Back to normal Dota" turns the option off
+and removes `game\mod_enjoyer` completely. **(to confirm in a bot match)**
 
 What the app shows of it goes by the game's own file of neutral items,
 `scripts/npc/neutral_items.txt`: its tiers (`neutral_tiers`), the minute each opens

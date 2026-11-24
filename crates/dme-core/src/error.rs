@@ -13,6 +13,9 @@ pub enum Error {
     #[error("Dota 2 is running. Close it and try again.")]
     DotaRunning,
 
+    #[error("Steam is updating Dota 2. Wait until it is done, then try again.")]
+    SteamBusy,
+
     #[error("could not {action} {path}: {source}")]
     Io {
         action: &'static str,
@@ -57,6 +60,7 @@ pub enum Plain<'a> {
     Held { dota: bool },
     DiskFull,
     DotaRunning,
+    SteamBusy,
     DotaNotFound(&'a [String]),
     NotDota(&'a Path),
     NoSteam,
@@ -97,6 +101,7 @@ impl Error {
             Error::Io { path, source, .. } if crate::fsutil::is_held(source) => Plain::Held { dota: path.starts_with(dota) },
             Error::Io { source, .. } if crate::fsutil::is_disk_full(source) => Plain::DiskFull,
             Error::DotaRunning => Plain::DotaRunning,
+            Error::SteamBusy => Plain::SteamBusy,
             Error::DotaNotFound(folders) => Plain::DotaNotFound(folders),
             Error::NotDota(folder) => Plain::NotDota(folder),
             Error::NoSteam => Plain::NoSteam,
@@ -128,6 +133,8 @@ mod tests {
         let missing = io(&signatures, 3);
         assert_eq!(missing.plain(dota), missing.to_string());
         assert_eq!(Error::DotaRunning.plain(dota), "Dota 2 is running. Close it and try again.");
+        assert_eq!(Error::SteamBusy.plain(dota), "Steam is updating Dota 2. Wait until it is done, then try again.");
+        assert_eq!(Error::SteamBusy.plain_kind(dota), Plain::SteamBusy);
         assert_eq!(io(&signatures, 32).plain_kind(dota), Plain::Held { dota: true });
         assert_eq!(io(picks, 112).plain_kind(dota), Plain::DiskFull);
         assert_eq!(missing.plain_kind(dota), Plain::Other(missing.to_string()));

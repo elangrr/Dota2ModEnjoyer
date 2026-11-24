@@ -22,6 +22,7 @@ pub mod pictures;
 pub mod process;
 pub mod resource;
 pub mod share;
+pub mod shop_builds;
 pub mod signatures;
 pub mod sounds;
 pub mod trees;

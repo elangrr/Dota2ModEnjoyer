@@ -72,7 +72,10 @@ impl Loadout {
     pub fn set(&mut self, pick: Pick) {
         self.start_over_if_away();
         if let Some(hero) = pick.hero.clone() {
-            let is_persona = |slot: &str| slot.eq_ignore_ascii_case(apply::PERSONA_SELECTOR);
+            let is_persona = |slot: &str| {
+                slot.eq_ignore_ascii_case(apply::PERSONA_SELECTOR)
+                    || !crate::items::persona_of(slot).is_empty()
+            };
             let gives_way = |other: &Pick| match is_persona(&pick.slot) {
                 true => apply::persona_takes_the_place_of(&other.slot),
                 false => apply::persona_takes_the_place_of(&pick.slot) && is_persona(&other.slot),
@@ -208,6 +211,9 @@ mod tests {
         assert_eq!(loadout.len(), 4, "a part of the persona goes with it");
         loadout.set(Pick::hero(PUDGE, "head", "4"));
         assert!(loadout.get(Some(PUDGE), "persona_selector").is_none());
+        assert!(loadout.get(Some(PUDGE), "head_persona_1").is_none(), "picking a normal piece clears persona pieces too");
+        loadout.set(Pick::hero(PUDGE, "head_persona_1", "21"));
+        assert!(loadout.get(Some(PUDGE), "head").is_none());
         assert!(loadout.get(Some(PUDGE), "head_persona_1").is_some());
     }
 

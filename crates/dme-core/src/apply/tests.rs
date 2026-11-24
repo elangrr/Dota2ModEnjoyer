@@ -1601,27 +1601,85 @@ fn a_model_that_two_default_items_name_is_left_alone() {
 }
 
 #[test]
-fn a_model_that_a_picked_item_swaps_is_left_alone() {
+fn a_model_swap_for_the_default_does_not_block_a_picked_model_and_is_stripped() {
     let swap = "\"visuals\"\r\n\t\t\t{\r\n\t\t\t\t\"asset_modifier\"\r\n\t\t\t\t{\r\n\t\t\t\t\t\"type\"\t\t\"model\"\r\n\t\t\t\t\t\"asset\"\t\t\"models/heroes/axe/axe_weapon.vmdl\"\r\n\t\t\t\t\t\"modifier\"\t\t\"models/items/axe/helm_weapon.vmdl\"\r\n\t\t\t\t}\r\n\t\t\t}\r\n\t\t\t\"price_info\"";
     let text = SAMPLE.replacen("\"price_info\"", swap, 1);
     let game = ItemsGame::parse(text.as_bytes()).unwrap();
     let mut result = patch(&game, text.as_bytes(), &vanguard()).unwrap();
     place_models(&game, &mut result, &|_| true).unwrap();
-    assert_eq!(result.placed, [placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/vanguard_head/vanguard_head.vmdl")]);
+    assert_eq!(
+        result.placed,
+        [
+            placed_pair("models/heroes/axe/axe_weapon.vmdl", "models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"),
+            placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/vanguard_head/vanguard_head.vmdl"),
+        ]
+    );
     let after = ItemsGame::parse(&result.bytes).unwrap();
-    assert_eq!(after.item("2").unwrap().model, Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+    assert_eq!(after.item("2").unwrap().model, Some("models/heroes/axe/axe_weapon.vmdl"));
+    assert!(after.item("4").unwrap().visuals_of_type("model", true).is_empty());
 }
 
 #[test]
-fn a_picked_model_that_another_pick_swaps_keeps_its_name() {
+fn a_picked_model_that_another_pick_refits_places_the_refit_model_at_the_default_path() {
     let swap = "\"visuals\"\r\n\t\t\t{\r\n\t\t\t\t\"asset_modifier\"\r\n\t\t\t\t{\r\n\t\t\t\t\t\"type\"\t\t\"model\"\r\n\t\t\t\t\t\"asset\"\t\t\"models/items/axe/vanguard_weapon/vanguard_weapon.vmdl\"\r\n\t\t\t\t\t\"modifier\"\t\t\"models/items/axe/vanguard_weapon/refit.vmdl\"\r\n\t\t\t\t}\r\n\t\t\t}\r\n\t\t\t\"price_info\"";
     let text = SAMPLE.replacen("\"price_info\"", swap, 1);
     let game = ItemsGame::parse(text.as_bytes()).unwrap();
     let mut result = patch(&game, text.as_bytes(), &vanguard()).unwrap();
     place_models(&game, &mut result, &|_| true).unwrap();
-    assert_eq!(result.placed, [placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/vanguard_head/vanguard_head.vmdl")]);
+    assert_eq!(
+        result.placed,
+        [
+            placed_pair("models/heroes/axe/axe_weapon.vmdl", "models/items/axe/vanguard_weapon/refit.vmdl"),
+            placed_pair("models/heroes/axe/axe_ponytail.vmdl", "models/items/axe/vanguard_head/vanguard_head.vmdl"),
+        ]
+    );
     let after = ItemsGame::parse(&result.bytes).unwrap();
-    assert_eq!(after.item("2").unwrap().model, Some("models/items/axe/vanguard_weapon/vanguard_weapon.vmdl"));
+    assert_eq!(after.item("2").unwrap().model, Some("models/heroes/axe/axe_weapon.vmdl"));
+    assert!(after.item("4").unwrap().visuals_of_type("model", true).is_empty());
+}
+
+#[test]
+fn additional_wearable_is_placed_when_default_has_one_and_stripped_otherwise() {
+    let text = SAMPLE
+        .replace(
+            "\"model_player\"\t\t\"models/heroes/axe/axe_weapon.vmdl\"",
+            "\"model_player\"\t\t\"models/heroes/axe/axe_weapon.vmdl\"\r\n\t\t\t\"visuals\" { \"asset_modifier0\" { \"type\" \"additional_wearable\" \"asset\" \"models/heroes/axe/axe_weapon_fx.vmdl\" } }",
+        )
+        .replace(
+            "\"model_player\"\t\t\"models/items/axe/vanguard_weapon/vanguard_weapon.vmdl\"",
+            "\"model_player\"\t\t\"models/items/axe/vanguard_weapon/vanguard_weapon.vmdl\"\r\n\t\t\t\"visuals\" { \"asset_modifier0\" { \"type\" \"additional_wearable\" \"asset\" \"models/items/axe/vanguard_weapon/vanguard_fx.vmdl\" } }",
+        )
+        .replace(
+            "\"model_player\"\t\t\"models/items/axe/vanguard_head/vanguard_head.vmdl\"",
+            "\"model_player\"\t\t\"models/items/axe/vanguard_head/vanguard_head.vmdl\"\r\n\t\t\t\"visuals\" { \"asset_modifier0\" { \"type\" \"additional_wearable\" \"asset\" \"models/items/axe/vanguard_head/extra_error.vmdl\" } }",
+        );
+    let game = ItemsGame::parse(text.as_bytes()).unwrap();
+    let mut result = patch(&game, text.as_bytes(), &[Pick::hero(AXE, "weapon", "9040"), Pick::hero(AXE, "head", "8910")]).unwrap();
+    place_models(&game, &mut result, &|_| true).unwrap();
+    assert!(result.placed.contains(&placed_pair("models/heroes/axe/axe_weapon_fx.vmdl", "models/items/axe/vanguard_weapon/vanguard_fx.vmdl")));
+    let after = ItemsGame::parse(&result.bytes).unwrap();
+    let weapon_aw = after.item("2").unwrap().visuals_of_type("additional_wearable", true);
+    assert_eq!(weapon_aw.len(), 1);
+    assert_eq!(weapon_aw[0].str("asset").unwrap(), b"models/heroes/axe/axe_weapon_fx.vmdl");
+    assert!(after.item("4").unwrap().visuals_of_type("additional_wearable", true).is_empty());
+}
+
+#[test]
+fn persona_auto_activates_from_persona_piece_and_hides_unused_hero_slots_with_empty_model() {
+    let text = crate::items::tests::laid_out(PERSONA_TEXT, "\n");
+    let game = ItemsGame::parse(text.as_bytes()).unwrap();
+    let mut result = patch(&game, text.as_bytes(), &[Pick::hero(PUDGE, "head_persona_1", "21")]).unwrap();
+    place_models(&game, &mut result, &|_| true).unwrap();
+    assert!(
+        result.placed.iter().any(|p| p.at == "models/pudge/belt.vmdl" && p.model == EMPTY_MODEL),
+        "unused hero default slot must be hidden with EMPTY_MODEL: {:?}",
+        result.placed
+    );
+    assert!(
+        result.placed.iter().any(|p| p.at == "models/pudge/hair.vmdl" && p.model == "models/cute/fancy_hair.vmdl"),
+        "persona piece must be placed at hero default path: {:?}",
+        result.placed
+    );
 }
 
 #[test]

@@ -2,6 +2,18 @@
 
 The newest version comes first. After an update, the app shows once what is new in it.
 
+## 0.6.0
+
+- Fixed Dota 2 crashing in matches when using items with custom sounds or large packs, and made Play faster with lower memory use. Press Play once after updating to rebuild your picks.
+- Fixed red ERROR models in online matches on Arcanas, personas, wings, summons, wards, and couriers (such as Windranger Arcana and Phoenix).
+- Fixed personas (such as Kid Invoker and Mirana Persona) so picking a persona or persona set works even if you do not own it.
+- Added 19 missing whole sets that were only sold as bundles, hid broken couriers whose models Dota removed, and removed false "!" warnings on Windranger Arcana, Queen of Pain Arcana, and Lich.
+- Added In-game shop builds on the Builds page and in Settings to load hero builds straight into Dota's Default Guide, with or without cosmetics.
+- Added Captain's Mode to the Draft page with full pick and ban order and live ban suggestions, plus popular first-phase support picks in All Pick.
+- Improved Builds for Kez, Largo, and Neutral Items so more heroes get skill orders, talents, and real craft times on the next weekly update.
+- Added one-click Dota launch options in Settings (preload map, skip intro video, and high CPU priority) and a plain window option if frosted glass has trouble on your PC.
+- Made "Back to normal Dota" more reliable and made the app wait whenever Steam is updating Dota 2.
+
 ## 0.5.0
 
 - After a Dota update, the app puts your picks back in by itself once Steam is done, so you no longer have to press Play first. Keep the app open, or open it after the update.

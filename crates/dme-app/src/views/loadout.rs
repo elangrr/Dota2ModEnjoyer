@@ -305,6 +305,14 @@ impl<'a> Page<'a> {
                 mark: None,
             };
             if tiles::tile(ui, self.pictures, look, &tile).clicked() && picked.is_none() {
+                if let Some(hero) = hero_id
+                    && !dme_core::items::persona_of(&slot.id).is_empty()
+                    && self.loadout.get(Some(hero), dme_core::apply::PERSONA_SELECTOR).is_none()
+                    && let Some(persona_slot) = self.slots.iter().find(|s| s.id.eq_ignore_ascii_case(dme_core::apply::PERSONA_SELECTOR))
+                    && let Some(first_persona) = persona_slot.items.first()
+                {
+                    self.loadout.set(Pick::hero(hero, &persona_slot.id, &first_persona.id));
+                }
                 self.loadout.set(pick_of(hero_id, slot, entry, current.as_ref()));
                 make_way(self.loadout, slot);
                 changed = true;

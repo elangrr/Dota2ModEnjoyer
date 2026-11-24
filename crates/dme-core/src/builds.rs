@@ -90,6 +90,7 @@ pub struct NeutralTaken {
 pub struct NeutralTier<'b> {
     pub tier: u32,
     pub minute: u32,
+    pub minute_from_pros: bool,
     pub reached: u64,
     pub kept: u64,
     pub trinkets: Vec<(&'b str, f32)>,
@@ -206,6 +207,8 @@ struct NeutralsInFile {
     patch: String,
     #[serde(default)]
     matches: u64,
+    #[serde(default)]
+    minutes: Vec<u32>,
     names: Vec<String>,
     heroes: HashMap<String, Vec<(usize, u64, Vec<NeutralTierInFile>)>>,
 }
@@ -214,7 +217,7 @@ type NeutralTierInFile = (u32, u64, u64, Vec<(usize, u64)>, Vec<(usize, u64)>);
 
 const ANY_ROLE: usize = 5;
 
-type NeutralsRead = (String, String, u64, HashMap<String, Vec<NeutralBuild>>);
+type NeutralsRead = (String, String, u64, Vec<u32>, HashMap<String, Vec<NeutralBuild>>);
 
 fn neutrals_from(value: serde_json::Value) -> Option<NeutralsRead> {
     let file: NeutralsInFile = serde_json::from_value(value).ok()?;
@@ -229,7 +232,7 @@ fn neutrals_from(value: serde_json::Value) -> Option<NeutralsRead> {
         }
         heroes.insert(hero.to_ascii_lowercase(), of_hero);
     }
-    Some((file.source, file.patch, file.matches, heroes))
+    Some((file.source, file.patch, file.matches, file.minutes, heroes))
 }
 
 #[derive(Deserialize, Default)]
@@ -272,6 +275,7 @@ pub struct Builds {
     pub neutral_source: String,
     pub neutral_patch: String,
     pub neutral_matches: u64,
+    neutral_minutes: Vec<u32>,
     neutrals: HashMap<String, Vec<NeutralBuild>>,
 }
 
@@ -348,8 +352,8 @@ impl Builds {
             pros.insert(hero.to_ascii_lowercase(), of_hero);
         }
         let (pro_source, pro_matches) = (file.pros.source, file.pros.matches);
-        let (neutral_source, neutral_patch, neutral_matches, neutrals) = file.neutrals.and_then(neutrals_from).unwrap_or_default();
-        Ok(Builds { made: file.made, source: file.source, patch: file.patch, sampled: file.sampled, heroes, orders, against, pro_source, pro_matches, pros, neutral_source, neutral_patch, neutral_matches, neutrals })
+        let (neutral_source, neutral_patch, neutral_matches, neutral_minutes, neutrals) = file.neutrals.and_then(neutrals_from).unwrap_or_default();
+        Ok(Builds { made: file.made, source: file.source, patch: file.patch, sampled: file.sampled, heroes, orders, against, pro_source, pro_matches, pros, neutral_source, neutral_patch, neutral_matches, neutral_minutes, neutrals })
     }
 
     pub fn age_in_days(&self, now: u64) -> u64 {
@@ -449,7 +453,12 @@ impl Builds {
                 let game = texts.neutral_tiers.iter().find(|tier| tier.tier == taken.tier)?;
                 let kept = |entries: &'b [(String, u64)], known: &[String]| -> Vec<(&'b str, f32)> { entries.iter().filter(|(name, _)| known.iter().any(|known| known.eq_ignore_ascii_case(name))).map(|(name, count)| (name.as_str(), taken.share(*count))).collect() };
                 let (trinkets, enhancements) = (kept(&taken.trinkets, &game.trinkets), kept(&taken.enhancements, &game.enhancements));
-                (!trinkets.is_empty() || !enhancements.is_empty()).then_some(NeutralTier { tier: taken.tier, minute: game.minute, reached: taken.reached, kept: taken.kept, trinkets, enhancements })
+                let pro_minute = taken.tier.checked_sub(1).and_then(|idx| self.neutral_minutes.get(idx as usize)).copied().filter(|&m| m > 0);
+                let (minute, minute_from_pros) = match pro_minute {
+                    Some(m) => (m, true),
+                    None => (game.minute, false),
+                };
+                (!trinkets.is_empty() || !enhancements.is_empty()).then_some(NeutralTier { tier: taken.tier, minute, minute_from_pros, reached: taken.reached, kept: taken.kept, trinkets, enhancements })
             })
             .collect();
         (!shown.is_empty()).then_some((neutral, shown))
@@ -1059,10 +1068,16 @@ mod tests {
         assert_eq!(
             shown,
             [
-                NeutralTier { tier: 1, minute: 0, reached: 10, kept: 0, trinkets: vec![("item_pogo_stick", 70.0)], enhancements: vec![("item_enhancement_alert", 90.0)] },
-                NeutralTier { tier: 2, minute: 15, reached: 8, kept: 2, trinkets: vec![("item_brick", 50.0), ("item_defiant_shell", 25.0)], enhancements: vec![] },
+                NeutralTier { tier: 1, minute: 0, minute_from_pros: false, reached: 10, kept: 0, trinkets: vec![("item_pogo_stick", 70.0)], enhancements: vec![("item_enhancement_alert", 90.0)] },
+                NeutralTier { tier: 2, minute: 15, minute_from_pros: false, reached: 8, kept: 2, trinkets: vec![("item_brick", 50.0), ("item_defiant_shell", 25.0)], enhancements: vec![] },
             ]
         );
+        let mut timed = with_neutrals();
+        timed["neutrals"]["minutes"] = json!([9, 18, 33, 53]);
+        let timed_builds = read(&timed).unwrap();
+        let (_, timed_shown) = timed_builds.neutral_tiers(PA, Role::Carry, &texts).unwrap();
+        assert_eq!((timed_shown[0].minute, timed_shown[0].minute_from_pros), (9, true));
+        assert_eq!((timed_shown[1].minute, timed_shown[1].minute_from_pros), (18, true));
         assert!(builds.neutral_tiers(PA, Role::Carry, &self::texts()).is_none());
         assert!(read(&file()).unwrap().neutral_build(PA, Role::Carry).is_none());
     }

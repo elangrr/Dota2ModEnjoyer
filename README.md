@@ -12,7 +12,7 @@
   <a href="#support-us"><img src="assets/buttons/donate.svg" alt="Support us" height="40"></a>
 </p>
 
-<p align="center"><img src="assets/demo.webp" alt="The app being used: finding a hero, picking a set and a courier, and the list of picks" width="820"></p>
+<p align="center"><img src="assets/promo.gif" alt="A short film of the app: pick a hero, a whole set in one click, night and day, the Draft page, the Builds page, then Play" width="640"></p>
 
 > [!CAUTION]
 > Use at your own risk. This app edits two of Dota 2's own files, which may break Valve's terms
@@ -34,6 +34,8 @@ The app speaks English and Russian (Русский). It follows the language of 
 change it at the top of Settings.
 
 ## Screenshots
+
+<p align="center"><img src="assets/demo.webp" alt="The app being used: finding a hero, picking a set and a courier, and the list of picks" width="820"></p>
 
 | | |
 |---|---|
